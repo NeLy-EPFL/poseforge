@@ -10,7 +10,8 @@ import tyro
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Literal
-
+import random
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -103,7 +104,7 @@ class TrainingConfig:
     resume_from: Optional[Path] = None  # Path to checkpoint to resume from
     
     # === Random Seed ===
-    random_seed: int = 42  # Random seed for reproducibility
+    random_seed: int = 42  # For reproducibility
 
     # === Final Resize ===
     final_resize: int = 512  # Final resize after all augmentations (output images will be this size)
@@ -210,7 +211,7 @@ def train_one_epoch(
             # are grayscale, in the calculation of the identity loss, we will convert
             # the simulated images to grayscale by averaging the channels, and convert
             # the experimental images to RGB by repeating the channel 3 times.
-            
+
             # G_exp_to_sim should be identity on simulated images (RGB->grayscale)
             identity_sim = model.G_exp_to_sim(sim_real.mean(dim=1, keepdim=True))
             loss_identity_sim = criteria["identity"](identity_sim, sim_real)
@@ -331,11 +332,28 @@ def train_one_epoch(
     return epoch_losses
 
 
+def set_random_seed(seed: int):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def worker_init_fn(worker_id):
+    """DataLoader worker init for reproducibility."""
+    seed = torch.initial_seed() % 2**32
+    np.random.seed(seed)
+    random.seed(seed)
+
+
 def main(config: TrainingConfig):
     """Main training function."""
 
     # Set random seed
-    torch.manual_seed(config.random_seed)
+    set_random_seed(config.random_seed)
 
     # Setup device
     if config.device is None:
@@ -358,7 +376,7 @@ def main(config: TrainingConfig):
     print(f"Found {len(exp_paths)} experimental images")
 
     if len(sim_paths) == 0 or len(exp_paths) == 0:
-        raise ValueError("No images found in the specified directories")
+        raise RuntimeError("No images found in one or both domains.")
 
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(
@@ -373,8 +391,11 @@ def main(config: TrainingConfig):
         brightness_jitter=config.brightness_jitter,
         contrast_jitter=config.contrast_jitter,
         random_seed=config.random_seed,
-        final_resize=config.final_resize,  # Pass through
+        final_resize=config.final_resize,
     )
+    # Patch DataLoader for reproducibility
+    train_loader.worker_init_fn = worker_init_fn
+    val_loader.worker_init_fn = worker_init_fn
 
     print(f"Training batches: {len(train_loader)}")
     print(f"Validation batches: {len(val_loader)}")
