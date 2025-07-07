@@ -22,9 +22,9 @@ def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     tensor = denormalize_tensor(tensor.clone())
 
     if tensor.shape[0] == 1:  # Grayscale
-        return tensor.squeeze(0).cpu().numpy()
+        return tensor.squeeze(0).cpu().detach().numpy()
     elif tensor.shape[0] == 3:  # RGB
-        return tensor.permute(1, 2, 0).cpu().numpy()
+        return tensor.permute(1, 2, 0).cpu().detach().numpy()
     else:
         raise ValueError(f"Unexpected tensor shape: {tensor.shape}")
 

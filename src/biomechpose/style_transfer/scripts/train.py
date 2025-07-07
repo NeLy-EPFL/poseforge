@@ -51,7 +51,7 @@ class TrainingConfig:
     
     # === Model Architecture Hyperparameters ===
     generator_base_filters: int = 64  # Base number of filters in generator
-    generator_n_residual_blocks: int = 9  # Number of ResNet blocks in generator (9 for 512+, 6 for 256)
+    generator_n_residual_blocks: int = 6  # Number of ResNet blocks in generator (6 for 256/512, 9 for 900)
     generator_use_dropout: bool = False  # Use dropout in generator ResNet blocks
     discriminator_base_filters: int = 64  # Base number of filters in discriminator
     discriminator_n_layers: int = 3  # Number of layers in discriminator
@@ -95,7 +95,7 @@ class TrainingConfig:
     
     # === Weights & Biases ===
     use_wandb: bool = False  # Use Weights & Biases logging
-    wandb_project: str = "cyclegan-fruit-fly"  # W&B project name
+    wandb_project: str = "biomechfly_style_transfer"  # W&B project name
     wandb_run_name: Optional[str] = None  # W&B run name (None for auto)
     
     # === Resume Training ===
@@ -103,6 +103,9 @@ class TrainingConfig:
     
     # === Random Seed ===
     random_seed: int = 42  # Random seed for reproducibility
+
+    # === Final Resize ===
+    final_resize: int = 512  # Final resize after all augmentations (output images will be this size)
 # fmt:on
 
 
@@ -201,12 +204,17 @@ def train_one_epoch(
         # Identity losses (optional)
         loss_identity = torch.tensor(0.0, device=device)
         if config.lambda_identity > 0:
-            # G_exp_to_sim should be identity on sim_real
-            identity_sim = model.G_exp_to_sim(sim_real)
+            # General note: because our simulated images are RGB and experimental images
+            # are grayscale, in the calculation of the identity loss, we will convert
+            # the simulated images to grayscale by averaging the channels, and convert
+            # the experimental images to RGB by repeating the channel 3 times.
+            
+            # G_exp_to_sim should be identity on simulated images (RGB->grayscale)
+            identity_sim = model.G_exp_to_sim(sim_real.mean(dim=1, keepdim=True))
             loss_identity_sim = criteria["identity"](identity_sim, sim_real)
 
-            # G_sim_to_exp should be identity on exp_real
-            identity_exp = model.G_sim_to_exp(exp_real)
+            # G_sim_to_exp should be identity on experimental images (grayscale->RGB)
+            identity_exp = model.G_sim_to_exp(exp_real.repeat(1, 3, 1, 1))
             loss_identity_exp = criteria["identity"](identity_exp, exp_real)
 
             loss_identity = loss_identity_sim + loss_identity_exp
@@ -361,6 +369,7 @@ def main(config: TrainingConfig):
         brightness_jitter=config.brightness_jitter,
         contrast_jitter=config.contrast_jitter,
         random_seed=config.random_seed,
+        final_resize=config.final_resize,  # Pass through
     )
 
     print(f"Training batches: {len(train_loader)}")

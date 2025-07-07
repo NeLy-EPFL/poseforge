@@ -31,11 +31,14 @@ class FlyImageDataset(Dataset):
         normalize_std: Optional[List[float]] = None,
         # Rotate simulated dataset clockwise by 90 degrees
         rotate_simulated_90deg_clockwise: bool = True,
+        # Final resize after all transformations
+        final_resize: int = 512,  # NEW
     ):
         self.rotate_simulated_90deg_clockwise = rotate_simulated_90deg_clockwise
         self.sim_image_paths = list(sim_image_paths)
         self.exp_image_paths = list(exp_image_paths)
         self.image_size = image_size
+        self.final_resize = final_resize
 
         # Create transforms for simulated images (RGB)
         sim_transforms = []
@@ -76,6 +79,9 @@ class FlyImageDataset(Dataset):
             sim_transforms.append(
                 transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
             )
+
+        # Final resize
+        sim_transforms.append(transforms.Resize((final_resize, final_resize)))
 
         self.sim_transform = transforms.Compose(sim_transforms)
 
@@ -118,6 +124,9 @@ class FlyImageDataset(Dataset):
             # Normalize to [-1, 1]
             exp_transforms.append(transforms.Normalize([0.5], [0.5]))
 
+        # Final resize
+        exp_transforms.append(transforms.Resize((final_resize, final_resize)))
+
         self.exp_transform = transforms.Compose(exp_transforms)
 
     def __len__(self) -> int:
@@ -158,6 +167,7 @@ def create_dataloaders(
     contrast_jitter: float = 0.1,
     # Random seed for reproducible splits
     random_seed: int = 42,
+    final_resize: int = 512,  # NEW
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     """Create train and validation dataloaders."""
 
@@ -188,6 +198,7 @@ def create_dataloaders(
         horizontal_flip_prob=horizontal_flip_prob,
         brightness_jitter=brightness_jitter,
         contrast_jitter=contrast_jitter,
+        final_resize=final_resize,  # Pass through
     )
 
     # Validation dataset without augmentation
@@ -199,6 +210,7 @@ def create_dataloaders(
         horizontal_flip_prob=0.0,  # No flip for validation
         brightness_jitter=0.0,  # No jitter for validation
         contrast_jitter=0.0,
+        final_resize=final_resize,  # Pass through
     )
 
     # Create dataloaders
@@ -226,16 +238,22 @@ def create_dataloaders(
 def denormalize_tensor(
     tensor: torch.Tensor, mean: List[float] = [0.5], std: List[float] = [0.5]
 ) -> torch.Tensor:
-    """Denormalize tensor from [-1, 1] to [0, 1] for visualization."""
-    if len(mean) == 1 and tensor.shape[1] == 3:
-        # Extend grayscale normalization to RGB
+    """Denormalize tensor from [-1, 1] to [0, 1] for visualization. Handles (C,H,W) and (B,C,H,W)."""
+    if tensor.dim() == 3:
+        tensor = tensor.unsqueeze(0)  # Add batch dim
+        squeeze = True
+    else:
+        squeeze = False
+    c = tensor.shape[1]
+    if len(mean) == 1 and c == 3:
         mean = mean * 3
         std = std * 3
-    elif len(mean) == 3 and tensor.shape[1] == 1:
-        # Use only first channel for grayscale
+    elif len(mean) == 3 and c == 1:
         mean = mean[:1]
         std = std[:1]
-
-    for t, m, s in zip(tensor, mean, std):
-        t.mul_(s).add_(m)
-    return torch.clamp(tensor, 0, 1)
+    mean = torch.tensor(mean, device=tensor.device).view(1, c, 1, 1)
+    std = torch.tensor(std, device=tensor.device).view(1, c, 1, 1)
+    out = torch.clamp(tensor * std + mean, 0, 1)
+    if squeeze:
+        out = out.squeeze(0)
+    return out
