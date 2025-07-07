@@ -19,6 +19,7 @@ import wandb
 
 from biomechpose.style_transfer.model import CycleGAN
 from biomechpose.style_transfer.dataset import create_dataloaders
+from datetime import datetime
 from biomechpose.style_transfer.visualize import (
     visualize_training_batch,
     visualize_cycle_consistency,
@@ -46,7 +47,7 @@ class TrainingConfig:
     # === Data Configuration ===
     sim_images_dir: Path  # Directory containing simulated (RGB) images
     exp_images_dir: Path  # Directory containing experimental (grayscale) images
-    output_dir: Path = Path("./bulk_data/style_transfer/training/")  # Output directory for checkpoints, logs, etc.
+    output_basedir: Path = Path("./bulk_data/style_transfer/training/")  # Output directory for checkpoints, logs, etc.
     train_split: float = 0.8  # Fraction of data to use for training
     
     # === Model Architecture Hyperparameters ===
@@ -89,9 +90,9 @@ class TrainingConfig:
     
     # === Logging and Checkpointing ===
     log_interval: int = 100  # Log every N batches
-    save_interval: int = 10  # Save checkpoint every N epochs
+    save_interval: int = 1  # Save checkpoint every N epochs
     vis_interval: int = 500  # Save visualizations every N batches
-    keep_last_n_checkpoints: int = 5  # Keep only the last N checkpoints
+    keep_last_n_checkpoints: int = 99999  # Keep only the last N checkpoints
     
     # === Weights & Biases ===
     use_wandb: bool = False  # Use Weights & Biases logging
@@ -160,6 +161,7 @@ def train_one_epoch(
     criteria: dict,
     buffers: dict,
     config: TrainingConfig,
+    output_rundir: Path,
     epoch: int,
     writer: SummaryWriter,
     device: torch.device,
@@ -310,7 +312,7 @@ def train_one_epoch(
         # Save visualizations
         if batch_idx % config.vis_interval == 0:
             vis_path = (
-                config.output_dir
+                output_rundir
                 / "visualizations"
                 / f"epoch_{epoch}_batch_{batch_idx}.png"
             )
@@ -344,7 +346,9 @@ def main(config: TrainingConfig):
     print(f"Using device: {device}")
 
     # Setup directories
-    dirs = setup_directories(config.output_dir)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_rundir = config.output_basedir / f"trial_{timestamp}"
+    dirs = setup_directories(output_rundir)
 
     # Get image paths
     sim_paths = get_image_paths(config.sim_images_dir)
@@ -478,6 +482,7 @@ def main(config: TrainingConfig):
             criteria,
             buffers,
             config,
+            output_rundir,
             epoch,
             writer,
             device,

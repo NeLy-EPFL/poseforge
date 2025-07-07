@@ -3,13 +3,13 @@ Inference script for CycleGAN fruit fly image translation.
 
 Example usage:
     # Translate simulated to experimental
-    python infer.py --model_path ./outputs/models/best_model.pth --input_image ./test_sim.png --direction sim_to_exp --output_dir ./results
+    python infer.py --model_path ./outputs/models/best_model.pth --input_image ./test_sim.png --direction sim_to_exp --output_rundir ./results
 
     # Translate experimental to simulated
-    python infer.py --model_path ./outputs/models/best_model.pth --input_image ./test_exp.png --direction exp_to_sim --output_dir ./results
+    python infer.py --model_path ./outputs/models/best_model.pth --input_image ./test_exp.png --direction exp_to_sim --output_rundir ./results
 
     # Batch inference on directory
-    python infer.py --model_path ./outputs/models/best_model.pth --input_dir ./test_images --direction sim_to_exp --output_dir ./results
+    python infer.py --model_path ./outputs/models/best_model.pth --input_dir ./test_images --direction sim_to_exp --output_rundir ./results
 """
 
 import tyro
@@ -38,7 +38,7 @@ class InferenceConfig:
     # === Required Parameters ===
     model_path: Path  # Path to trained model (.pth file)
     direction: Literal["sim_to_exp", "exp_to_sim"]  # Translation direction
-    output_dir: Path  # Output directory for results
+    output_rundir: Path  # Output directory for results
 
     # === Input Configuration ===
     input_image: Optional[Path] = (
@@ -177,13 +177,13 @@ def infer_single_image(
     # Save generated image only
     if config.save_generated_only:
         generated_array = postprocess_tensor(generated_tensor)
-        generated_path = config.output_dir / f"{output_stem}.{config.output_format}"
+        generated_path = config.output_rundir / f"{output_stem}.{config.output_format}"
         save_image_array(generated_array, generated_path, config.output_format)
         print(f"Saved generated image: {generated_path}")
 
     # Save visualization (side-by-side)
     if config.save_visualization:
-        vis_path = config.output_dir / f"{output_stem}_comparison.png"
+        vis_path = config.output_rundir / f"{output_stem}_comparison.png"
         create_inference_visualization(
             input_tensor, generated_tensor, config.direction, vis_path
         )
@@ -226,7 +226,7 @@ def main(config: InferenceConfig):
             config.image_size = hyperparams.get("image_size", 900)
 
     # Create output directory
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+    config.output_rundir.mkdir(parents=True, exist_ok=True)
 
     # Process images
     if config.input_image is not None:
