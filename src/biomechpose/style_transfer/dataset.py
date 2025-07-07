@@ -29,7 +29,10 @@ class FlyImageDataset(Dataset):
         # Normalization (set to None to use [-1, 1] normalization)
         normalize_mean: Optional[List[float]] = None,
         normalize_std: Optional[List[float]] = None,
+        # Rotate simulated dataset clockwise by 90 degrees
+        rotate_simulated_90deg_clockwise: bool = True,
     ):
+        self.rotate_simulated_90deg_clockwise = rotate_simulated_90deg_clockwise
         self.sim_image_paths = list(sim_image_paths)
         self.exp_image_paths = list(exp_image_paths)
         self.image_size = image_size
@@ -129,6 +132,8 @@ class FlyImageDataset(Dataset):
         # Load simulated image (RGB)
         sim_path = self.sim_image_paths[sim_idx]
         sim_image = Image.open(sim_path).convert("RGB")
+        if self.rotate_simulated_90deg_clockwise:
+            sim_image = sim_image.rotate(-90, expand=True)
         sim_tensor = self.sim_transform(sim_image)
 
         # Load experimental image (convert to grayscale if needed)

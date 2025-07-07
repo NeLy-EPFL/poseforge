@@ -37,15 +37,15 @@ data/
 
 ```bash
 # Basic training
-python train.py --sim_images_dir data/simulated --exp_images_dir data/experimental
-
-# With Weights & Biases logging
-python train.py --sim_images_dir data/simulated --exp_images_dir data/experimental --use_wandb
+python train.py \
+    --sim_images_dir bulk_data/style_transfer/simulated_frames/aymanns2022_per_frame \
+    --exp_images_dir bulk_data/style_transfer/kinematic_recording/spotlight202506/spotlight_recordings_unified \
+    --use_wandb  # optional
 
 # Custom hyperparameters
 python train.py \
-    --sim_images_dir data/simulated \
-    --exp_images_dir data/experimental \
+    --sim_images_dir bulk_data/style_transfer/simulated_frames/aymanns2022_per_frame \
+    --exp_images_dir bulk_data/style_transfer/kinematic_recording/spotlight202506/spotlight_recordings_unified \
     --batch_size 2 \
     --num_epochs 150 \
     --lambda_cycle 15.0 \
@@ -57,14 +57,14 @@ python train.py \
 ```bash
 # Single image translation (simulated to experimental)
 python infer.py \
-    --model_path outputs/models/best_model.pth \
+    --model_path bulk_data/style_transfer/training/models/best_model.pth \
     --input_image test_simulated.png \
     --direction sim_to_exp \
     --output_dir results/
 
 # Batch translation (experimental to simulated)
 python infer.py \
-    --model_path outputs/models/best_model.pth \
+    --model_path bulk_data/style_transfer/training/models/best_model.pth \
     --input_dir test_images/ \
     --direction exp_to_sim \
     --output_dir results/
@@ -105,7 +105,7 @@ cyclegan_fruit_fly/
 ### Training Output Structure
 
 ```
-outputs/
+bulk_data/style_transfer/training/
 ├── checkpoints/          # Training checkpoints
 │   ├── checkpoint_epoch_10.pth
 │   └── ...
@@ -182,4 +182,4 @@ Add `--use_wandb` flag to training command. Set project name with `--wandb_proje
 - Use `lambda_identity > 0` to preserve color composition
 - Check input image preprocessing
 
-## Part II: Transformer for Continuous Pose Estimation 
+## Part II: Transformer for Continuous Pose Estimation

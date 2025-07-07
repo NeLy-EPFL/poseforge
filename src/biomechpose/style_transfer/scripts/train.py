@@ -46,7 +46,7 @@ class TrainingConfig:
     # === Data Configuration ===
     sim_images_dir: Path  # Directory containing simulated (RGB) images
     exp_images_dir: Path  # Directory containing experimental (grayscale) images
-    output_dir: Path = Path("./outputs")  # Output directory for checkpoints, logs, etc.
+    output_dir: Path = Path("./bulk_data/style_transfer/training/")  # Output directory for checkpoints, logs, etc.
     train_split: float = 0.8  # Fraction of data to use for training
     
     # === Model Architecture Hyperparameters ===

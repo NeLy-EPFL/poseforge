@@ -200,7 +200,7 @@ def setup_directories(output_dir: Path) -> Dict[str, Path]:
     }
 
     for dir_path in dirs.values():
-        dir_path.mkdir(exist_ok=True)
+        dir_path.mkdir(exist_ok=True, parents=True)
 
     return dirs
 
