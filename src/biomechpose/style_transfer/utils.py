@@ -81,6 +81,20 @@ class ImageBuffer:
         return torch.cat(return_images, dim=0)
 
 
+def _to_jsonable(obj):
+    """Recursively convert Path objects to str for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_to_jsonable(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_to_jsonable(v) for v in obj)
+    elif isinstance(obj, Path):
+        return str(obj)
+    else:
+        return obj
+
+
 def save_checkpoint(
     checkpoint_path: Path,
     model: nn.Module,
@@ -115,7 +129,7 @@ def save_checkpoint(
         checkpoint_path.parent / f"{checkpoint_path.stem}_hyperparams.json"
     )
     with open(hyperparams_path, "w") as f:
-        json.dump(hyperparameters, f, indent=2)
+        json.dump(_to_jsonable(hyperparameters), f, indent=2)
 
 
 def load_checkpoint(
