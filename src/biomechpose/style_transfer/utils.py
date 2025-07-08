@@ -140,7 +140,7 @@ def load_checkpoint(
     device: torch.device = torch.device("cpu"),
 ) -> Tuple[int, Dict[str, float]]:
     """Load training checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     # Load model state
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -180,7 +180,7 @@ def load_model_for_inference(
     model_path: Path, model: nn.Module, device: torch.device = torch.device("cpu")
 ) -> Dict:
     """Load model for inference."""
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
@@ -280,3 +280,16 @@ def compute_gradient_penalty(
     gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
 
     return gradient_penalty
+
+
+def set_all_seeds(seed: int):
+    """Set random seed for reproducibility (Python, NumPy, PyTorch, CUDA)."""
+    import random
+    import numpy as np
+    import torch
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False

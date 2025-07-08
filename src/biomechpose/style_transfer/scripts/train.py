@@ -37,6 +37,7 @@ from biomechpose.style_transfer.utils import (
     get_device,
     setup_directories,
     cleanup_old_checkpoints,
+    set_all_seeds,
 )
 
 
@@ -332,16 +333,6 @@ def train_one_epoch(
     return epoch_losses
 
 
-def set_random_seed(seed: int):
-    """Set random seed for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
 def worker_init_fn(worker_id):
     """DataLoader worker init for reproducibility."""
     seed = torch.initial_seed() % 2**32
@@ -353,7 +344,7 @@ def main(config: TrainingConfig):
     """Main training function."""
 
     # Set random seed
-    set_random_seed(config.random_seed)
+    set_all_seeds(config.random_seed)
 
     # Setup device
     if config.device is None:
