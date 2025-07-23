@@ -27,6 +27,10 @@ dependencies = [
     "tyro==0.9.24",
     "wandb==0.20.1",
     # "PyYAML>=6.0,<7",
+    "dominate>=2.9,<3",
+    "visdom==0.2.4",
+    "packaging>=25.0,<26",
+    "GPUtil>=1.4.0,<2",
 ]
 
 [tool.poetry]
