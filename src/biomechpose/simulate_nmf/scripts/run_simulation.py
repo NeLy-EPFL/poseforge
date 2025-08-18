@@ -1,3 +1,26 @@
+"""
+This script replays the kinematics of fly behavior from Aymanns et al.
+2022) in FlyGym. It interpolates the recorded kinematics to match the
+NeuroMechFly simulation timestep, runs the simulation with position
+control, and saves both rendered images and kinematic states histories.
+
+Outputs for each simulated segment, the script produces a directory
+containing:
+- Rendered frames as PNG images (frame_XXXX.png).
+- Video of the simulation (simulation_rendering.mp4).
+- Kinematic states history as a Pandas DataFrame (kinematic_states_history.pkl).
+
+The kinematic states DataFrame contains:
+    - "time": Simulation time (seconds) for each frame.
+    - "dof_angle_{key}": Joint angle (radians) for each DoF.
+    - "keypoint_pos_3d_{key}_{x,y,z}": 3D position (in camera coordinates,
+          i.e. x, y, depth) of each keypoint.
+    - "forward_vector_{x,y,z}": Components of the fly's forward vector
+          (direction on that the fly is facing).
+    - "camera_matrix": 3x4 camera matrix (numpy array) for each frame
+          (see https://en.wikipedia.org/wiki/Camera_matrix).
+"""
+
 from typing import Optional
 import numpy as np
 import pandas as pd
@@ -212,9 +235,9 @@ def simulate_one_segment(
     keypoint_names, keypoint_position_sensors = get_keypoint_position_sensors(fly)
     camera_params = {
         "mode": "track",
-        "pos": (0, 0, -50),
+        "pos": (0, 0, -100),
         "euler": (0, np.pi, -np.pi / 2),
-        "fovy": 6,
+        "fovy": 5,
     }
     camera = Camera(
         attachment_point=fly.model.worldbody,
@@ -242,11 +265,14 @@ def simulate_one_segment(
 
     joints_angles_hist = []
     keypoints_pos_3d_hist = []
-    keypoints_pos_2d_hist = []
+    # keypoints_pos_2d_hist = []
+    forward_vector_hist = []
+    camera_matrix_hist = []  # see https://en.wikipedia.org/wiki/Camera_matrix
 
     # Simulation loop
     last_num_frames = 0
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
+        # if sim_frame_id == 1000: break  # For testing, limit to 1000 frames
         action = {"joints": trajectories_interp[sim_frame_id]}
         try:
             observation, reward, terminated, truncated, info = sim.step(action)
@@ -254,32 +280,44 @@ def simulate_one_segment(
             print(f"Simulation error at frame {sim_frame_id}: {e}")
             break
         rendered_image = sim.render()[0]
+        
+        # Check if a new frame is rendered. If not, continue without extracting any data
+        if not len(camera._frames) > last_num_frames:
+            continue
 
         # Store joint angles
         joints_angles_hist.append(observation["joints"][0, :].copy())
 
         # Store keypoint positions
+        camera_matrix = dm_camera.matrix.copy()
         keypoints_pos_3d_global = (
             bound_keypoint_position_sensors.sensordata.copy().reshape((-1, 3)).T
         )
         keypoints_pos_3d_global_homogeneous = np.vstack(
             [keypoints_pos_3d_global, np.ones((1, keypoints_pos_3d_global.shape[1]))]
         )
-        keypoints_pos_3d_cam = dm_camera.matrix @ keypoints_pos_3d_global_homogeneous
-        keypoints_pos_2d_cam = keypoints_pos_3d_cam[:2] / keypoints_pos_3d_cam[2]
+        keypoints_pos_3d_cam = camera_matrix @ keypoints_pos_3d_global_homogeneous
+        keypoints_pos_3d_cam = keypoints_pos_3d_cam / keypoints_pos_3d_cam[2]
         keypoints_pos_3d_hist.append(keypoints_pos_3d_cam)
-        keypoints_pos_2d_hist.append(keypoints_pos_2d_cam)
+        # keypoints_pos_2d_hist.append(keypoints_pos_2d_cam)
+
+        # Store forward vector
+        forward_vector = observation["cardinal_vectors"][0, :].copy()
+        forward_vector_hist.append(forward_vector)
+
+        # Store camera matrix
+        camera_matrix_hist.append(camera_matrix)
 
         # Save rendered image
-        if len(camera._frames) > last_num_frames:
-            last_num_frames = len(camera._frames)
-            image_path = output_dir / f"frame_{sim_frame_id:04d}.png"
-            Image.fromarray(rendered_image).save(image_path)
+        last_num_frames = len(camera._frames)
+        # image_path = output_dir / f"frame_{sim_frame_id:04d}.png"
+        # Image.fromarray(rendered_image).save(image_path)
 
     # Save kinematic states as Pandas DataFrame
     joints_angles_hist = np.array(joints_angles_hist)  # (n_frames, n_dofs)
     keypoints_pos_3d_hist = np.array(keypoints_pos_3d_hist)  # (n_frames, 3, n_keypts)
-    keypoints_pos_2d_hist = np.array(keypoints_pos_2d_hist)  # (n_frames, 2, n_keypts)
+    # keypoints_pos_2d_hist = np.array(keypoints_pos_2d_hist)  # (n_frames, 2, n_keypts)
+    forward_vector_hist = np.array(forward_vector_hist)  # (n_frames, 3)
     columns = {}
     columns["time"] = np.arange(len(joints_angles_hist)) * sim_timestep
     for i, dof_name in enumerate(all_leg_dofs):
@@ -292,50 +330,52 @@ def simulate_one_segment(
         columns[f"keypoint_pos_3d_{key}_x"] = keypoints_pos_3d_hist[:, 0, i]
         columns[f"keypoint_pos_3d_{key}_y"] = keypoints_pos_3d_hist[:, 1, i]
         columns[f"keypoint_pos_3d_{key}_z"] = keypoints_pos_3d_hist[:, 2, i]
-    for i, keypoint_name in enumerate(keypoint_names):
-        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
-        key = leg + canonical_keypoint_name
-        columns[f"keypoint_pos_2d_{key}_x"] = keypoints_pos_2d_hist[:, 0, i]
-        columns[f"keypoint_pos_2d_{key}_y"] = keypoints_pos_2d_hist[:, 1, i]
-    kinematic_states_df = pd.DataFrame(columns)
+    # for i, keypoint_name in enumerate(keypoint_names):
+    #     leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
+    #     key = leg + canonical_keypoint_name
+    #     columns[f"keypoint_pos_2d_{key}_x"] = keypoints_pos_2d_hist[:, 0, i]
+    #     columns[f"keypoint_pos_2d_{key}_y"] = keypoints_pos_2d_hist[:, 1, i]
+    columns["forward_vector_x"] = np.array(forward_vector_hist)[:, 0]
+    columns["forward_vector_y"] = np.array(forward_vector_hist)[:, 1]
+    columns["forward_vector_z"] = np.array(forward_vector_hist)[:, 2]
+    kinematic_states_df = pd.DataFrame(columns, dtype=np.float32)
+    # Add camera matrix to the DataFrame. Do this after creating the DataFrame with
+    # dtype=float32 for all the other columns because unlike others, the camera matrix
+    # column contains 3x4 matrices, which cannot be casted to float32.
+    kinematic_states_df["camera_matrix"] = camera_matrix_hist
     kinematic_states_df.index.name = "frame_id"
     kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
-
+    
     # Save rendered frames as a video
     camera.save_video(output_dir / "simulation_rendering.mp4")
 
 
 if __name__ == "__main__":
-    kinematic_recording_path = Path(
-        "bulk_data/kinematic_recording/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"
-    )
-    output_dir = Path("simulation_results")
-    kinematic_recording_segments = load_kinematic_recording(
-        recording_path=kinematic_recording_path,
-        min_duration_frames=10,
-        filter_size=5,
-        filtered_frac_threshold=0.5,
-    )
-    simulate_one_segment(kinematic_recording_segments[1], output_dir, 0.01, 0.0001)
-
-    # kinematic_recording_dir = Path("bulk_data/kinematic_recording/aymanns2022/trials/")
-    # output_dir = Path("bulk_data/nmf_rendering")
-    # input_timestep = 0.01
-    # sim_timestep = 0.0001
+    kinematic_recording_dir = Path("bulk_data/kinematic_recording/aymanns2022/trials/")
+    output_dir = Path("bulk_data/nmf_rendering")
+    input_timestep = 0.01
+    sim_timestep = 0.0001
+    max_segments = 2  # limit to this many segments per trial
 
     # trial_paths = sorted(list(kinematic_recording_dir.glob("*.pkl")))
-    # trial_paths = trial_paths[:1]  # For testing, process only the first trial
-    # for trial_path in trial_paths:
-    #     trial_name = trial_path.stem
-    #     kinematic_recording_segments = load_kinematic_recording(
-    #         recording_path=trial_path,
-    #         min_duration_frames=10,
-    #         filter_size=5,
-    #         filtered_frac_threshold=0.5,
-    #     )
-    #     num_segments = len(kinematic_recording_segments)
-    #     print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
-    #     for segment_id, segment in enumerate(kinematic_recording_segments):
-    #         print(f"Simulating segment {segment_id}/{num_segments}")
-    #         output_subdir = output_dir / trial_name / f"segment_{segment_id}"
-    #         simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
+    trial_paths = [
+        Path(
+            "bulk_data/kinematic_recording/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"
+        )
+    ]
+
+    for trial_path in trial_paths:
+        trial_name = trial_path.stem
+        kinematic_recording_segments = load_kinematic_recording(
+            recording_path=trial_path,
+            min_duration_frames=10,
+            filter_size=5,
+            filtered_frac_threshold=0.5,
+        )
+        kinematic_recording_segments = kinematic_recording_segments[:max_segments]
+        num_segments = len(kinematic_recording_segments)
+        print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
+        for segment_id, segment in enumerate(kinematic_recording_segments):
+            print(f"Simulating segment {segment_id + 1}/{num_segments}")
+            output_subdir = output_dir / trial_name / f"segment_{segment_id}"
+            simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
