@@ -24,7 +24,7 @@ def load_video_frames(video_path: Path) -> list[np.ndarray]:
     reader = imageio.get_reader(str(video_path))
     frames = []
     num_frames = reader.count_frames()
-    for frame in tqdm(reader, total=num_frames, desc="Loading frames"):
+    for frame in tqdm(reader, total=num_frames, desc="Loading frames", disable=None):
         frames.append(frame)
 
     # Get FPS from metadata
@@ -151,7 +151,7 @@ def process_subsegment(
         quality=10,  # 10 is highest for imageio, lower is lower quality
         ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
     ) as writer:
-        for img in tqdm(images_all, desc="Writing frames"):
+        for img in tqdm(images_all, desc="Writing frames", disable=None):
             writer.append_data(img)
 
     # Update dataframe of kinematic states with transformed keypoint positions
@@ -249,7 +249,7 @@ def visualize_subsegment(
         ax_3d.set_xlabel("X")
         ax_3d.set_ylabel("Y")
         ax_3d.set_zlabel("Z")
-        ax_3d.set_xlim(-2, 2)
+        ax_3d.set_xlim(-2, 3)
         ax_3d.set_ylim(-2, 2)
         ax_3d.set_zlim(-0.5, 2)
         ax_3d.set_aspect("equal")
@@ -267,7 +267,7 @@ def visualize_subsegment(
         quality=10,  # 10 is highest for imageio, lower is lower quality
         ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
     ) as writer:
-        for img in tqdm(viz_frames_paths, desc="Writing frames"):
+        for img in tqdm(viz_frames_paths, desc="Writing frames", disable=None):
             writer.append_data(imageio.imread(img))
 
     # Cleanup
