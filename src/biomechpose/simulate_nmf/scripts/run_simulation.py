@@ -28,6 +28,7 @@ from biomechpose.simulate_nmf.data import (
     interpolate_trajectories,
 )
 from biomechpose.simulate_nmf.simulate import simulate, make_kinematic_states_dataframe
+from biomechpose.simulate_nmf.postprocessing import postprocess_segment
 
 
 def simulate_one_segment(
@@ -89,7 +90,7 @@ if __name__ == "__main__":
     output_dir = Path("bulk_data/nmf_rendering")
     input_timestep = 0.01
     sim_timestep = 0.0001
-    max_segments = 1  # limit to this many segments per trial
+    max_segments = 1000  # limit to this many segments per trial
 
     # trial_paths = sorted(list(kinematic_recording_dir.glob("*.pkl")))
     trial_paths = [
@@ -110,6 +111,8 @@ if __name__ == "__main__":
         num_segments = len(kinematic_recording_segments)
         print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
         for segment_id, segment in enumerate(kinematic_recording_segments):
-            print(f"Simulating segment {segment_id + 1}/{num_segments}")
+            if segment_id < 10: continue
+            print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
             output_subdir = output_dir / trial_name / f"segment_{segment_id}"
             simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
+            postprocess_segment(output_subdir, visualize=True)

@@ -392,7 +392,7 @@ def select_subsegments(
     return subsegments_boundaries
 
 
-def process_segment(
+def postprocess_segment(
     recording_dir: Path,
     start_frame: int = 0,
     end_frame: int = -1,
@@ -481,4 +481,5 @@ def process_segment(
                 camera_elevation=camera_elevation,
                 max_abs_azimuth=max_abs_azimuth,
                 azimuth_rotation_period=azimuth_rotation_period,
+                n_jobs= n_jobs,
             )

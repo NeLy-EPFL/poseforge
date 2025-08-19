@@ -152,7 +152,7 @@ def simulate(
         # Check if a new frame is rendered. If not, continue without extracting any data
         if not len(camera._frames) > last_num_frames:
             continue
-        
+
         timestamps_hist.append(sim.curr_time)
 
         # Store joint angles
@@ -183,6 +183,11 @@ def simulate(
 
         # Save rendered image
         last_num_frames = len(camera._frames)
+
+        # Check if the fly has flipped over
+        if observation["cardinal_vectors"][2, 2] < 0:
+            print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
+            break
 
     return (
         camera,

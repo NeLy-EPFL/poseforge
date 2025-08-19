@@ -1,11 +1,15 @@
+"""DEPRECATED: functionality is integrated into
+biomechpose.simulate_nmf.scripts.run_simulation
+"""
+
 from pathlib import Path
 
-from biomechpose.simulate_nmf.postprocessing import process_segment
+from biomechpose.simulate_nmf.postprocessing import postprocess_segment
 
 
 if __name__ == "__main__":
     recording_dir = Path("bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/segment_0")
-    process_segment(
+    postprocess_segment(
         recording_dir,
         start_frame=0,
         end_frame=-1,
