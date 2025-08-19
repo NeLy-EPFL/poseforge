@@ -120,56 +120,6 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
     return sim, camera, dm_camera, keypoint_names, bound_keypoint_position_sensors
 
 
-def make_kinematic_states_dataframe(
-    joints_angles_hist,
-    keypoints_pos_world_hist,
-    keypoints_pos_cam_hist,
-    cardinal_vectors_hist,
-    camera_matrix_hist,
-    sim_timestep,
-    keypoint_names,
-):
-    joints_angles_hist = np.array(joints_angles_hist)  # (len, n_dofs)
-    keypoints_pos_world_hist = np.array(keypoints_pos_world_hist)  # (len, 3, n_keypts)
-    keypoints_pos_cam_hist = np.array(keypoints_pos_cam_hist)  # (len, 3, n_keypts)
-    cardinal_vectors_hist = np.array(cardinal_vectors_hist)  # (len, 3, 3(xyz))
-
-    columns = {}
-    columns["time"] = np.arange(len(joints_angles_hist)) * sim_timestep
-
-    for i, dof_name in enumerate(all_leg_dofs):
-        leg, canonical_dof_name = parse_nmf_joint_name(dof_name)
-        key = leg + canonical_dof_name
-        columns[f"dof_angle_{key}"] = joints_angles_hist[:, i]
-
-    for i, keypoint_name in enumerate(keypoint_names):
-        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
-        key = leg + canonical_keypoint_name
-        columns[f"keypoint_pos_world_{key}_x"] = keypoints_pos_world_hist[:, 0, i]
-        columns[f"keypoint_pos_world_{key}_y"] = keypoints_pos_world_hist[:, 1, i]
-        columns[f"keypoint_pos_world_{key}_z"] = keypoints_pos_world_hist[:, 2, i]
-
-    for i, keypoint_name in enumerate(keypoint_names):
-        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
-        key = leg + canonical_keypoint_name
-        columns[f"keypoint_pos_cam_{key}_col"] = keypoints_pos_cam_hist[:, 0, i]
-        columns[f"keypoint_pos_cam_{key}_row"] = keypoints_pos_cam_hist[:, 1, i]
-        columns[f"keypoint_pos_cam_{key}_depth"] = keypoints_pos_cam_hist[:, 2, i]
-
-    columns["cardinal_vector_forward"] = list(np.array(cardinal_vectors_hist)[:, 0, :])
-    columns["cardinal_vector_left"] = list(np.array(cardinal_vectors_hist)[:, 1, :])
-    columns["cardinal_vector_up"] = list(np.array(cardinal_vectors_hist)[:, 2, :])
-    kinematic_states_df = pd.DataFrame(columns, dtype=np.float32)
-
-    # Add camera matrix to the DataFrame. Do this after creating the DataFrame with
-    # dtype=float32 for all the other columns because unlike others, the camera matrix
-    # column contains 3x4 matrices, which cannot be casted to float32.
-    kinematic_states_df["camera_matrix"] = camera_matrix_hist
-
-    kinematic_states_df.index.name = "frame_id"
-    return kinematic_states_df
-
-
 def simulate(
     trajectories_interp, render_window_size, render_play_speed, render_fps, sim_timestep
 ):
@@ -179,6 +129,7 @@ def simulate(
         )
     )
 
+    timestamps_hist = []
     joints_angles_hist = []
     keypoints_pos_world_hist = []
     keypoints_pos_cam_hist = []
@@ -201,6 +152,8 @@ def simulate(
         # Check if a new frame is rendered. If not, continue without extracting any data
         if not len(camera._frames) > last_num_frames:
             continue
+        
+        timestamps_hist.append(sim.curr_time)
 
         # Store joint angles
         joints_angles_hist.append(observation["joints"][0, :].copy())
@@ -233,6 +186,7 @@ def simulate(
 
     return (
         camera,
+        timestamps_hist,
         joints_angles_hist,
         keypoints_pos_world_hist,
         keypoints_pos_cam_hist,
@@ -240,3 +194,53 @@ def simulate(
         camera_matrix_hist,
         keypoint_names,
     )
+
+
+def make_kinematic_states_dataframe(
+    timestamps_hist,
+    joints_angles_hist,
+    keypoints_pos_world_hist,
+    keypoints_pos_cam_hist,
+    cardinal_vectors_hist,
+    camera_matrix_hist,
+    keypoint_names,
+):
+    joints_angles_hist = np.array(joints_angles_hist)  # (len, n_dofs)
+    keypoints_pos_world_hist = np.array(keypoints_pos_world_hist)  # (len, 3, n_keypts)
+    keypoints_pos_cam_hist = np.array(keypoints_pos_cam_hist)  # (len, 3, n_keypts)
+    cardinal_vectors_hist = np.array(cardinal_vectors_hist)  # (len, 3, 3(xyz))
+
+    columns = {}
+    columns["time"] = timestamps_hist
+
+    for i, dof_name in enumerate(all_leg_dofs):
+        leg, canonical_dof_name = parse_nmf_joint_name(dof_name)
+        key = leg + canonical_dof_name
+        columns[f"dof_angle_{key}"] = joints_angles_hist[:, i]
+
+    for i, keypoint_name in enumerate(keypoint_names):
+        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
+        key = leg + canonical_keypoint_name
+        columns[f"keypoint_pos_world_{key}_x"] = keypoints_pos_world_hist[:, 0, i]
+        columns[f"keypoint_pos_world_{key}_y"] = keypoints_pos_world_hist[:, 1, i]
+        columns[f"keypoint_pos_world_{key}_z"] = keypoints_pos_world_hist[:, 2, i]
+
+    for i, keypoint_name in enumerate(keypoint_names):
+        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
+        key = leg + canonical_keypoint_name
+        columns[f"keypoint_pos_cam_{key}_col"] = keypoints_pos_cam_hist[:, 0, i]
+        columns[f"keypoint_pos_cam_{key}_row"] = keypoints_pos_cam_hist[:, 1, i]
+        columns[f"keypoint_pos_cam_{key}_depth"] = keypoints_pos_cam_hist[:, 2, i]
+
+    columns["cardinal_vector_forward"] = list(np.array(cardinal_vectors_hist)[:, 0, :])
+    columns["cardinal_vector_left"] = list(np.array(cardinal_vectors_hist)[:, 1, :])
+    columns["cardinal_vector_up"] = list(np.array(cardinal_vectors_hist)[:, 2, :])
+    kinematic_states_df = pd.DataFrame(columns, dtype=np.float32)
+
+    # Add camera matrix to the DataFrame. Do this after creating the DataFrame with
+    # dtype=float32 for all the other columns because unlike others, the camera matrix
+    # column contains 3x4 matrices, which cannot be casted to float32.
+    kinematic_states_df["camera_matrix"] = camera_matrix_hist
+
+    kinematic_states_df.index.name = "frame_id"
+    return kinematic_states_df

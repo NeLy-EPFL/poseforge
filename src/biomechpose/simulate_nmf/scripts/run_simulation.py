@@ -53,6 +53,7 @@ def simulate_one_segment(
     # Run the simulation
     (
         camera,
+        timestamps_hist,
         joints_angles_hist,
         keypoints_pos_world_hist,
         keypoints_pos_cam_hist,
@@ -69,12 +70,12 @@ def simulate_one_segment(
 
     # Save kinematic states as Pandas DataFrame
     kinematic_states_df = make_kinematic_states_dataframe(
+        timestamps_hist,
         joints_angles_hist,
         keypoints_pos_world_hist,
         keypoints_pos_cam_hist,
         cardinal_vectors_hist,
         camera_matrix_hist,
-        sim_timestep,
         keypoint_names,
     )
     kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
