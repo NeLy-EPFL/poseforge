@@ -8,6 +8,7 @@ import tempfile
 import os
 from pathlib import Path
 from tqdm import tqdm, trange
+from joblib import Parallel, delayed
 
 from biomechpose.simulate_nmf.utils import (
     keypoint_name_lookup_neuromechfly_to_canonical,
@@ -116,6 +117,27 @@ def process_single_frame(image: np.ndarray, df_row: pd.Series, crop_size: int):
     return image_transformed, pos_cam_transformed, pos_world_transformed
 
 
+def _process_single_frame_worker(
+    frame_index: int, frame: np.ndarray, df_row: pd.Series, crop_size: int
+):
+    """
+    Worker function for parallel frame processing.
+
+    Args:
+        frame_index: Index of the frame for proper ordering
+        frame: Input image frame
+        df_row: DataFrame row with kinematic state data
+        crop_size: Size for square crop
+
+    Returns:
+        Tuple of (frame_index, processed_image, camera_positions, world_positions)
+    """
+    image_transformed, pos_cam_transformed, pos_world_transformed = (
+        process_single_frame(frame, df_row, crop_size=crop_size)
+    )
+    return frame_index, image_transformed, pos_cam_transformed, pos_world_transformed
+
+
 def process_subsegment(
     frames,
     kinematic_states_df,
@@ -123,6 +145,7 @@ def process_subsegment(
     output_video_path: Path,
     fps: int,
     crop_size: int = 464,
+    n_jobs: int = -1,
 ) -> None:
     if len(kinematic_states_df) != len(frames):
         raise ValueError(
@@ -130,15 +153,28 @@ def process_subsegment(
             f"number of kinematic states ({len(kinematic_states_df)})."
         )
 
-    # Process each frame
+    # Process frames in parallel
+    print(
+        f"Processing {len(frames)} frames in parallel using "
+        f"{n_jobs if n_jobs > 0 else 'all available'} cores..."
+    )
+    # Use 'loky' backend for CPU-intensive image processing operations
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_process_single_frame_worker)(
+            i, frame, kinematic_states_df.iloc[i], crop_size
+        )
+        for i, frame in tqdm(
+            enumerate(frames), total=len(frames), desc="Processing frames", disable=None
+        )
+    )
+
+    # Sort results by frame index to maintain order
+    results.sort(key=lambda x: x[0])
+
+    # Extract results in proper order
     images_all = []
     pos_cam_transformed_all, pos_world_transformed_all = [], []
-    for i in trange(len(frames), desc="Processing frames"):
-        image_transformed, pos_cam_transformed, pos_world_transformed = (
-            process_single_frame(
-                frames[i], kinematic_states_df.iloc[i], crop_size=crop_size
-            )
-        )
+    for _, image_transformed, pos_cam_transformed, pos_world_transformed in results:
         images_all.append(image_transformed)
         pos_cam_transformed_all.append(pos_cam_transformed)
         pos_world_transformed_all.append(pos_world_transformed)
@@ -181,6 +217,84 @@ def process_subsegment(
     kinematic_states_df.to_pickle(output_kinematic_states_path)
 
 
+def _visualize_single_frame_worker(
+    frame_index: int,
+    frame: np.ndarray,
+    kinematic_entry: pd.Series,
+    temp_dir: Path,
+    camera_elevation: float,
+    azimuth_rotation_period: float,
+    max_abs_azimuth: float,
+):
+    """
+    Worker function for parallel frame visualization.
+
+    Args:
+        frame_index: Index of the frame for proper ordering
+        frame: Input image frame
+        kinematic_entry: DataFrame row with kinematic state data
+        temp_dir: Temporary directory for saving frames
+        camera_elevation: 3D plot camera elevation
+        azimuth_rotation_period: Period for azimuth rotation
+        max_abs_azimuth: Maximum azimuth angle
+
+    Returns:
+        Tuple of (frame_index, path_to_saved_frame)
+    """
+    # Create a new figure for this worker (thread-safe)
+    fig = plt.figure(figsize=(12, 6))
+    ax_2d = fig.add_subplot(1, 2, 1)
+    ax_3d = fig.add_subplot(1, 2, 2, projection="3d")
+
+    try:
+        # Calculate azimuth for this frame
+        azimuth = (
+            np.cos(2 * np.pi * frame_index / azimuth_rotation_period) * max_abs_azimuth
+        )
+        ax_3d.view_init(elev=camera_elevation, azim=azimuth)
+
+        # Plot 2D image
+        ax_2d.imshow(frame)
+
+        # Overlay keypoints on 2D image
+        for leg, color in leg_colors.items():
+            rows, cols = [], []
+            for kpt in keypoint_name_lookup_neuromechfly_to_canonical.values():
+                key = f"{leg}{kpt}"
+                rows.append(kinematic_entry[f"keypoint_pos_cam_{key}_row"])
+                cols.append(kinematic_entry[f"keypoint_pos_cam_{key}_col"])
+            ax_2d.plot(cols, rows, color=color, linewidth=2)
+
+        # Plot 3D keypoints
+        for leg, color in leg_colors.items():
+            xs, ys, zs = [], [], []
+            for kpt in keypoint_name_lookup_neuromechfly_to_canonical.values():
+                key = f"{leg}{kpt}"
+                xs.append(kinematic_entry[f"keypoint_pos_world_{key}_x"])
+                ys.append(kinematic_entry[f"keypoint_pos_world_{key}_y"])
+                zs.append(kinematic_entry[f"keypoint_pos_world_{key}_z"])
+            ax_3d.plot(xs, ys, zs, marker="o", color=color, linewidth=2)
+
+        ax_2d.set_axis_off()
+        ax_3d.set_xlabel("anterior-posterior")
+        ax_3d.set_ylabel("lateral")
+        ax_3d.set_zlabel("dorsal-ventral")
+        ax_3d.set_xlim(-2, 3)
+        ax_3d.set_ylim(-2, 2)
+        ax_3d.set_zlim(-0.5, 2)
+        ax_3d.set_aspect("equal")
+
+        # Save the figure
+        viz_frame_path = temp_dir / f"frame_{frame_index:06d}.png"
+        fig.savefig(viz_frame_path)
+
+        return frame_index, viz_frame_path
+
+    finally:
+        # Always close the figure to free memory
+        plt.close(fig)
+
+
 def visualize_subsegment(
     processed_kinematic_states_path: Path,
     processed_video_path: Path,
@@ -189,6 +303,7 @@ def visualize_subsegment(
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
+    n_jobs: int = -1,  # Default to all available cores
 ) -> None:
     # Load video frames
     frames, fps = load_video_frames(processed_video_path)
@@ -208,56 +323,32 @@ def visualize_subsegment(
     )
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set up figure for visualization
-    fig = plt.figure(figsize=(12, 6))
-    ax_2d = fig.add_subplot(1, 2, 1)
-    ax_3d = fig.add_subplot(1, 2, 2, projection="3d")
+    # Visualize frames in parallel
+    print(
+        f"Visualizing {len(frames)} frames in parallel using "
+        f"{n_jobs if n_jobs > 0 else 'all available'} cores..."
+    )
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(_visualize_single_frame_worker)(
+            i,
+            frame,
+            kinematic_states_df.iloc[i],
+            temp_dir,
+            camera_elevation,
+            azimuth_rotation_period,
+            max_abs_azimuth,
+        )
+        for i, frame in tqdm(
+            enumerate(frames),
+            total=len(frames),
+            desc="Visualizing frames",
+            disable=None,
+        )
+    )
 
-    # Visualize each frame
-    viz_frames_paths = []
-    for i in trange(len(frames), desc="Visualizing frames"):
-        ax_2d.clear()
-        ax_3d.clear()
-        azimuth = np.cos(2 * np.pi * i / azimuth_rotation_period) * max_abs_azimuth
-        ax_3d.view_init(elev=camera_elevation, azim=azimuth)
-
-        entry = kinematic_states_df.iloc[i]
-
-        # Plot 2D image
-        ax_2d.imshow(frames[i])
-
-        # Overlay keypoints on 2D image
-        for leg, color in leg_colors.items():
-            rows, cols = [], []
-            for kpt in keypoint_name_lookup_neuromechfly_to_canonical.values():
-                key = f"{leg}{kpt}"
-                rows.append(entry[f"keypoint_pos_cam_{key}_row"])
-                cols.append(entry[f"keypoint_pos_cam_{key}_col"])
-            ax_2d.plot(cols, rows, color=color, linewidth=2)
-
-        # Plot 3D keypoints
-        for leg, color in leg_colors.items():
-            xs, ys, zs = [], [], []
-            for kpt in keypoint_name_lookup_neuromechfly_to_canonical.values():
-                key = f"{leg}{kpt}"
-                xs.append(entry[f"keypoint_pos_world_{key}_x"])
-                ys.append(entry[f"keypoint_pos_world_{key}_y"])
-                zs.append(entry[f"keypoint_pos_world_{key}_z"])
-            ax_3d.plot(xs, ys, zs, marker="o", color=color, linewidth=2)
-
-        ax_2d.set_axis_off()
-        ax_3d.set_xlabel("X")
-        ax_3d.set_ylabel("Y")
-        ax_3d.set_zlabel("Z")
-        ax_3d.set_xlim(-2, 3)
-        ax_3d.set_ylim(-2, 2)
-        ax_3d.set_zlim(-0.5, 2)
-        ax_3d.set_aspect("equal")
-
-        # Save the figure
-        viz_frame_path = temp_dir / f"frame_{i:06d}.png"
-        fig.savefig(viz_frame_path)
-        viz_frames_paths.append(viz_frame_path)
+    # Sort results by frame index to maintain order
+    results.sort(key=lambda x: x[0])
+    viz_frames_paths = [path for _, path in results]
 
     # Merge video
     with imageio.get_writer(
@@ -267,11 +358,11 @@ def visualize_subsegment(
         quality=10,  # 10 is highest for imageio, lower is lower quality
         ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
     ) as writer:
-        for img in tqdm(viz_frames_paths, desc="Writing frames", disable=None):
-            writer.append_data(imageio.imread(img))
+        for img_path in tqdm(viz_frames_paths, desc="Writing frames", disable=None):
+            img = imageio.imread(img_path)
+            writer.append_data(img)
 
     # Cleanup
-    plt.close(fig)
     shutil.rmtree(temp_dir)
 
 
@@ -313,6 +404,7 @@ def process_segment(
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
+    n_jobs: int = -1,
 ):
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
@@ -375,6 +467,7 @@ def process_segment(
             processed_video_path,
             fps,
             image_crop_size,
+            n_jobs=n_jobs,
         )
 
         # Visualize the subsegment if requested

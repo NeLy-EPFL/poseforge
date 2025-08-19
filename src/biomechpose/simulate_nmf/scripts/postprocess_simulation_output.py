@@ -14,4 +14,5 @@ if __name__ == "__main__":
         camera_elevation=30.0,
         max_abs_azimuth=30.0,
         azimuth_rotation_period=300.0,
+        n_jobs=-1,
     )
