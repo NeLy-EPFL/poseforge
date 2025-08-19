@@ -122,31 +122,43 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
 
 def make_kinematic_states_dataframe(
     joints_angles_hist,
-    keypoints_pos_3d_hist,
-    forward_vector_hist,
+    keypoints_pos_world_hist,
+    keypoints_pos_cam_hist,
+    cardinal_vectors_hist,
     camera_matrix_hist,
     sim_timestep,
     keypoint_names,
 ):
-    joints_angles_hist = np.array(joints_angles_hist)  # (n_frames, n_dofs)
-    keypoints_pos_3d_hist = np.array(keypoints_pos_3d_hist)  # (n_frames, 3, n_keypts)
-    forward_vector_hist = np.array(forward_vector_hist)  # (n_frames, 3)
+    joints_angles_hist = np.array(joints_angles_hist)  # (len, n_dofs)
+    keypoints_pos_world_hist = np.array(keypoints_pos_world_hist)  # (len, 3, n_keypts)
+    keypoints_pos_cam_hist = np.array(keypoints_pos_cam_hist)  # (len, 3, n_keypts)
+    cardinal_vectors_hist = np.array(cardinal_vectors_hist)  # (len, 3, 3(xyz))
 
     columns = {}
     columns["time"] = np.arange(len(joints_angles_hist)) * sim_timestep
+
     for i, dof_name in enumerate(all_leg_dofs):
         leg, canonical_dof_name = parse_nmf_joint_name(dof_name)
         key = leg + canonical_dof_name
         columns[f"dof_angle_{key}"] = joints_angles_hist[:, i]
+
     for i, keypoint_name in enumerate(keypoint_names):
         leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
         key = leg + canonical_keypoint_name
-        columns[f"keypoint_pos_3d_{key}_x"] = keypoints_pos_3d_hist[:, 0, i]
-        columns[f"keypoint_pos_3d_{key}_y"] = keypoints_pos_3d_hist[:, 1, i]
-        columns[f"keypoint_pos_3d_{key}_z"] = keypoints_pos_3d_hist[:, 2, i]
-    columns["forward_vector_x"] = np.array(forward_vector_hist)[:, 0]
-    columns["forward_vector_y"] = np.array(forward_vector_hist)[:, 1]
-    columns["forward_vector_z"] = np.array(forward_vector_hist)[:, 2]
+        columns[f"keypoint_pos_world_{key}_x"] = keypoints_pos_world_hist[:, 0, i]
+        columns[f"keypoint_pos_world_{key}_y"] = keypoints_pos_world_hist[:, 1, i]
+        columns[f"keypoint_pos_world_{key}_z"] = keypoints_pos_world_hist[:, 2, i]
+
+    for i, keypoint_name in enumerate(keypoint_names):
+        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
+        key = leg + canonical_keypoint_name
+        columns[f"keypoint_pos_cam_{key}_col"] = keypoints_pos_cam_hist[:, 0, i]
+        columns[f"keypoint_pos_cam_{key}_row"] = keypoints_pos_cam_hist[:, 1, i]
+        columns[f"keypoint_pos_cam_{key}_depth"] = keypoints_pos_cam_hist[:, 2, i]
+
+    columns["cardinal_vector_forward"] = list(np.array(cardinal_vectors_hist)[:, 0, :])
+    columns["cardinal_vector_left"] = list(np.array(cardinal_vectors_hist)[:, 1, :])
+    columns["cardinal_vector_up"] = list(np.array(cardinal_vectors_hist)[:, 2, :])
     kinematic_states_df = pd.DataFrame(columns, dtype=np.float32)
 
     # Add camera matrix to the DataFrame. Do this after creating the DataFrame with
@@ -168,15 +180,16 @@ def simulate(
     )
 
     joints_angles_hist = []
-    keypoints_pos_3d_hist = []
-    forward_vector_hist = []
+    keypoints_pos_world_hist = []
+    keypoints_pos_cam_hist = []
+    cardinal_vectors_hist = []
+
     camera_matrix_hist = []  # see https://en.wikipedia.org/wiki/Camera_matrix
 
     # Simulation loop
     last_num_frames = 0
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
-        if sim_frame_id == 1000:
-            break  # for debugging, remove later
+        # if sim_frame_id == 1000: break  # For debugging, remove later
         action = {"joints": trajectories_interp[sim_frame_id]}
         try:
             observation, reward, terminated, truncated, info = sim.step(action)
@@ -194,19 +207,23 @@ def simulate(
 
         # Store keypoint positions
         camera_matrix = dm_camera.matrix.copy()
-        keypoints_pos_3d_global = (
+        keypoints_pos_world = (
             bound_keypoint_position_sensors.sensordata.copy().reshape((-1, 3)).T
         )
-        keypoints_pos_3d_global_homogeneous = np.vstack(
-            [keypoints_pos_3d_global, np.ones((1, keypoints_pos_3d_global.shape[1]))]
+        keypoints_pos_world_homogeneous = np.vstack(
+            [keypoints_pos_world, np.ones((1, keypoints_pos_world.shape[1]))]
         )
-        keypoints_pos_3d_cam = camera_matrix @ keypoints_pos_3d_global_homogeneous
-        keypoints_pos_3d_cam = keypoints_pos_3d_cam / keypoints_pos_3d_cam[2]
-        keypoints_pos_3d_hist.append(keypoints_pos_3d_cam)
+        keypoints_pos_cam = camera_matrix @ keypoints_pos_world_homogeneous
+        keypoints_pos_cam_hist.append(keypoints_pos_cam)
+
+        fly_center_of_mass_pos = observation["fly"][0, :]
+        keypoints_pos_world_centered = (
+            keypoints_pos_world - fly_center_of_mass_pos[:, np.newaxis]
+        )
+        keypoints_pos_world_hist.append(keypoints_pos_world_centered)
 
         # Store forward vector
-        forward_vector = observation["cardinal_vectors"][0, :].copy()
-        forward_vector_hist.append(forward_vector)
+        cardinal_vectors_hist.append(observation["cardinal_vectors"].copy())
 
         # Store camera matrix
         camera_matrix_hist.append(camera_matrix)
@@ -217,8 +234,9 @@ def simulate(
     return (
         camera,
         joints_angles_hist,
-        keypoints_pos_3d_hist,
-        forward_vector_hist,
+        keypoints_pos_world_hist,
+        keypoints_pos_cam_hist,
+        cardinal_vectors_hist,
         camera_matrix_hist,
         keypoint_names,
     )

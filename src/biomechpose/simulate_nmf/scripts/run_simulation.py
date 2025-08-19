@@ -6,7 +6,6 @@ control, and saves both rendered images and kinematic states histories.
 
 Outputs for each simulated segment, the script produces a directory
 containing:
-- Rendered frames as PNG images (frame_XXXX.png).
 - Video of the simulation (simulation_rendering.mp4).
 - Kinematic states history as a Pandas DataFrame (kinematic_states_history.pkl).
 
@@ -55,8 +54,9 @@ def simulate_one_segment(
     (
         camera,
         joints_angles_hist,
-        keypoints_pos_3d_hist,
-        forward_vector_hist,
+        keypoints_pos_world_hist,
+        keypoints_pos_cam_hist,
+        cardinal_vectors_hist,
         camera_matrix_hist,
         keypoint_names,
     ) = simulate(
@@ -70,8 +70,9 @@ def simulate_one_segment(
     # Save kinematic states as Pandas DataFrame
     kinematic_states_df = make_kinematic_states_dataframe(
         joints_angles_hist,
-        keypoints_pos_3d_hist,
-        forward_vector_hist,
+        keypoints_pos_world_hist,
+        keypoints_pos_cam_hist,
+        cardinal_vectors_hist,
         camera_matrix_hist,
         sim_timestep,
         keypoint_names,
@@ -79,7 +80,7 @@ def simulate_one_segment(
     kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
 
     # Save rendered frames as a video
-    camera.save_video(output_dir / "simulation_rendering.mp4")
+    camera.save_video(output_dir / "simulation_rendering.mp4", stabilization_time=0)
 
 
 if __name__ == "__main__":
