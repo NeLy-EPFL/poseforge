@@ -1,13 +1,14 @@
-from typing import Optional
 import numpy as np
 import pandas as pd
 import dm_control.mujoco
 from tqdm import trange
+from pathlib import Path
 from dm_control.rl.control import PhysicsError
 from flygym import Fly, SingleFlySimulation, Camera
 from flygym.arena import BaseArena, FlatTerrain
 from flygym.preprogrammed import all_leg_dofs
 
+from biomechpose.simulate_nmf.data import interpolate_trajectories
 from biomechpose.simulate_nmf.utils import parse_nmf_joint_name, parse_nmf_keypoint_name
 
 
@@ -120,7 +121,7 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
     return sim, camera, dm_camera, keypoint_names, bound_keypoint_position_sensors
 
 
-def simulate(
+def run_neuromechfly_simulation(
     trajectories_interp, render_window_size, render_play_speed, render_fps, sim_timestep
 ):
     sim, camera, dm_camera, keypoint_names, bound_keypoint_position_sensors = (
@@ -249,3 +250,57 @@ def make_kinematic_states_dataframe(
 
     kinematic_states_df.index.name = "frame_id"
     return kinematic_states_df
+
+
+def simulate_one_segment(
+    kinematic_recording_segment: pd.DataFrame,
+    output_dir: Path,
+    input_timestep: float,
+    sim_timestep: float,
+    render_fps: int = 300,
+    render_play_speed: float = 0.1,
+    render_window_size=(720, 720),
+) -> None:
+    """Simulate a single segment of kinematic recording in FlyGym."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Interpolate the trajectories to match the simulation timestep
+    trajectories_interp, interp_factor = interpolate_trajectories(
+        kinematic_recording_segment, input_timestep, sim_timestep
+    )
+    print(f"Simulating segment with {len(kinematic_recording_segment)} frames.")
+    print(f"Interpolation factor: {interp_factor}")
+    print(f"Output directory: {output_dir}")
+
+    # Run the simulation
+    (
+        camera,
+        timestamps_hist,
+        joints_angles_hist,
+        keypoints_pos_world_hist,
+        keypoints_pos_cam_hist,
+        cardinal_vectors_hist,
+        camera_matrix_hist,
+        keypoint_names,
+    ) = run_neuromechfly_simulation(
+        trajectories_interp,
+        render_window_size,
+        render_play_speed,
+        render_fps,
+        sim_timestep,
+    )
+
+    # Save kinematic states as Pandas DataFrame
+    kinematic_states_df = make_kinematic_states_dataframe(
+        timestamps_hist,
+        joints_angles_hist,
+        keypoints_pos_world_hist,
+        keypoints_pos_cam_hist,
+        cardinal_vectors_hist,
+        camera_matrix_hist,
+        keypoint_names,
+    )
+    kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
+
+    # Save rendered frames as a video
+    camera.save_video(output_dir / "simulation_rendering.mp4", stabilization_time=0)

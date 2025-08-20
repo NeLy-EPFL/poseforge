@@ -18,71 +18,43 @@ The kinematic states DataFrame contains:
           (direction on that the fly is facing).
     - "camera_matrix": 3x4 camera matrix (numpy array) for each frame
           (see https://en.wikipedia.org/wiki/Camera_matrix).
+
+Terminology:
+- Kinematic recording: A single train from Aymanns et al. 2022.
+- Segment: A continuous period within a kinematic recording where the fly
+  is NOT as rest, as indicated by the behavior classification in Aymanns et
+  al. There can be multiple segments in a single kinematic recording.
+- Subsegment (see postprocessing): A continuous period within a segment
+  where the fly is upright (defined using a maximum allowed tilting angle).
+  The subsegments can only be identified AFTER the physics simulation
+  because we don't know if the fly will flip upside down until we actually
+  simulate it.
+
+Pipeline:
+- First copy & extract kinematic recordings from Aymanns et al. 2022 (this
+  is done separately in copy_kinematic_recording.py).
+- Run this script to:
+    - Load the kinematic recording.
+    - Split it into segments based on metadata from Aymanns et al.
+    - Run the physics simulation for each segment. This generates the
+      history of the fly's kinematic states in the simulation (but, for
+      example, in world coordinates) and renders a video looking at the fly
+      from the bottom up.
+    - Postprocess the simulation results to:
+        - Split each segment into subsegments based on the fly's
+          orientation
+        - For each subsegment, center keypoint coordinates around the fly's
+          center of mass and rotate the rendered frame so that the fly's
+          anterior-posterior axis is aligned with the vertical axis with
+          the head facing up.
+        - Optionally save a visualization of each subsegment as a video.
 """
 
-import pandas as pd
 from pathlib import Path
 
-from biomechpose.simulate_nmf.data import (
-    load_kinematic_recording,
-    interpolate_trajectories,
-)
-from biomechpose.simulate_nmf.simulate import simulate, make_kinematic_states_dataframe
+from biomechpose.simulate_nmf.data import load_kinematic_recording
+from biomechpose.simulate_nmf.simulate import simulate_one_segment
 from biomechpose.simulate_nmf.postprocessing import postprocess_segment
-
-
-def simulate_one_segment(
-    kinematic_recording_segment: pd.DataFrame,
-    output_dir: Path,
-    input_timestep: float,
-    sim_timestep: float,
-    render_fps: int = 300,
-    render_play_speed: float = 0.1,
-    render_window_size=(720, 720),
-) -> None:
-    """Simulate a single segment of kinematic recording in FlyGym."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Interpolate the trajectories to match the simulation timestep
-    trajectories_interp, interp_factor = interpolate_trajectories(
-        kinematic_recording_segment, input_timestep, sim_timestep
-    )
-    print(f"Simulating segment with {len(kinematic_recording_segment)} frames.")
-    print(f"Interpolation factor: {interp_factor}")
-    print(f"Output directory: {output_dir}")
-
-    # Run the simulation
-    (
-        camera,
-        timestamps_hist,
-        joints_angles_hist,
-        keypoints_pos_world_hist,
-        keypoints_pos_cam_hist,
-        cardinal_vectors_hist,
-        camera_matrix_hist,
-        keypoint_names,
-    ) = simulate(
-        trajectories_interp,
-        render_window_size,
-        render_play_speed,
-        render_fps,
-        sim_timestep,
-    )
-
-    # Save kinematic states as Pandas DataFrame
-    kinematic_states_df = make_kinematic_states_dataframe(
-        timestamps_hist,
-        joints_angles_hist,
-        keypoints_pos_world_hist,
-        keypoints_pos_cam_hist,
-        cardinal_vectors_hist,
-        camera_matrix_hist,
-        keypoint_names,
-    )
-    kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
-
-    # Save rendered frames as a video
-    camera.save_video(output_dir / "simulation_rendering.mp4", stabilization_time=0)
 
 
 if __name__ == "__main__":
@@ -111,7 +83,8 @@ if __name__ == "__main__":
         num_segments = len(kinematic_recording_segments)
         print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
         for segment_id, segment in enumerate(kinematic_recording_segments):
-            if segment_id < 10: continue
+            if segment_id < 10:
+                continue
             print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
             output_subdir = output_dir / trial_name / f"segment_{segment_id}"
             simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
