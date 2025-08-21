@@ -169,9 +169,9 @@ def build_dataset_dataframe(
     ):
         image_labels = []
         for trial_dir in dirs:
-            for image_path in sorted(trial_dir.glob(f"not_flipped/*.jpg")):
+            for image_path in sorted(trial_dir.glob(f"manual_label/not_flipped/*.jpg")):
                 image_labels.append((dataset, "not flipped", image_path.absolute()))
-            for image_path in sorted(trial_dir.glob(f"flipped/*.jpg")):
+            for image_path in sorted(trial_dir.glob(f"manual_label/flipped/*.jpg")):
                 image_labels.append((dataset, "flipped", image_path.absolute()))
         dataframe_per_dataset = pd.DataFrame(
             image_labels, columns=["dataset", "label", "path"]

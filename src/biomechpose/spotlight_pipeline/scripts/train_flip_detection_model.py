@@ -349,6 +349,7 @@ def run_inference_on_test_dataset(
                 confidence = row["predicted_confidence"]
                 image = Image.open(image_path).convert("L")
                 image.save(dir_ / f"{idx:06d}_confidence_{confidence:.2f}.jpg")
+    test_df.to_csv(test_examples_dir / "test_results.csv", index=False)
 
 
 if __name__ == "__main__":

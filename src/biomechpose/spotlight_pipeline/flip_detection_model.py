@@ -6,8 +6,6 @@ from pathlib import Path
 from PIL import Image
 from torchvision import transforms
 
-from biomechpose.spotlight_pipeline.flip_detection_dataset import get_transforms
-
 
 class FlipDetectionCNN(nn.Module):
     """Simple CNN for binary classification (flipped vs not flipped)"""

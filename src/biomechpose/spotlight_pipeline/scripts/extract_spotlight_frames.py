@@ -171,9 +171,7 @@ def process_trial(
 if __name__ == "__main__":
     # Find all recording directories
     spotlight_data_dir = Path("bulk_data/behavior_images/spotlight")
-    recording_directories = sorted(
-        list(spotlight_data_dir.glob("20250613-fly1b-*"))
-    )
+    recording_directories = sorted(list(spotlight_data_dir.glob("20250613-fly1b-*")))
     output_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
 
     # Set processing parameters
@@ -185,7 +183,7 @@ if __name__ == "__main__":
     # Process each trial
     for i, recording_dir in enumerate(recording_directories):
         print(f"Processing trial {i + 1}/{len(recording_directories)}: {recording_dir}")
-        output_dir = output_basedir / recording_dir.name
+        output_dir = output_basedir / recording_dir.name / "all"
         if output_dir.exists():
             print(f"Output directory {output_dir} already exists, skipping.")
             continue
