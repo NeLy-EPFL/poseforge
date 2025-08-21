@@ -11,7 +11,7 @@ from spotlight_tools.common.dataloader import (
     get_behavior_video_capture,
 )
 
-from biomechpose.style_transfer.spotlight_processing import (
+from biomechpose.spotlight_pipeline.spotlight_frame_extraction import (
     rotate_points_to_align,
     rotate_image_around_point,
     crop_image_and_keypoints,
