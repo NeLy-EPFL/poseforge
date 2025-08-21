@@ -19,7 +19,7 @@ from pathlib import Path
 source_basedir = Path(
     "/mnt/upramdya_archives/common/_NAS1_data2/FA/data_for_Aymanns_et_al/dataverse/"
 )
-target_dir = Path("bulk_data/kinematic_recording/aymanns2022/trials")
+target_dir = Path("bulk_data/kinematic_prior/aymanns2022/trials")
 expected_fps: int = 100
 
 

@@ -58,7 +58,7 @@ from biomechpose.simulate_nmf.postprocessing import postprocess_segment
 
 
 if __name__ == "__main__":
-    kinematic_recording_dir = Path("bulk_data/kinematic_recording/aymanns2022/trials/")
+    kinematic_recording_dir = Path("bulk_data/kinematic_prior/aymanns2022/trials/")
     output_dir = Path("bulk_data/nmf_rendering")
     input_timestep = 0.01
     sim_timestep = 0.0001
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     # trial_paths = sorted(list(kinematic_recording_dir.glob("*.pkl")))
     trial_paths = [
         Path(
-            "bulk_data/kinematic_recording/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"
+            "bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"
         )
     ]
 
@@ -86,6 +86,6 @@ if __name__ == "__main__":
             if segment_id < 10:
                 continue
             print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
-            output_subdir = output_dir / trial_name / f"segment_{segment_id}"
+            output_subdir = output_dir / trial_name / f"segment_{segment_id:03d}"
             simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
             postprocess_segment(output_subdir, visualize=True)
