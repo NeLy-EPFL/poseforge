@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 
-def set_deterministic_mode(seed: int = 42) -> None:
+def set_random_seed(seed: int = 42) -> None:
     """Set random seeds for reproducible results"""
     # Python random
     random.seed(seed)

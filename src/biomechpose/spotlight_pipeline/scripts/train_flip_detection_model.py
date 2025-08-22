@@ -28,7 +28,7 @@ from biomechpose.spotlight_pipeline.flip_detection_viz import (
     evaluate_model,
     save_training_plot,
 )
-from biomechpose.util import set_deterministic_mode
+from biomechpose.util import set_random_seed
 
 
 def train_one_epoch(
@@ -120,7 +120,7 @@ def train_model(
     seed: int = 42,
 ) -> None:
     # Set deterministic mode first
-    set_deterministic_mode(seed)
+    set_random_seed(seed)
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
