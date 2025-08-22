@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import logging
-import imageio.v2 as imageio
+import imageio.v3 as imageio
 from shutil import copyfile
 from collections import defaultdict
 from tqdm import tqdm
