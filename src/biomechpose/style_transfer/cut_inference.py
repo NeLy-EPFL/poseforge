@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import torchvision
 from pathlib import Path
+from PIL import Image
 from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper
 
@@ -65,48 +66,42 @@ class InferencePipeline:
         self.model = CUTModel(self.opt)
         self.input_nc = input_nc
         self.image_side_length = image_side_length
-        self.is_model_initialized = False
+        self._is_model_initialized = False
         self.netG_ckpt_path = netG_ckpt_path
         self.device = device
         normalize_mean = (0.5,) * input_nc
         normalize_std = (0.5,) * input_nc
-        self.input_transforms = torchvision.transforms.Compose(
+        self._input_transforms = torchvision.transforms.Compose(
             [
                 torchvision.transforms.ToTensor(),
                 torchvision.transforms.Resize((image_side_length, image_side_length)),
                 torchvision.transforms.Normalize(normalize_mean, normalize_std),
             ]
         )
-        self.denormalize_transform = torchvision.transforms.Normalize(
+        self._denormalize_transform = torchvision.transforms.Normalize(
             tuple(-m / s for m, s in zip(normalize_mean, normalize_std)),
             tuple(1 / s for s in normalize_std),
         )
 
-    def infer(self, input_images: np.ndarray):
-        if isinstance(input_images, np.ndarray):
-            input_images = torch.from_numpy(input_images).float()
+    def infer(self, input_images: list[Image.Image]) -> np.ndarray:
+        input_images_transformed = torch.stack(
+            [self._input_transforms(img) for img in input_images]
+        ).to(self.device)
 
-        if (
-            input_images.ndim != 4
-            or input_images.shape[3] != self.input_nc
-            or input_images.shape[1] != input_images.shape[2]
-        ):
-            raise ValueError(
-                f"Input images should have shape "
-                f"(batch_size, img_size, img_size, num_channels). "
-                f"Got {input_images.shape} instead."
-            )
-        # swap axes to (batch_size, num_channels, img_size, img_size)
-        input_images = input_images.permute(0, 3, 1, 2)
+        # Data-dependent model initialization
+        if not self._is_model_initialized:
+            self._initialize_model(input_images_transformed)
 
-        if not self.is_model_initialized:
-            self._initialize_model(input_images.to(self.device))
-
-        input_device = input_images.device
         with torch.no_grad():
-            output_images = self.model.netG(input_images.to(self.device))
-            output_images = self.denormalize_transform(output_images)
-            return output_images.to(input_device)
+            output_images = self.model.netG(input_images_transformed)
+            output_images = self._denormalize_transform(output_images)
+
+        # Permute to (batch_size, height, width, channels) as expected by
+        # non-torch libraries, and convert to uint8 numpy arrays
+        output_images = output_images.permute(0, 2, 3, 1)
+        output_images = output_images.detach().cpu().numpy()
+        output_images = (output_images * 255).clip(0, 255).astype(np.uint8)
+        return output_images
 
     def _initialize_model(self, input_images):
         # Move model to device first - this ensures ALL components are on the correct device
@@ -142,4 +137,4 @@ class InferencePipeline:
             )
             setattr(self.model, "netG", parallel_net)
 
-        self.is_model_initialized = True
+        self._is_model_initialized = True

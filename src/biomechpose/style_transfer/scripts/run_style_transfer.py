@@ -35,10 +35,10 @@ def process_subsegment(
         # Process frames in batches
         for i in trange(0, len(video_frames), batch_size, disable=None):
             input_batch = np.array(video_frames[i : i + batch_size])
-            output_batch = inference_pipeline.infer(input_batch)
+            input_batch_pil = [to_pil_image(frame) for frame in input_batch]
+            output_batch = inference_pipeline.infer(input_batch_pil)
             for j in range(output_batch.shape[0]):
                 frame = output_batch[j]
-                frame = np.asarray(to_pil_image(frame))
                 video_writer.append_data(frame)
 
 
@@ -47,13 +47,16 @@ if __name__ == "__main__":
     trial_dirs = [
         Path("bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/segment_000/subsegment_000")
     ]
+    # checkpoint_path = Path(
+    #     "bulk_data/style_transfer/checkpoints/test_trial_small/spotlight202506_to_aymanns2022/latest_net_G.pth"
+    # )
     checkpoint_path = Path(
-        "bulk_data/style_transfer/checkpoints/test_trial_small/spotlight202506_to_aymanns2022/latest_net_G.pth"
+        "bulk_data/style_transfer/checkpoints/test_trial/spotlight202506_to_aymanns2022/latest_net_G.pth"
     )
     output_basedir = Path("bulk_data/style_transfer/synthetic_output")
     input_nc = 3
     output_nc = 3
-    ngf = 32
+    ngf = 64
     netG = "stylegan2"
     image_side_length = 256
     nce_layers = [0, 4, 8, 12, 16]
