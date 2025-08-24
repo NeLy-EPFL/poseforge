@@ -78,6 +78,7 @@ if __name__ == '__main__':
                         images_to_concat.append(image_numpy)
                 if opt.wandb_project and len(images_to_concat) > 0:
                     concat_image = np.concatenate(images_to_concat, axis=1) if len(images_to_concat) > 1 else images_to_concat[0]
+                    print("writing image to wandb")
                     wandb.log({"results": [wandb.Image(concat_image, caption=f"Epoch {epoch}, Iter {total_iters}")]}, step=total_iters)
             if total_iters % opt.print_freq == 0:    # print training losses and save logging information to the disk
                 losses = model.get_current_losses()
@@ -85,6 +86,7 @@ if __name__ == '__main__':
                 if opt.display_id is None or opt.display_id > 0:
                     visualizer.plot_current_losses(epoch, float(epoch_iter) / dataset_size, losses)
                 if opt.wandb_project:
+                    print("logging losses to wandb")
                     wandb.log({**losses, "epoch": epoch, "iter": epoch_iter}, step=total_iters)
 
             if total_iters % opt.save_latest_freq == 0:   # cache our latest model every <save_latest_freq> iterations
