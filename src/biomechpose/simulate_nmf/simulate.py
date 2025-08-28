@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import dm_control.mujoco
+import distinctipy
 from tqdm import trange
 from pathlib import Path
 from dm_control.rl.control import PhysicsError
@@ -42,8 +43,151 @@ class SpotlightArena(FlatTerrain):
         )
         self.friction = friction
 
+        # Remove lights
+        for light in self.root_element.root.worldbody.light:
+            light.remove()
+
+        # Make lights non-shadow-casting to make segments look more uniform
+        self.root_element.default.light.castshadow = False
+
     def get_spawn_position(self, rel_pos, rel_angle):
         return rel_pos, rel_angle
+
+
+class FlyForRendering(Fly):
+    # def _define_colors(self):
+    #     geom_name_to_color_code = {}
+
+    #     # Leg segments
+    #     for side in "LR":
+    #         for pos in "FMH":
+    #             # Coxa segments are very close and hard to distinguish, so use different
+    #             # colors depending on the side
+    #             geom_name_to_color_code[f"{side}{pos}Coxa"] = f"{side}Coxa"
+
+    #             # Femur and tibia segments can share the same colors across legs
+    #             for segment in ["Femur", "Tibia"]:
+    #                 segment_name = f"{side}{pos}{segment}"
+    #                 # geom_name_to_color_code[segment_name] = segment_name
+    #                 geom_name_to_color_code[segment_name] = segment
+
+    #             # All tarsal segments share the same color
+    #             for tarsus_idx in range(1, 6):
+    #                 segment_name = f"{side}{pos}Tarsus{tarsus_idx}"
+    #                 # geom_name_to_color_code[segment_name] = f"{side}{pos}Tarsus"
+    #                 geom_name_to_color_code[segment_name] = f"Tarsus"
+
+    #     # Antennal segments
+    #     for side in "LR":
+    #         for segment in ["Pedicel", "Funiculus", "Arista"]:
+    #             segment_name = f"{side}{segment}"
+    #             # geom_name_to_color_code[segment_name] = f"{side}Antenna"
+    #             geom_name_to_color_code[segment_name] = "Antenna"
+
+    #     # Thorax
+    #     geom_name_to_color_code["Thorax"] = "Thorax"
+
+    #     # Define visually distinct colors
+    #     # num_distinct_colors = len(set(geom_name_to_color_code.values()))
+    #     # distinct_colors = distinctipy.get_colors(
+    #     #     num_distinct_colors, exclude_colors=[(0, 0, 0), (1, 1, 1)], rng=42
+    #     # )
+    #     # distinct_colors.append((0.3, 0.3, 0.3))  # default gray for uncolored geoms
+    #     # all_color_codes = sorted(list(set(geom_name_to_color_code.values())))
+    #     # color_code_to_rgba = {
+    #     #     color_code: (*rgb, 1.0)
+    #     #     for color_code, rgb in zip(all_color_codes, distinct_colors)
+    #     # }
+    #     # color_code_to_rgba["default"] = (*distinct_colors[-1], 1.0)
+    #     color_code_to_rgba = {
+    #         "LCoxa": (1, 0, 0, 1),
+    #         "RCoxa": (0, 1, 0, 1),
+    #         "Femur": (0, 0, 1, 1),
+    #         "Tibia": (1, 1, 0, 1),
+    #         "Tarsus": (1, 0, 1, 1),
+    #         "Antenna": (0, 1, 1, 1),
+    #         "Thorax": (0.6, 0.6, 0.6, 1),
+    #         "default": (0.3, 0.3, 0.3, 1.0),
+    #     }
+    #     # print("Color code to RGB mapping:")
+    #     # for color_code, rgba in color_code_to_rgba.items():
+    #     #     print(f"  {color_code}: {rgba}")
+
+    #     return geom_name_to_color_code, color_code_to_rgba
+
+    def _define_colors(self):
+        geom_name_to_color_code = {}
+
+        # Leg segments
+        for side in "LR":
+            for pos in "FMH":
+                # Coxa segments are very close and hard to distinguish, so use different
+                # colors depending on the side
+                geom_name_to_color_code[f"{side}{pos}Coxa"] = f"{side}Coxa"
+
+                # Femur and tibia segments can share the same colors across legs
+                for segment in ["Femur", "Tibia"]:
+                    segment_name = f"{side}{pos}{segment}"
+                    geom_name_to_color_code[segment_name] = segment_name
+
+                # All tarsal segments share the same color
+                for tarsus_idx in range(1, 6):
+                    segment_name = f"{side}{pos}Tarsus{tarsus_idx}"
+                    geom_name_to_color_code[segment_name] = f"{side}{pos}Tarsus"
+
+        # Antennal segments
+        for side in "LR":
+            for segment in ["Pedicel", "Funiculus", "Arista"]:
+                segment_name = f"{side}{segment}"
+                geom_name_to_color_code[segment_name] = f"{side}Antenna"
+
+        # Thorax
+        geom_name_to_color_code["Thorax"] = "Thorax"
+
+        # Assign colors
+        palette = [
+            (r, g, b, 1.0)
+            for r in (0, 0.5, 1)
+            for g in (0, 0.5, 1)
+            for b in (0, 0.5, 1)
+            if r != g or r != b or g != b
+        ]
+        all_color_codes = sorted(list(set(geom_name_to_color_code.values())))
+        color_code_to_rgba = {
+            color_code: palette[i]
+            for i, color_code in enumerate(all_color_codes)
+        }
+        color_code_to_rgba["Thorax"] = (0.6, 0.6, 0.6, 1)
+        color_code_to_rgba["default"] = (0.3, 0.3, 0.3, 1.0)
+        print("Color code to RGB mapping:")
+        for color_code, rgba in color_code_to_rgba.items():
+            print(f"  {color_code}: {rgba}")
+
+        return geom_name_to_color_code, color_code_to_rgba
+
+    def _set_geom_colors(self):
+        geom_name_to_color_code, color_code_to_rgba = self._define_colors()
+
+        # Define material for each different color to be rendered
+        for color_code, rgba in color_code_to_rgba.items():
+            self.model.asset.add(
+                "material",
+                name=f"seglabel_material_{color_code}",
+                rgba=rgba,
+                emission=1.0,
+                specular=0.0,
+                shininess=0.0,
+                reflectance=0.0,
+            )
+
+        # Assign material to each geom
+        for geom in self.model.find_all("geom"):
+            color_code = geom_name_to_color_code.get(geom.name, "default")
+            if hasattr(geom, "material"):
+                geom.material = f"seglabel_material_{color_code}"
+            else:
+                print(f"Geom {geom.name} has no material attribute")
+            geom._remove_attribute("rgba")
 
 
 def get_keypoint_position_sensors(fly: Fly):
@@ -79,7 +223,7 @@ def get_keypoint_position_sensors(fly: Fly):
 
 
 def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep):
-    fly = Fly(
+    fly = FlyForRendering(
         init_pose="stretch",
         control="position",
         actuated_joints=all_leg_dofs,
