@@ -59,7 +59,7 @@ from biomechpose.simulate_nmf.postprocessing import postprocess_segment
 
 if __name__ == "__main__":
     kinematic_recording_dir = Path("bulk_data/kinematic_prior/aymanns2022/trials/")
-    output_dir = Path("bulk_data/nmf_rendering_seglabels/")
+    output_dir = Path("bulk_data/nmf_rendering_enhanced/")
     input_timestep = 0.01
     sim_timestep = 0.0001
     max_segments = 1000  # limit to this many segments per trial

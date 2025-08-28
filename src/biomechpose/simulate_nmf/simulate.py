@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import dm_control.mujoco
 import imageio
+from collections import defaultdict
 from tqdm import trange
 from pathlib import Path
 from dm_control.rl.control import PhysicsError
@@ -58,6 +59,7 @@ class SpotlightArena(FlatTerrain):
 class FlyForRendering(Fly):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._add_mesh_state_sensors()
         self._assign_colors()
         self.current_color_coding: int = -1
 
@@ -172,6 +174,79 @@ class FlyForRendering(Fly):
             rgba = self.get_color_combo_rgba(geom.name)[color_coding_idx]
             self.change_segment_color(physics, geom.name, rgba)
 
+    # def _add_end_effector_sensors(self):
+    #     # Don't add end effector sensors - we will do it for ALL segments
+    #     # to collect mesh state labels
+    #     return []
+
+    def _add_pos_and_quat_sensors(self, segment_name):
+        sensors = {}
+
+        # Position in body frame (xbody), i.e. at joint with parent body
+        sensors["pos_atparent"] = self.model.sensor.add(
+            "framepos",
+            name=f"{segment_name}_pos_atparent",
+            objtype="xbody",
+            objname=segment_name,
+        )
+
+        # Rotation in body frame (xbody), i.e. at joint with parent body
+        sensors["quat_atparent"] = self.model.sensor.add(
+            "framequat",
+            name=f"{segment_name}_quat_atparent",
+            objtype="xbody",
+            objname=segment_name,
+        )
+
+        # Position in inertial frame (body), i.e. at COM of body
+        sensors["pos_com"] = self.model.sensor.add(
+            "framepos",
+            name=f"{segment_name}_pos_com",
+            objtype="body",
+            objname=segment_name,
+        )
+
+        # Rotation in inertial frame (body), i.e. at COM of body
+        sensors["quat_com"] = self.model.sensor.add(
+            "framequat",
+            name=f"{segment_name}_quat_com",
+            objtype="body",
+            objname=segment_name,
+        )
+
+        return sensors
+
+    def _add_mesh_state_sensors(self):
+        self.body_segment_sensor_lookup = defaultdict(dict)
+
+        # Add sensors to leg segments
+        legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
+        leg_links = ["Coxa", "Femur", "Tibia"] + [f"Tarsus{i}" for i in range(1, 6)]
+        for leg in legs:
+            # Add keypoint position sensors for each link except the claws
+            # (which are already handled by FlyGym's end effector sensors)
+            for link in leg_links:
+                seg_name = f"{leg}{link}"
+                sensors = self._add_pos_and_quat_sensors(seg_name)
+                for sensor_type, sensor_obj in sensors.items():
+                    self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
+
+        # Add antennal segments
+        sides = ["L", "R"]
+        antennal_links = ["Pedicel", "Funiculus", "Arista"]
+        for side in sides:
+            for link in antennal_links:
+                seg_name = f"{side}{link}"
+                sensors = self._add_pos_and_quat_sensors(seg_name)
+                for sensor_type, sensor_obj in sensors.items():
+                    self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
+
+        # Add thorax
+        seg_name = "Thorax"
+        sensors = self._add_pos_and_quat_sensors(seg_name)
+        for sensor_type, sensor_obj in sensors.items():
+            self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
+
 
 class SingleFlySimulationForRendering(SingleFlySimulation):
     num_color_codings = 2
@@ -256,38 +331,6 @@ class CameraForRendering(Camera):
                     video_writer.append_data(img)
 
 
-def get_keypoint_position_sensors(fly: Fly):
-    """Create a list of keypoint position sensors, one for each keypoint to
-    be tracked by the pose estimation model.
-    This is a bit of a hack: the claws already have their own position
-    sensors (these are the end effector position sensors built into
-    FlyGym), so we simply insert them to the sensors list at the end. Do
-    it in reverse order to avoid messing up the indices."""
-    keypoint_position_names = []
-    keypoint_position_sensors = []
-    all_leg_names = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
-    for i, leg in enumerate(all_leg_names):
-        # Add keypoint position sensors for each link except the claws
-        # (which are already handled by FlyGym's end effector sensors)
-        for keypoint in ["Coxa", "Femur", "Tibia", "Tarsus1"]:
-            keypoint_name = f"{leg}{keypoint}"
-            keypoint_position_names.append(keypoint_name)
-            keypoint_position_sensors.append(
-                fly.model.sensor.add(
-                    "framepos",
-                    name=f"{keypoint_name}_pos",
-                    objtype="xbody",
-                    objname=keypoint_name,
-                )
-            )
-        # Add the claws position sensors which are already initialized as
-        # end effector position sensors
-        keypoint_position_names.append(f"{leg}Tarsus5")
-        keypoint_position_sensors.append(fly._end_effector_sensors[i])
-
-    return keypoint_position_names, keypoint_position_sensors
-
-
 def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep):
     fly = FlyForRendering(
         init_pose="stretch",
@@ -297,7 +340,6 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         spawn_pos=(0, 0, 0.5),
         joint_stiffness=0.1,
     )
-    keypoint_names, keypoint_position_sensors = get_keypoint_position_sensors(fly)
     camera_params = {
         "mode": "track",
         "pos": (0, 0, -100),
@@ -326,27 +368,37 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         width=camera.window_size[0],
         height=camera.window_size[1],
     )
-    bound_keypoint_position_sensors = sim.physics.bind(keypoint_position_sensors)
+    body_segment_sensor_lookup = {}
+    for sensor_type, sensors_dict in fly.body_segment_sensor_lookup.items():
+        body_segment_sensor_lookup[sensor_type] = {
+            "segments_list": list(sensors_dict.keys()),
+            "sensor_names_list": [sensor.name for sensor in sensors_dict.values()],
+            "sensor_mjcf_objects_list": list(sensors_dict.values()),
+            "bound_sensors_list": sim.physics.bind(sensors_dict.values()),
+        }
 
-    return sim, camera, dm_camera, keypoint_names, bound_keypoint_position_sensors
+    return sim, camera, dm_camera, body_segment_sensor_lookup
 
 
 def run_neuromechfly_simulation(
     trajectories_interp, render_window_size, render_play_speed, render_fps, sim_timestep
 ):
-    sim, camera, dm_camera, keypoint_names, bound_keypoint_position_sensors = (
-        set_up_simulation(
-            render_window_size, render_play_speed, render_fps, sim_timestep
-        )
+    sim, camera, dm_camera, body_segment_sensor_lookup = set_up_simulation(
+        render_window_size, render_play_speed, render_fps, sim_timestep
     )
 
-    timestamps_hist = []
-    joints_angles_hist = []
-    keypoints_pos_world_hist = []
-    keypoints_pos_cam_hist = []
-    cardinal_vectors_hist = []
-
-    camera_matrix_hist = []  # see https://en.wikipedia.org/wiki/Camera_matrix
+    timestamps_hist = []  # list[float]
+    joints_angles_hist = []  # list[ndarray of shape (n_joints,)]
+    body_segment_state_hists = {
+        "pos_atparent": [],  # list[ndarray of shape (n_segments, 3)]
+        "pos_com": [],  # list[ndarray of shape (3,)]
+        "quat_atparent": [],  # list[ndarray of shape (n_segments, 4)]
+        "quat_com": [],  # list[ndarray of shape (4,)]
+    }
+    cardinal_vectors_hist = []  # list[ndarray of shape (3, 3), ie (fwd/left/up, x/y/z)]
+    camera_matrix_hist = (
+        []
+    )  # list[ndarray of shape (3, 4)]see https://en.wikipedia.org/wiki/Camera_matrix
 
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
@@ -363,101 +415,82 @@ def run_neuromechfly_simulation(
         if frame_rendered is None:
             continue
 
+        # Store timestamps
         timestamps_hist.append(sim.curr_time)
 
         # Store joint angles
         joints_angles_hist.append(observation["joints"][0, :].copy())
 
-        # Store keypoint positions
-        camera_matrix = dm_camera.matrix.copy()
-        keypoints_pos_world = (
-            bound_keypoint_position_sensors.sensordata.copy().reshape((-1, 3)).T
-        )
-        keypoints_pos_world_homogeneous = np.vstack(
-            [keypoints_pos_world, np.ones((1, keypoints_pos_world.shape[1]))]
-        )
-        keypoints_pos_cam = camera_matrix @ keypoints_pos_world_homogeneous
-        keypoints_pos_cam_hist.append(keypoints_pos_cam)
-
-        fly_center_of_mass_pos = observation["fly"][0, :]
-        keypoints_pos_world_centered = (
-            keypoints_pos_world - fly_center_of_mass_pos[:, np.newaxis]
-        )
-        keypoints_pos_world_hist.append(keypoints_pos_world_centered)
+        # Store mesh states
+        for sensor_type, sensor_info in body_segment_sensor_lookup.items():
+            num_sensors = len(sensor_info["segments_list"])
+            bound_sensors = sensor_info["bound_sensors_list"]
+            sensor_readings = bound_sensors.sensordata.copy().reshape((num_sensors, -1))
+            body_segment_state_hists[sensor_type].append(sensor_readings)
 
         # Store forward vector
         cardinal_vectors_hist.append(observation["cardinal_vectors"].copy())
 
         # Store camera matrix
-        camera_matrix_hist.append(camera_matrix)
-
-        # Save rendered image
-        last_num_frames = len(camera._frames_by_color_coding[0])
+        camera_matrix_hist.append(dm_camera.matrix.copy())
 
         # Check if the fly has flipped over
         if observation["cardinal_vectors"][2, 2] < 0:
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
             break
 
-    return (
-        camera,
-        timestamps_hist,
-        joints_angles_hist,
-        keypoints_pos_world_hist,
-        keypoints_pos_cam_hist,
-        cardinal_vectors_hist,
-        camera_matrix_hist,
-        keypoint_names,
-    )
+    hist_dict = {
+        "values": {
+            "timestamp": timestamps_hist,
+            "joint_angles": joints_angles_hist,
+            "body_seg_states": body_segment_state_hists,
+            "cardinal_vectors": cardinal_vectors_hist,
+            "camera_matrix": camera_matrix_hist,
+        },
+        "keys": {
+            "joint_angles": sim.fly.actuated_joints,
+            # body_seg_states: all sensor types share the same list of body segments.
+            # Use pos_com just as an example
+            "body_seg_states": body_segment_sensor_lookup["pos_com"]["segments_list"],
+            "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
+        },
+    }
+    return camera, hist_dict
 
 
-def make_kinematic_states_dataframe(
-    timestamps_hist,
-    joints_angles_hist,
-    keypoints_pos_world_hist,
-    keypoints_pos_cam_hist,
-    cardinal_vectors_hist,
-    camera_matrix_hist,
-    keypoint_names,
-):
-    joints_angles_hist = np.array(joints_angles_hist)  # (len, n_dofs)
-    keypoints_pos_world_hist = np.array(keypoints_pos_world_hist)  # (len, 3, n_keypts)
-    keypoints_pos_cam_hist = np.array(keypoints_pos_cam_hist)  # (len, 3, n_keypts)
-    cardinal_vectors_hist = np.array(cardinal_vectors_hist)  # (len, 3, 3(xyz))
-
+def make_kinematic_states_dataframe(hist_dict):
     columns = {}
-    columns["time"] = timestamps_hist
+    columns["time"] = hist_dict["values"]["timestamp"]
 
-    for i, dof_name in enumerate(all_leg_dofs):
-        leg, canonical_dof_name = parse_nmf_joint_name(dof_name)
-        key = leg + canonical_dof_name
-        columns[f"dof_angle_{key}"] = joints_angles_hist[:, i]
+    # Joint angles
+    joint_angles_arr = np.array(hist_dict["values"]["joint_angles"], dtype=np.float32)
+    for i, dof_name in enumerate(hist_dict["keys"]["joint_angles"]):
+        kchain_name, link_name = parse_nmf_joint_name(dof_name)
+        columns[f"dof_angle_{kchain_name}{link_name}"] = joint_angles_arr[:, i]
 
-    for i, keypoint_name in enumerate(keypoint_names):
-        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
-        key = leg + canonical_keypoint_name
-        columns[f"keypoint_pos_world_{key}_x"] = keypoints_pos_world_hist[:, 0, i]
-        columns[f"keypoint_pos_world_{key}_y"] = keypoints_pos_world_hist[:, 1, i]
-        columns[f"keypoint_pos_world_{key}_z"] = keypoints_pos_world_hist[:, 2, i]
+    # Body segment states
+    for sensor_type, sensor_data in hist_dict["values"]["body_seg_states"].items():
+        # sensor_data_arr has shape shape (nframes, nsegs, 3 for pos or 4 quaternion)
+        sensor_data_arr = np.array(sensor_data, dtype=np.float32)
+        for i, seg_name in enumerate(hist_dict["keys"]["body_seg_states"]):
+            list_of_arrs = list(sensor_data_arr[:, i, :])
+            columns[f"body_seg_{sensor_type}_{seg_name}"] = list_of_arrs
 
-    for i, keypoint_name in enumerate(keypoint_names):
-        leg, canonical_keypoint_name = parse_nmf_keypoint_name(keypoint_name)
-        key = leg + canonical_keypoint_name
-        columns[f"keypoint_pos_cam_{key}_col"] = keypoints_pos_cam_hist[:, 0, i]
-        columns[f"keypoint_pos_cam_{key}_row"] = keypoints_pos_cam_hist[:, 1, i]
-        columns[f"keypoint_pos_cam_{key}_depth"] = keypoints_pos_cam_hist[:, 2, i]
+    # Cardinal vectors
+    cardinal_vectors_arr = np.array(
+        hist_dict["values"]["cardinal_vectors"], dtype=np.float32
+    )
+    for i, direction in enumerate(hist_dict["keys"]["cardinal_vectors"]):
+        columns[f"cardinal_vector_{direction}"] = list(cardinal_vectors_arr[:, i, :])
 
-    columns["cardinal_vector_forward"] = list(np.array(cardinal_vectors_hist)[:, 0, :])
-    columns["cardinal_vector_left"] = list(np.array(cardinal_vectors_hist)[:, 1, :])
-    columns["cardinal_vector_up"] = list(np.array(cardinal_vectors_hist)[:, 2, :])
-    kinematic_states_df = pd.DataFrame(columns, dtype=np.float32)
+    # Camera matrix
+    columns["camera_matrix"] = [
+        x.astype(np.float32) for x in hist_dict["values"]["camera_matrix"]
+    ]
 
-    # Add camera matrix to the DataFrame. Do this after creating the DataFrame with
-    # dtype=float32 for all the other columns because unlike others, the camera matrix
-    # column contains 3x4 matrices, which cannot be casted to float32.
-    kinematic_states_df["camera_matrix"] = camera_matrix_hist
-
+    kinematic_states_df = pd.DataFrame(columns)
     kinematic_states_df.index.name = "frame_id"
+
     return kinematic_states_df
 
 
@@ -482,16 +515,7 @@ def simulate_one_segment(
     print(f"Output directory: {output_dir}")
 
     # Run the simulation
-    (
-        camera,
-        timestamps_hist,
-        joints_angles_hist,
-        keypoints_pos_world_hist,
-        keypoints_pos_cam_hist,
-        cardinal_vectors_hist,
-        camera_matrix_hist,
-        keypoint_names,
-    ) = run_neuromechfly_simulation(
+    camera, hist_dict = run_neuromechfly_simulation(
         trajectories_interp,
         render_window_size,
         render_play_speed,
@@ -500,15 +524,7 @@ def simulate_one_segment(
     )
 
     # Save kinematic states as Pandas DataFrame
-    kinematic_states_df = make_kinematic_states_dataframe(
-        timestamps_hist,
-        joints_angles_hist,
-        keypoints_pos_world_hist,
-        keypoints_pos_cam_hist,
-        cardinal_vectors_hist,
-        camera_matrix_hist,
-        keypoint_names,
-    )
+    kinematic_states_df = make_kinematic_states_dataframe(hist_dict)
     kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
 
     # Save rendered frames as a video
