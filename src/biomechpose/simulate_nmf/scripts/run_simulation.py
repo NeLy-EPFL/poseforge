@@ -66,9 +66,7 @@ if __name__ == "__main__":
 
     # trial_paths = sorted(list(kinematic_recording_dir.glob("*.pkl")))
     trial_paths = [
-        Path(
-            "bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"
-        )
+        Path("bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl")
     ]
 
     for trial_path in trial_paths:
@@ -83,8 +81,6 @@ if __name__ == "__main__":
         num_segments = len(kinematic_recording_segments)
         print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
         for segment_id, segment in enumerate(kinematic_recording_segments):
-            if segment_id < 10:
-                continue
             print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
             output_subdir = output_dir / trial_name / f"segment_{segment_id:03d}"
             simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)

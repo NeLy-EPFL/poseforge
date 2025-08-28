@@ -82,7 +82,9 @@ def extract_keypoint_positions(df_row: pd.Series):
     return keypoint_positions_cam, keypoint_positions_world
 
 
-def process_single_frame(image: np.ndarray, df_row: pd.Series, crop_size: int):
+def process_single_frame(
+    renderings_per_frame: np.ndarray, df_row: pd.Series, crop_size: int
+):
     # Gather 2d keypoint positions
     keypoints_pos_cam, keypoints_pos_world = extract_keypoint_positions(df_row)
 
@@ -92,13 +94,16 @@ def process_single_frame(image: np.ndarray, df_row: pd.Series, crop_size: int):
     )
 
     # Rotate and center-crop image
-    rotated_image = rotate_image(image, -rotation_angle)  # rotation dir is opposite
-    image_transformed, start_col, start_row = center_square_crop_image(
-        rotated_image, crop_size
-    )
+    images_transformed = []
+    for img in renderings_per_frame:
+        rotated_img = rotate_image(img, -rotation_angle)  # rotation dir is opposite
+        img_transformed, start_col, start_row = center_square_crop_image(
+            rotated_img, crop_size
+        )
+        images_transformed.append(img_transformed)
 
     # Rotate and transform keypoint positions in camera coordinates
-    height, width = image.shape[:2]
+    height, width = renderings_per_frame[0].shape[:2]
     pos_cam_transformed = []
     for i in range(keypoints_pos_cam.shape[0]):
         col_row_vec = keypoints_pos_cam[i, :2]
@@ -114,11 +119,14 @@ def process_single_frame(image: np.ndarray, df_row: pd.Series, crop_size: int):
     # Rotate keypoint positions in world coordinates
     pos_world_transformed = keypoints_pos_world @ rotation_matrix.T
 
-    return image_transformed, pos_cam_transformed, pos_world_transformed
+    return images_transformed, pos_cam_transformed, pos_world_transformed
 
 
 def _process_single_frame_worker(
-    frame_index: int, frame: np.ndarray, df_row: pd.Series, crop_size: int
+    frame_index: int,
+    renderings_per_frame: np.ndarray,
+    df_row: pd.Series,
+    crop_size: int,
 ):
     """
     Worker function for parallel frame processing.
@@ -132,40 +140,43 @@ def _process_single_frame_worker(
     Returns:
         Tuple of (frame_index, processed_image, camera_positions, world_positions)
     """
-    image_transformed, pos_cam_transformed, pos_world_transformed = (
-        process_single_frame(frame, df_row, crop_size=crop_size)
-    )
-    return frame_index, image_transformed, pos_cam_transformed, pos_world_transformed
+    results = process_single_frame(renderings_per_frame, df_row, crop_size=crop_size)
+    return frame_index, *results
 
 
 def process_subsegment(
-    frames,
-    kinematic_states_df,
+    subsegment_frames_by_color_coding: list[list[np.ndarray]],
+    kinematic_states_df: pd.DataFrame,
     output_kinematic_states_path: Path,
-    output_video_path: Path,
+    output_video_dir: Path,
     fps: int,
     crop_size: int = 464,
+    num_color_codings: int = 2,
     n_jobs: int = -1,
 ) -> None:
-    if len(kinematic_states_df) != len(frames):
+    num_frames = len(subsegment_frames_by_color_coding[0])
+    if len(kinematic_states_df) != num_frames:
         raise ValueError(
-            f"Number of frames in video ({len(frames)}) does not match "
+            f"Number of frames in video ({num_frames}) does not match "
             f"number of kinematic states ({len(kinematic_states_df)})."
         )
 
     # Process frames in parallel
-    print(
-        f"Processing {len(frames)} frames in parallel using "
-        f"{n_jobs if n_jobs > 0 else 'all available'} cores..."
-    )
+    print(f"Processing {num_frames} frames in parallel using {n_jobs} cores...")
+    # Prepare arguments for each frame
+    frame_args = []
+    for i_frame in range(num_frames):
+        renderings_per_frame = [
+            subsegment_frames_by_color_coding[i_color_code][i_frame]
+            for i_color_code in range(num_color_codings)
+        ]
+        df_row = kinematic_states_df.iloc[i_frame]
+        frame_args.append((i_frame, renderings_per_frame, df_row, crop_size))
+
+    # Process frames in parallel
     # Use 'loky' backend for CPU-intensive image processing operations
     results = Parallel(n_jobs=n_jobs, backend="loky")(
-        delayed(_process_single_frame_worker)(
-            i, frame, kinematic_states_df.iloc[i], crop_size
-        )
-        for i, frame in tqdm(
-            enumerate(frames), total=len(frames), desc="Processing frames", disable=None
-        )
+        delayed(_process_single_frame_worker)(*args) for args in frame_args
     )
 
     # Sort results by frame index to maintain order
@@ -173,22 +184,33 @@ def process_subsegment(
 
     # Extract results in proper order
     images_all = []
-    pos_cam_transformed_all, pos_world_transformed_all = [], []
-    for _, image_transformed, pos_cam_transformed, pos_world_transformed in results:
-        images_all.append(image_transformed)
+    pos_cam_transformed_all = []
+    pos_world_transformed_all = []
+    for _, imgs_transformed, pos_cam_transformed, pos_world_transformed in results:
+        images_all.append(imgs_transformed)
         pos_cam_transformed_all.append(pos_cam_transformed)
         pos_world_transformed_all.append(pos_world_transformed)
 
     # Write processed images to disk as a video
-    with imageio.get_writer(
-        str(output_video_path),
-        fps=fps,
-        codec="libx264",
-        quality=10,  # 10 is highest for imageio, lower is lower quality
-        ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
-    ) as writer:
-        for img in tqdm(images_all, desc="Writing frames", disable=None):
-            writer.append_data(img)
+    output_video_dir.mkdir(parents=True, exist_ok=True)
+    for i_color_code in range(num_color_codings):
+        output_video_path = (
+            output_video_dir / f"processed_nmf_sim_render_colorcode_{i_color_code}.mp4"
+        )
+        with imageio.get_writer(
+            str(output_video_path),
+            fps=fps,
+            codec="libx264",
+            quality=10,  # 10 is highest for imageio, lower is lower quality
+            ffmpeg_params=[
+                "-crf",
+                "18",
+                "-preset",
+                "slow",
+            ],  # lower crf = higher quality
+        ) as writer:
+            for img in tqdm(images_all, desc="Writing frames", disable=None):
+                writer.append_data(img[i_color_code])
 
     # Update dataframe of kinematic states with transformed keypoint positions
     pos_cam_transformed_all = np.array(pos_cam_transformed_all, dtype=np.float32)
@@ -405,14 +427,15 @@ def postprocess_segment(
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
     n_jobs: int = -1,
+    num_color_codings: int = 2,
 ):
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
 
     # Load video frames
-    video_path = recording_dir / "simulation_rendering.mp4"
-    frames, fps = load_video_frames(video_path)
-    print(f"Loaded {len(frames)} frames from {video_path} at {fps} FPS.")
+    frames_by_color_coding, fps, num_frames = read_videos(
+        recording_dir, num_color_codings
+    )
 
     # Load kinematic states history
     kinematic_states_path = recording_dir / "kinematic_states_history.pkl"
@@ -421,15 +444,16 @@ def postprocess_segment(
     print(f"Loaded kinematic states with timestep {timestep:.3f} seconds.")
 
     # Select partial recording if needed
-    if len(kinematic_states_df) != len(frames):
+    if len(kinematic_states_df) != num_frames:  # Check for consistency
         raise ValueError(
-            f"Number of frames in video ({len(frames)}) does not match "
+            f"Number of frames in video ({num_frames}) does not match "
             f"number of kinematic states ({len(kinematic_states_df)})."
         )
     if end_frame == -1:
         end_frame = len(kinematic_states_df)
     kinematic_states_df = kinematic_states_df.iloc[start_frame:end_frame]
-    frames = frames[start_frame:end_frame]
+    for i, frames in enumerate(frames_by_color_coding):
+        frames_by_color_coding[i] = frames[start_frame:end_frame]
 
     # Extract time series of cardinal vector pointing up
     upward_cardinal_vectors = np.array(
@@ -452,19 +476,21 @@ def postprocess_segment(
             f"Processing subsegment {i + 1}/{len(subsegments_boundaries)} "
             f"(frames {start}:{end})"
         )
-        subsegment_frames = frames[start:end]
+        subsegment_frames_by_color_coding = [
+            frames[start:end] for frames in frames_by_color_coding
+        ]
         subsegment_kinematic_states = kinematic_states_df.iloc[start:end]
 
         # Process the subsegment
         output_dir = recording_dir / f"subsegment_{i:03d}"
         output_dir.mkdir(parents=True, exist_ok=True)
         processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
-        processed_video_path = output_dir / "processed_simulation_rendering.mp4"
+        processed_video_dir = output_dir  # save videos directly under subsegment dir
         process_subsegment(
-            subsegment_frames,
+            subsegment_frames_by_color_coding,
             subsegment_kinematic_states,
             processed_kinematic_states_path,
-            processed_video_path,
+            processed_video_dir,
             fps,
             image_crop_size,
             n_jobs=n_jobs,
@@ -473,13 +499,45 @@ def postprocess_segment(
         # Visualize the subsegment if requested
         if visualize:
             output_video_path = output_dir / "visualization.mp4"
+            visualize_video_using = (
+                processed_video_dir / "processed_nmf_sim_render_colorcode_0.mp4"
+            )
             visualize_subsegment(
                 processed_kinematic_states_path,
-                processed_video_path,
+                visualize_video_using,
                 output_video_path,
                 fps=fps,
                 camera_elevation=camera_elevation,
                 max_abs_azimuth=max_abs_azimuth,
                 azimuth_rotation_period=azimuth_rotation_period,
-                n_jobs= n_jobs,
+                n_jobs=n_jobs,
             )
+
+
+def read_videos(recording_dir, num_color_codings):
+    frames_by_color_coding = []
+    fps = None
+    num_frames = None
+
+    for color_code_idx in range(num_color_codings):
+        video_path = recording_dir / f"nmf_sim_render_colorcode_{color_code_idx}.mp4"
+        my_frames, my_fps = load_video_frames(video_path)
+        frames_by_color_coding.append(my_frames)
+
+        print(f"Loaded {len(my_frames)} frames from {video_path} at {my_fps} FPS.")
+
+        # Check for consistency
+        if fps is None:
+            fps = my_fps
+        else:
+            assert (
+                fps == my_fps
+            ), "FPS mismatch between videos of different color codings"
+        if num_frames is None:
+            num_frames = len(my_frames)
+        else:
+            assert num_frames == len(
+                my_frames
+            ), "number of frames mismatch between videos of different color codings"
+
+    return frames_by_color_coding, fps, num_frames

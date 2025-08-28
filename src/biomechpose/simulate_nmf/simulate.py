@@ -1,10 +1,11 @@
 import numpy as np
 import pandas as pd
 import dm_control.mujoco
-import distinctipy
+import imageio
 from tqdm import trange
 from pathlib import Path
 from dm_control.rl.control import PhysicsError
+from dm_control.mjcf import Physics
 from flygym import Fly, SingleFlySimulation, Camera
 from flygym.arena import BaseArena, FlatTerrain
 from flygym.preprogrammed import all_leg_dofs
@@ -55,139 +56,204 @@ class SpotlightArena(FlatTerrain):
 
 
 class FlyForRendering(Fly):
-    # def _define_colors(self):
-    #     geom_name_to_color_code = {}
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._assign_colors()
+        self.current_color_coding: int = -1
 
-    #     # Leg segments
-    #     for side in "LR":
-    #         for pos in "FMH":
-    #             # Coxa segments are very close and hard to distinguish, so use different
-    #             # colors depending on the side
-    #             geom_name_to_color_code[f"{side}{pos}Coxa"] = f"{side}Coxa"
+    def get_color_combo_rgba(self, segment_name: str):
+        return self._segment_name_to_color_combo_rgba.get(
+            segment_name, self._default_color_combo_rgba
+        )
 
-    #             # Femur and tibia segments can share the same colors across legs
-    #             for segment in ["Femur", "Tibia"]:
-    #                 segment_name = f"{side}{pos}{segment}"
-    #                 # geom_name_to_color_code[segment_name] = segment_name
-    #                 geom_name_to_color_code[segment_name] = segment
+    def _assign_colors(self):
+        palette = {
+            "red": (1, 0, 0, 1),
+            "green": (0, 1, 0, 1),
+            "blue": (0, 0, 1, 1),
+            "yellow": (1, 1, 0, 1),
+            "magenta": (1, 0, 1, 1),
+            "cyan": (0, 1, 1, 1),
+            "gray": (0.4, 0.4, 0.4, 1),
+            "white": (1, 1, 1, 1),
+        }
 
-    #             # All tarsal segments share the same color
-    #             for tarsus_idx in range(1, 6):
-    #                 segment_name = f"{side}{pos}Tarsus{tarsus_idx}"
-    #                 # geom_name_to_color_code[segment_name] = f"{side}{pos}Tarsus"
-    #                 geom_name_to_color_code[segment_name] = f"Tarsus"
-
-    #     # Antennal segments
-    #     for side in "LR":
-    #         for segment in ["Pedicel", "Funiculus", "Arista"]:
-    #             segment_name = f"{side}{segment}"
-    #             # geom_name_to_color_code[segment_name] = f"{side}Antenna"
-    #             geom_name_to_color_code[segment_name] = "Antenna"
-
-    #     # Thorax
-    #     geom_name_to_color_code["Thorax"] = "Thorax"
-
-    #     # Define visually distinct colors
-    #     # num_distinct_colors = len(set(geom_name_to_color_code.values()))
-    #     # distinct_colors = distinctipy.get_colors(
-    #     #     num_distinct_colors, exclude_colors=[(0, 0, 0), (1, 1, 1)], rng=42
-    #     # )
-    #     # distinct_colors.append((0.3, 0.3, 0.3))  # default gray for uncolored geoms
-    #     # all_color_codes = sorted(list(set(geom_name_to_color_code.values())))
-    #     # color_code_to_rgba = {
-    #     #     color_code: (*rgb, 1.0)
-    #     #     for color_code, rgb in zip(all_color_codes, distinct_colors)
-    #     # }
-    #     # color_code_to_rgba["default"] = (*distinct_colors[-1], 1.0)
-    #     color_code_to_rgba = {
-    #         "LCoxa": (1, 0, 0, 1),
-    #         "RCoxa": (0, 1, 0, 1),
-    #         "Femur": (0, 0, 1, 1),
-    #         "Tibia": (1, 1, 0, 1),
-    #         "Tarsus": (1, 0, 1, 1),
-    #         "Antenna": (0, 1, 1, 1),
-    #         "Thorax": (0.6, 0.6, 0.6, 1),
-    #         "default": (0.3, 0.3, 0.3, 1.0),
-    #     }
-    #     # print("Color code to RGB mapping:")
-    #     # for color_code, rgba in color_code_to_rgba.items():
-    #     #     print(f"  {color_code}: {rgba}")
-
-    #     return geom_name_to_color_code, color_code_to_rgba
-
-    def _define_colors(self):
-        geom_name_to_color_code = {}
+        # Define color combo by body segment
+        color_by_link = {
+            "Coxa": "cyan",
+            "Femur": "yellow",
+            "Tibia": "blue",
+            "Tarsus": "green",
+            "Antenna": "magenta",
+            "Thorax": "gray",
+        }
+        color_by_kinematic_chain = {
+            "LF": "red",  # left front leg
+            "LM": "green",  # left mid leg
+            "LH": "blue",  # left hind leg
+            "RF": "cyan",  # right front leg
+            "RM": "magenta",  # right mid leg
+            "RH": "yellow",  # right hind leg
+            "L": "red",  # left antenna
+            "R": "green",  # right antenna
+            "Thorax": "white",  # thorax
+        }
+        self._segment_name_to_color_combo_rgba = {}
 
         # Leg segments
         for side in "LR":
             for pos in "FMH":
-                # Coxa segments are very close and hard to distinguish, so use different
-                # colors depending on the side
-                geom_name_to_color_code[f"{side}{pos}Coxa"] = f"{side}Coxa"
-
-                # Femur and tibia segments can share the same colors across legs
-                for segment in ["Femur", "Tibia"]:
-                    segment_name = f"{side}{pos}{segment}"
-                    geom_name_to_color_code[segment_name] = segment_name
+                leg = f"{side}{pos}"
+                for link in ["Coxa", "Femur", "Tibia"]:
+                    segment_name = f"{leg}{link}"
+                    color_combo = (
+                        palette[color_by_link[link]],
+                        palette[color_by_kinematic_chain[leg]],
+                    )
+                    self._segment_name_to_color_combo_rgba[segment_name] = color_combo
 
                 # All tarsal segments share the same color
                 for tarsus_idx in range(1, 6):
-                    segment_name = f"{side}{pos}Tarsus{tarsus_idx}"
-                    geom_name_to_color_code[segment_name] = f"{side}{pos}Tarsus"
+                    segment_name = f"{leg}Tarsus{tarsus_idx}"
+                    color_combo = (
+                        palette[color_by_link["Tarsus"]],
+                        palette[color_by_kinematic_chain[leg]],
+                    )
+                    self._segment_name_to_color_combo_rgba[segment_name] = color_combo
 
         # Antennal segments
         for side in "LR":
-            for segment in ["Pedicel", "Funiculus", "Arista"]:
-                segment_name = f"{side}{segment}"
-                geom_name_to_color_code[segment_name] = f"{side}Antenna"
+            for link in ["Pedicel", "Funiculus", "Arista"]:
+                segment_name = f"{side}{link}"
+                color_combo = (
+                    palette[color_by_link["Antenna"]],
+                    palette[color_by_kinematic_chain[side]],
+                )
+                self._segment_name_to_color_combo_rgba[segment_name] = color_combo
 
-        # Thorax
-        geom_name_to_color_code["Thorax"] = "Thorax"
+        # Special case for Thorax
+        thorax_color_combo = (
+            palette[color_by_link["Thorax"]],
+            palette[color_by_kinematic_chain["Thorax"]],
+        )
+        self._segment_name_to_color_combo_rgba["Thorax"] = thorax_color_combo
 
-        # Assign colors
-        palette = [
-            (r, g, b, 1.0)
-            for r in (0, 0.5, 1)
-            for g in (0, 0.5, 1)
-            for b in (0, 0.5, 1)
-            if r != g or r != b or g != b
-        ]
-        all_color_codes = sorted(list(set(geom_name_to_color_code.values())))
-        color_code_to_rgba = {
-            color_code: palette[i]
-            for i, color_code in enumerate(all_color_codes)
-        }
-        color_code_to_rgba["Thorax"] = (0.6, 0.6, 0.6, 1)
-        color_code_to_rgba["default"] = (0.3, 0.3, 0.3, 1.0)
-        print("Color code to RGB mapping:")
-        for color_code, rgba in color_code_to_rgba.items():
-            print(f"  {color_code}: {rgba}")
-
-        return geom_name_to_color_code, color_code_to_rgba
+        # Set default color combo for segments not listed above
+        self._default_color_combo_rgba = (palette["gray"], palette["gray"])
 
     def _set_geom_colors(self):
-        geom_name_to_color_code, color_code_to_rgba = self._define_colors()
-
+        """This method is inherited fly flygym.Fly, but we override it to
+        set material properties. We don't really set colors (they are
+        handled upon rendering). We simply set the material property to
+        make the label rendering look uniform.
+        """
         # Define material for each different color to be rendered
-        for color_code, rgba in color_code_to_rgba.items():
-            self.model.asset.add(
-                "material",
-                name=f"seglabel_material_{color_code}",
-                rgba=rgba,
-                emission=1.0,
-                specular=0.0,
-                shininess=0.0,
-                reflectance=0.0,
-            )
+        self.model.asset.add(
+            "material",
+            name=f"seglabel_material",
+            emission=1.0,
+            specular=0.0,
+            shininess=0.0,
+            reflectance=0.0,
+        )
 
         # Assign material to each geom
         for geom in self.model.find_all("geom"):
-            color_code = geom_name_to_color_code.get(geom.name, "default")
             if hasattr(geom, "material"):
-                geom.material = f"seglabel_material_{color_code}"
+                geom.material = f"seglabel_material"
             else:
                 print(f"Geom {geom.name} has no material attribute")
             geom._remove_attribute("rgba")
+
+    def change_color_coding(self, physics: Physics, color_coding_idx: int):
+        if color_coding_idx == self.current_color_coding:
+            return
+        for geom in self.model.find_all("geom"):
+            rgba = self.get_color_combo_rgba(geom.name)[color_coding_idx]
+            self.change_segment_color(physics, geom.name, rgba)
+
+
+class SingleFlySimulationForRendering(SingleFlySimulation):
+    num_color_codings = 2
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert len(self.cameras) == 1, "Only single camera supported."
+        assert len(self.flies) == 1, "Only single fly supported."
+
+    def render(self):
+        images = []
+        for color_coding_idx in range(self.num_color_codings):
+            self.fly.change_color_coding(self.physics, color_coding_idx)
+            img = self.cameras[0].render(
+                self.physics, self._floor_height, self.curr_time, color_coding_idx
+            )
+            if img is None:
+                return None
+            images.append(img)
+        return images
+
+
+class CameraForRendering(Camera):
+    """Modified from `flygym.Camera.render()` to support multiple color codings.
+
+    The functional differences are:
+    1. The `CameraForRendering` class maintains a `self._frames_by_color_coding` list
+       containing `num_color_codings` lists of frames, instead of a single
+       `self._frames list`.
+    2. The `.render()` method receives an additional `color_coding_idx` that is used to
+       put the rendered frame into the appropriate list in `self._frames_by_color_coding`.
+    3. The `.save_video()` method saves a separate video for each color coding.
+    """
+
+    num_color_codings = 2
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        del self._frames
+        self._frames_by_color_coding = [[] for _ in range(self.num_color_codings)]
+
+    def render(
+        self,
+        physics: Physics,
+        floor_height: float,
+        curr_time: float,
+        color_coding_idx: int,
+        last_obs: dict | None = None,
+    ) -> np.ndarray | None:
+        """Mostly copied from `flygym.Camera.render()`"""
+        if (
+            curr_time
+            < len(self._frames_by_color_coding[color_coding_idx])
+            * self._eff_render_interval
+        ):
+            return None
+
+        if last_obs is not None:
+            self._update_camera(physics, floor_height, last_obs[0])
+
+        width, height = self.window_size
+        img = physics.render(width=width, height=height, camera_id=self.camera_id)
+        img = img.copy()
+        if last_obs is not None:
+            if self.draw_contacts:
+                for i in range(len(self.targeted_fly_names)):
+                    img = self._draw_contacts(img, physics, last_obs[i])
+            if self.draw_gravity:
+                img = self._draw_gravity(img, physics, last_obs[0]["pos"])
+
+        self._frames_by_color_coding[color_coding_idx].append(img)
+        self._timestamp_per_frame.append(curr_time)
+        return img
+
+    def save_video(self, save_dir: Path):
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        for color_coding_idx in range(self.num_color_codings):
+            path = save_dir / f"nmf_sim_render_colorcode_{color_coding_idx}.mp4"
+            with imageio.get_writer(path, fps=self.fps) as video_writer:
+                for img in self._frames_by_color_coding[color_coding_idx]:
+                    video_writer.append_data(img)
 
 
 def get_keypoint_position_sensors(fly: Fly):
@@ -238,7 +304,7 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         "euler": (0, np.pi, -np.pi / 2),
         "fovy": 5,
     }
-    camera = Camera(
+    camera = CameraForRendering(
         attachment_point=fly.model.worldbody,
         camera_name=f"flytrack_cam",
         camera_parameters=camera_params,
@@ -248,7 +314,7 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         draw_contacts=False,
         play_speed_text=False,
     )
-    sim = SingleFlySimulation(
+    sim = SingleFlySimulationForRendering(
         fly=fly,
         cameras=[camera],
         arena=SpotlightArena(),
@@ -283,7 +349,6 @@ def run_neuromechfly_simulation(
     camera_matrix_hist = []  # see https://en.wikipedia.org/wiki/Camera_matrix
 
     # Simulation loop
-    last_num_frames = 0
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
         # if sim_frame_id == 1000: break  # For debugging, remove later
         action = {"joints": trajectories_interp[sim_frame_id]}
@@ -292,10 +357,10 @@ def run_neuromechfly_simulation(
         except PhysicsError as e:
             print(f"Simulation error at frame {sim_frame_id}: {e}")
             break
-        rendered_image = sim.render()[0]
+        frame_rendered = sim.render()
 
         # Check if a new frame is rendered. If not, continue without extracting any data
-        if not len(camera._frames) > last_num_frames:
+        if frame_rendered is None:
             continue
 
         timestamps_hist.append(sim.curr_time)
@@ -327,7 +392,7 @@ def run_neuromechfly_simulation(
         camera_matrix_hist.append(camera_matrix)
 
         # Save rendered image
-        last_num_frames = len(camera._frames)
+        last_num_frames = len(camera._frames_by_color_coding[0])
 
         # Check if the fly has flipped over
         if observation["cardinal_vectors"][2, 2] < 0:
@@ -447,4 +512,4 @@ def simulate_one_segment(
     kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
 
     # Save rendered frames as a video
-    camera.save_video(output_dir / "simulation_rendering.mp4", stabilization_time=0)
+    camera.save_video(output_dir)
