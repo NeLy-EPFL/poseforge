@@ -174,11 +174,6 @@ class FlyForRendering(Fly):
             rgba = self.get_color_combo_rgba(geom.name)[color_coding_idx]
             self.change_segment_color(physics, geom.name, rgba)
 
-    # def _add_end_effector_sensors(self):
-    #     # Don't add end effector sensors - we will do it for ALL segments
-    #     # to collect mesh state labels
-    #     return []
-
     def _add_pos_and_quat_sensors(self, segment_name):
         sensors = {}
 
