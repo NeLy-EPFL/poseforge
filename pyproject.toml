@@ -19,7 +19,7 @@ dependencies = [
     "tqdm>=4.67,<5",
     "pandas>=2.3,<3",
     "flygym>=1.2.1,<2",  # check this extra carefully
-    "tyro==0.9.24",
+    "tyro==0.9.31",
     "wandb==0.20.1",
     "packaging>=25.0,<26",
     "GPUtil>=1.4.0,<2",
@@ -27,6 +27,7 @@ dependencies = [
     "imageio-ffmpeg==0.6.0",
     "joblib>=1.5.1,<2",
     "distinctipy>=1.3.4,<2",
+    "psutil>=7.0.0,<8",
 ]
 
 [tool.poetry]
