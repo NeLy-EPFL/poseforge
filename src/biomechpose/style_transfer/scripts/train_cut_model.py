@@ -104,17 +104,10 @@ if __name__ == "__main__":
                         if len(images_to_concat) > 1
                         else images_to_concat[0]
                     )
-                    wandb.log(
-                        {
-                            "results": [
-                                wandb.Image(
-                                    concat_image,
-                                    caption=f"Epoch {epoch}, Iter {total_iters}",
-                                )
-                            ]
-                        },
-                        step=total_iters,
+                    img = wandb.Image(
+                        concat_image, caption=f"Epoch {epoch}, Iter {total_iters}"
                     )
+                    wandb.log({"results": [img]}, step=total_iters)
 
             # Print training losses and save logging information to the disk
             if total_iters % opt.print_freq == 0:
@@ -134,7 +127,8 @@ if __name__ == "__main__":
             # Cache our latest model every <save_latest_freq> iterations
             if total_iters % opt.save_latest_freq == 0:
                 print(
-                    f"saving the latest model (epoch {epoch}, total_iters {total_iters})"
+                    f"saving the latest model "
+                    f"(epoch {epoch}, total_iters {total_iters})"
                 )
                 # Occasionally show the experiment name on console
                 print(opt.name)
