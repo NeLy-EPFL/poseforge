@@ -32,7 +32,7 @@ if __name__ == "__main__":
             print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
             output_subdir = output_dir / trial_name / f"segment_{segment_id:03d}"
             segment = segment.iloc[:20]
-            # simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
+            simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
             postprocess_segment(output_subdir, visualize=True)
             break
         break
