@@ -439,7 +439,8 @@ def run_neuromechfly_simulation(
         fly_base_pos_hist.append(fly_base_pos)
 
         # Check if the fly has flipped over
-        if observation["cardinal_vectors"][2, 2] < 0:
+        up_vector_z_component = observation["cardinal_vectors"][2, 2]
+        if up_vector_z_component < 0:
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
             break
 

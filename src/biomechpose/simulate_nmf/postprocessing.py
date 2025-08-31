@@ -658,7 +658,8 @@ def select_subsegments(
     min_subsegment_duration_frames = int(min_subsegment_duration_sec / timestep)
     labeled, n_features = ndimage.label(upright_mask)
     subsegments_boundaries = []
-    for subsegment_id in range(1, n_features + 1):  # ndimage.label output is 1-indexed
+    # Note: ndimage.label output is 1-indexed (0 is just background)
+    for subsegment_id in range(1, n_features + 1):
         indices = np.where(labeled == subsegment_id)[0]
         if len(indices) > min_subsegment_duration_frames:
             subsegments_boundaries.append((indices[0], indices[-1] + 1))

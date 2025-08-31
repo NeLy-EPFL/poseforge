@@ -58,7 +58,7 @@ class InferencePipeline:
     ):
         if device == "cpu":
             raise NotImplementedError(
-                "CPU inference is still buggy 🤔. Use GPU instead."
+                "CPU inference is still buggy (TODO: figure this out). Use GPU instead."
             )
 
         _opt = Options(input_nc, output_nc, ngf, netG, image_side_length, nce_layers)
