@@ -383,18 +383,22 @@ def run_neuromechfly_simulation(
         render_window_size, render_play_speed, render_fps, sim_timestep
     )
 
-    timestamps_hist = []  # list[float]
-    joints_angles_hist = []  # list[ndarray of shape (n_joints,)]
+    # list[float]
+    timestamps_hist = []
+    # list[ndarray of shape (n_joints,)]
+    joints_angles_hist = []
     body_segment_state_hists = {
         "pos_atparent": [],  # list[ndarray of shape (n_segments, 3)]
         "pos_com": [],  # list[ndarray of shape (3,)]
         "quat_atparent": [],  # list[ndarray of shape (n_segments, 4)]
         "quat_com": [],  # list[ndarray of shape (4,)]
     }
-    cardinal_vectors_hist = []  # list[ndarray of shape (3, 3), ie (fwd/left/up, x/y/z)]
-    camera_matrix_hist = (
-        []
-    )  # list[ndarray of shape (3, 4)]see https://en.wikipedia.org/wiki/Camera_matrix
+    # list[ndarray of shape (3, 3), ie. (forward/left/up, x/y/z)]
+    cardinal_vectors_hist = []
+    # list[ndarray of shape (3, 4)], see https://en.wikipedia.org/wiki/Camera_matrix
+    camera_matrix_hist = []
+    # list[ndarray of shape (3,)], fly base position in world coordinates
+    fly_base_pos_hist = []
 
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
@@ -430,6 +434,10 @@ def run_neuromechfly_simulation(
         # Store camera matrix
         camera_matrix_hist.append(dm_camera.matrix.copy())
 
+        # Store fly base position
+        fly_base_pos = observation["fly"][0, :].copy()
+        fly_base_pos_hist.append(fly_base_pos)
+
         # Check if the fly has flipped over
         if observation["cardinal_vectors"][2, 2] < 0:
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
@@ -442,6 +450,7 @@ def run_neuromechfly_simulation(
             "body_seg_states": body_segment_state_hists,
             "cardinal_vectors": cardinal_vectors_hist,
             "camera_matrix": camera_matrix_hist,
+            "fly_base_pos": fly_base_pos_hist,
         },
         "keys": {
             "joint_angles": sim.fly.actuated_joints,
@@ -480,9 +489,14 @@ def make_kinematic_states_dataframe(hist_dict):
         columns[f"cardinal_vector_{direction}"] = list(cardinal_vectors_arr[:, i, :])
 
     # Camera matrix
-    columns["camera_matrix"] = [
-        x.astype(np.float32) for x in hist_dict["values"]["camera_matrix"]
-    ]
+    camera_matrix_arr = np.array(
+        hist_dict["values"]["camera_matrix"], dtype=np.float32
+    )  # (nframes, 3, 4)
+    columns["camera_matrix"] = list(camera_matrix_arr)
+
+    # Fly base position
+    fly_base_pos_arr = np.array(hist_dict["values"]["fly_base_pos"], dtype=np.float32)
+    columns["fly_base_pos"] = list(fly_base_pos_arr)
 
     kinematic_states_df = pd.DataFrame(columns)
     kinematic_states_df.index.name = "frame_id"

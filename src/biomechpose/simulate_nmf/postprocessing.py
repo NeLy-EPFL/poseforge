@@ -182,7 +182,11 @@ def extract_body_segment_positions(
     # Apply camera matrix directly (this gives us the projected coordinates)
     pos_camera = camera_matrix @ pos_world_homogeneous  # (3, num_keypoints)
 
-    # The third component is depth, first two are already in image coordinates
+    # Now that the camera coordinates are computed, we can center the world
+    # coordinates. We don't do this before computing camera coordinates because
+    # the camera matrix already includes translation information, and we don't
+    # want to double-correct it.
+    pos_world = pos_world - df_row["fly_base_pos"][:, None]
 
     # Return keypoint positions as a dictionary
     pos_world_dict = {}
