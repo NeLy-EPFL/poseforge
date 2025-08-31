@@ -37,13 +37,12 @@ python -u $training_script_path \
     --checkpoints_dir $checkpoints_path/<<<NAME>>> \
     --tensorboard_log_dir $logs_path/<<<NAME>>> \
     --n_epochs 100 \
-    --n_epochs_decay 0 \
+    --n_epochs_decay 100 \
     --ngf <<<NGF>>> \
     --netG <<<NETG>>> \
     --batch_size <<<BATCH_SIZE>>> \
     --lambda_GAN <<<LAMBDA_GAN>>> \
     --save_epoch_freq 1 \
-    --lr 0.00005 \
     --num_threads 32 \
     --wandb_project biomechpose-image-style-transfer
 
