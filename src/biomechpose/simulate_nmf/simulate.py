@@ -402,7 +402,7 @@ def run_neuromechfly_simulation(
 
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
-        # if sim_frame_id == 1000: break  # For debugging, remove later
+        # if sim_frame_id == 5000: break  # For debugging, remove later
         action = {"joints": trajectories_interp[sim_frame_id]}
         try:
             observation, reward, terminated, truncated, info = sim.step(action)
