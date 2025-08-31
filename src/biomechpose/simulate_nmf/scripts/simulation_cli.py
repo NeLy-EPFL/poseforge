@@ -12,16 +12,20 @@ from biomechpose.simulate_nmf.postprocessing import postprocess_segment
 
 def simulate_using_kinematic_prior(
     recorded_trial_path: str,  # path to a single .pkl file from Aymanns et al. 2022
-    output_dir: str,  # output base directory
+    trial_output_dir: str,  # output base directory
+    segment_ids: list[int] | None = None,  # segments to simulate; if None simulate all
     input_timestep: float = 0.01,  # timestep of input kinematics (from Aymanns et al.)
     sim_timestep: float = 0.0001,  # timestep to use in the physics simulation
 ) -> None:
     recorded_trial_path = Path(recorded_trial_path)
-    output_dir = Path(output_dir)
+    trial_output_dir = Path(trial_output_dir)
     assert (
         recorded_trial_path.is_file()
     ), f"Input path {recorded_trial_path} is not a file"
-    print(f"Processing input path: {recorded_trial_path}")
+    print(
+        f"Processing input path: {recorded_trial_path}, "
+        f"segment_ids: {segment_ids if segment_ids is not None else 'all'}"
+    )
 
     trial_name = recorded_trial_path.stem
     kinematic_recording_segments = load_kinematic_recording(
@@ -31,10 +35,20 @@ def simulate_using_kinematic_prior(
         filtered_frac_threshold=0.5,
     )
     num_segments = len(kinematic_recording_segments)
+    if segment_ids is None:
+        segment_ids = list(range(num_segments))
+    else:
+        for segid in segment_ids:
+            assert (
+                0 <= segid < num_segments
+            ), f"Invalid segment_id {segid} for trial with {num_segments} segments"
+
     print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
-    for segment_id, segment in enumerate(kinematic_recording_segments):
-        print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
-        output_subdir = output_dir / trial_name / f"segment_{segment_id:03d}"
+    # for segment_id, segment in enumerate(kinematic_recording_segments):
+    for segid in segment_ids:
+        print(f"=== Simulating segment {segid} (out of {num_segments} segments) ===")
+        segment = kinematic_recording_segments[segid]
+        output_subdir = trial_output_dir / f"segment_{segid:03d}"
         simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
         postprocess_segment(output_subdir, visualize=True)
     print(f"### Done processing trial: {trial_name} ###")
