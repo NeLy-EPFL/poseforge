@@ -26,15 +26,15 @@ keypoint_name_lookup_canonical_to_nmf = {
     v: k for k, v in keypoint_name_lookup_nmf_to_canonical.items()
 }
 
-kinematic_chain_colors = {
+kchain_plotting_colors = {
     "LF": np.array([15, 115, 153]) / 255,
     "LM": np.array([26, 141, 175]) / 255,
     "LH": np.array([117, 190, 203]) / 255,
     "RF": np.array([186, 30, 49]) / 255,
     "RM": np.array([201, 86, 79]) / 255,
     "RH": np.array([213, 133, 121]) / 255,
-    "LAntenna": np.array([255, 255, 0]) / 255,
-    "RAntenna": np.array([255, 255, 0]) / 255,
+    "LAntenna": np.array([50, 120, 32]) / 255,
+    "RAntenna": np.array([50, 120, 32]) / 255,
 }
 
 

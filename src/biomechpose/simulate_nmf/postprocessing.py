@@ -8,14 +8,13 @@ import tempfile
 import os
 from collections import defaultdict
 from pathlib import Path
-from tqdm import tqdm, trange
+from tqdm import tqdm
 from joblib import Parallel, delayed
 
+import biomechpose.simulate_nmf.simulate as simulate
 from biomechpose.simulate_nmf.utils import (
-    keypoint_name_lookup_nmf_to_canonical,
     keypoint_name_lookup_canonical_to_nmf,
-    kinematic_chain_colors,
-    parse_nmf_keypoint_name,
+    kchain_plotting_colors,
 )
 
 keypoint_segments = [
@@ -24,10 +23,87 @@ keypoint_segments = [
     for pos in "FMH"
     for link in ["ThC", "CTr", "FTi", "TiTa", "Claw"]
 ] + ["LPedicel", "RPedicel"]
-
+legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
 leg_keypoints = ["ThC", "CTr", "FTi", "TiTa", "Claw"]
 
-legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
+
+class SegmentLabelParser:
+    def __init__(self):
+        nmf_rendered_colors = {
+            "red": [255, 0, 0],
+            "green": [0, 255, 0],
+            "blue": [0, 0, 255],
+            "yellow": [255, 255, 0],
+            "magenta": [255, 0, 255],
+            "cyan": [0, 255, 255],
+            "black": [60, 60, 60],
+            "white": [255, 255, 255],
+            "gray": [150, 150, 150],
+        }
+        leg_segments = ["Coxa", "Femur", "Tibia", "Tarsus"]
+
+        self.label_keys = []
+        self.label_colors_6d = []
+
+        # Special case: Background
+        self.label_keys.append("Background")
+        color_6d = np.array(nmf_rendered_colors["black"] + nmf_rendered_colors["black"])
+        self.label_colors_6d.append(color_6d)
+
+        # Special case: OtherSegments
+        self.label_keys.append("OtherSegments")
+        color_6d = np.array(nmf_rendered_colors["gray"] + nmf_rendered_colors["black"])
+        self.label_colors_6d.append(color_6d)
+
+        # Special case: Thorax
+        self.label_keys.append("Thorax")
+        color_6d = np.array(nmf_rendered_colors["gray"] + nmf_rendered_colors["white"])
+        self.label_colors_6d.append(color_6d)
+
+        # Legs
+        for side in "LR":
+            for pos in "FMH":
+                for link in leg_segments:
+                    leg = f"{side}{pos}"
+                    color0 = nmf_rendered_colors[simulate.color_by_link[link]]
+                    color1 = nmf_rendered_colors[simulate.color_by_kinematic_chain[leg]]
+                    color_6d = np.array(list(color0) + list(color1))
+                    label = f"{leg}{link}"
+                    self.label_keys.append(label)
+                    self.label_colors_6d.append(color_6d)
+
+        # Antennas
+        for side in "LR":
+            color0 = nmf_rendered_colors[simulate.color_by_link["Antenna"]]
+            color1 = nmf_rendered_colors[simulate.color_by_kinematic_chain[side]]
+            color_6d = np.array(list(color0) + list(color1))
+            label = f"{side}Antenna"
+            self.label_keys.append(label)
+            self.label_colors_6d.append(color_6d)
+
+        self.label_colors_6d = np.array(self.label_colors_6d)
+
+    def __call__(self, images_by_color_coding: list[np.ndarray]):
+        assert (
+            len(images_by_color_coding) == 2
+        ), "Expecting two images each with a different color coding."
+        assert (
+            images_by_color_coding[0].shape == images_by_color_coding[1].shape
+        ), "Color coding images must have the same shape."
+        if not isinstance(images_by_color_coding, list):
+            images_by_color_coding = [
+                images_by_color_coding[0, :, :, :],
+                images_by_color_coding[1, :, :, :],
+            ]
+
+        image_6d = np.concatenate(images_by_color_coding, axis=-1)
+        sq_distances = np.sum(
+            (image_6d[:, :, None, :] - self.label_colors_6d[None, None, :, :]) ** 2,
+            axis=-1,
+        )
+        label_indices = np.argmin(sq_distances, axis=-1)
+
+        return label_indices
 
 
 def load_video_frames(video_path: Path) -> list[np.ndarray]:
@@ -98,10 +174,10 @@ def extract_body_segment_positions(
 
     # Project to camera coordinates using the working approach from the snippet
     camera_matrix = df_row["camera_matrix"]  # This is 3x4 from MuJoCo
-    
+
     # Apply camera matrix directly (this gives us the projected coordinates)
     pos_camera = camera_matrix @ pos_world_homogeneous  # (3, num_keypoints)
-    
+
     # The third component is depth, first two are already in image coordinates
 
     # Return keypoint positions as a dictionary
@@ -124,7 +200,7 @@ def rotate_keypoint_positions_camera(
     """
     Apply rotation and cropping transformations to camera/image coordinates.
     Uses a simplified approach based on the working code snippet.
-    
+
     Args:
         keypoints_pos_lookup: Dict mapping segment names to (x, y, depth) positions
         rotation_matrix: 3x3 rotation matrix used for coordinate transformation
@@ -133,7 +209,7 @@ def rotate_keypoint_positions_camera(
     """
     keypoints_pos_lookup_rotated = {}
     height, width = image_shape
-    
+
     for body_segment_name, pos_before_rotation in keypoints_pos_lookup.items():
         # Extract 2D position and depth
         col_row_vec = pos_before_rotation[:2]
@@ -143,7 +219,7 @@ def rotate_keypoint_positions_camera(
         col_rot, row_rot = rotation_matrix[:2, :2] @ col_row_vec
         col_rot = col_rot + (width / 2) - start_col
         row_rot = row_rot + (height / 2) - start_row
-        
+
         # Reconstruct position with original depth
         pos_after_rotation = np.array([col_rot, row_rot, depth], dtype=np.float32)
         keypoints_pos_lookup_rotated[body_segment_name] = pos_after_rotation
@@ -164,7 +240,10 @@ def rotate_keypoint_positions_world(
 
 
 def process_single_frame(
-    rendered_images: np.ndarray, df_row: pd.Series, crop_size: int
+    rendered_images: np.ndarray,
+    df_row: pd.Series,
+    crop_size: int,
+    segment_label_parser: SegmentLabelParser,
 ):
     # Get rotation angle and rotation matrix
     forward_vector = df_row["cardinal_vector_forward"]
@@ -209,14 +288,16 @@ def process_single_frame(
     for body_segment_name, rotated_pos in keypoints_pos_lookup_camera_rotated.items():
         all_derived_variables[f"keypoint_pos_camera_{body_segment_name}"] = rotated_pos
 
-    return rendered_images_transformed, all_derived_variables
+    # Save object segmentation masks
+    seg_labels = segment_label_parser(rendered_images_transformed)
+
+    return rendered_images_transformed, all_derived_variables, seg_labels
 
 
 def process_subsegment(
     subsegment_frames_by_color_coding: list[list[np.ndarray]],
     kinematic_states_df: pd.DataFrame,
-    output_kinematic_states_path: Path,
-    output_video_dir: Path,
+    processed_subsegment_dir: Path,
     fps: int,
     crop_size: int = 464,
     num_color_codings: int = 2,
@@ -230,6 +311,11 @@ def process_subsegment(
             f"number of kinematic states ({len(kinematic_states_df)})."
         )
 
+    processed_subsegment_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create segment label parser
+    segment_label_parser = SegmentLabelParser()
+
     # Process frames in parallel
     print(f"Processing {num_frames} frames in parallel using {n_jobs} cores...")
     # Prepare arguments for each frame
@@ -240,27 +326,32 @@ def process_subsegment(
             for i_color_code in range(num_color_codings)
         ]
         df_row = kinematic_states_df.iloc[i_frame]
-        frame_args.append((renderings_per_frame, df_row, crop_size))
+        frame_args.append(
+            (renderings_per_frame, df_row, crop_size, segment_label_parser)
+        )
 
     # Process frames in parallel
     # Use 'loky' backend for CPU-intensive image processing operations
     results = Parallel(n_jobs=n_jobs, backend="loky")(
-        delayed(process_single_frame)(*args) for args in frame_args
+        delayed(process_single_frame)(*args)
+        for args in tqdm(frame_args, desc="Processing frames", disable=None)
     )
 
-    # Extract results in proper order
+    # Extract results
     transformed_images_all = []
+    seg_labels_all = []
     derived_variables_by_column = defaultdict(list)
-    for transformed_images, derived_variables in results:
+    for transformed_images, derived_variables, seg_labels in results:
         transformed_images_all.append(transformed_images)
         for key, value in derived_variables.items():
             derived_variables_by_column[key].append(value)
+        seg_labels_all.append(seg_labels)
 
     # Write processed images to disk as a video
-    output_video_dir.mkdir(parents=True, exist_ok=True)
     for i_color_code in range(num_color_codings):
         output_video_path = (
-            output_video_dir / f"processed_nmf_sim_render_colorcode_{i_color_code}.mp4"
+            processed_subsegment_dir
+            / f"processed_nmf_sim_render_colorcode_{i_color_code}.mp4"
         )
         with imageio.get_writer(
             str(output_video_path),
@@ -286,7 +377,16 @@ def process_subsegment(
     )
     kinematic_states_df = pd.concat([kinematic_states_df, new_columns_df], axis=1)
 
-    kinematic_states_df.to_pickle(output_kinematic_states_path)
+    kinematic_states_df.to_pickle(
+        processed_subsegment_dir / "processed_kinematic_states.pkl"
+    )
+
+    # Save segmentation labels
+    np.savez_compressed(
+        processed_subsegment_dir / "segmentation_labels.npz",
+        labels=seg_labels_all,
+        label_keys=segment_label_parser.label_keys,
+    )
 
 
 def visualize_single_frame(
@@ -331,7 +431,7 @@ def visualize_single_frame(
         # Overlay keypoints on 2D image (note that coords are in row, col, depth)
         # Legs
         for leg in legs:
-            color = kinematic_chain_colors[leg]
+            color = kchain_plotting_colors[leg]
             all_positions = []
             for kpt in leg_keypoints:
                 segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
@@ -342,13 +442,13 @@ def visualize_single_frame(
             )
         # Antenna
         for side in "LR":
-            color = kinematic_chain_colors[f"{side}Antenna"]
+            color = kchain_plotting_colors[f"{side}Antenna"]
             pos = df_row[f"keypoint_pos_camera_{side}Pedicel"]
             ax_2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
 
         # Plot 3D keypoints
         for leg in legs:
-            color = kinematic_chain_colors[leg]
+            color = kchain_plotting_colors[leg]
             all_positions = []
             for kpt in leg_keypoints:
                 segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
@@ -364,7 +464,7 @@ def visualize_single_frame(
             )
         # Antenna
         for side in "LR":
-            color = kinematic_chain_colors[f"{side}Antenna"]
+            color = kchain_plotting_colors[f"{side}Antenna"]
             pos = df_row[f"keypoint_pos_world_{side}Pedicel"]
             ax_3d.plot(pos[0], pos[1], pos[2], marker="o", color=color, markersize=5)
 
@@ -389,9 +489,7 @@ def visualize_single_frame(
 
 
 def visualize_subsegment(
-    processed_kinematic_states_path: Path,
-    processed_video_path: Path,
-    output_video_path: Path,
+    processed_subsegment_dir: Path,
     fps: int,
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
@@ -399,10 +497,14 @@ def visualize_subsegment(
     n_jobs: int = -1,  # Default to all available cores
 ) -> None:
     # Load video frames
-    frames, fps = load_video_frames(processed_video_path)
+    frames, fps = load_video_frames(
+        processed_subsegment_dir / "processed_nmf_sim_render_colorcode_0.mp4"
+    )
 
     # Load kinematic states history
-    kinematic_states_df = pd.read_pickle(processed_kinematic_states_path)
+    kinematic_states_df = pd.read_pickle(
+        processed_subsegment_dir / "processed_kinematic_states.pkl"
+    )
 
     if len(kinematic_states_df) != len(frames):
         raise ValueError(
@@ -445,7 +547,7 @@ def visualize_subsegment(
 
     # Merge video
     with imageio.get_writer(
-        str(output_video_path),
+        str(processed_subsegment_dir / "visualization.mp4"),
         fps=fps,
         codec="libx264",
         quality=10,  # 10 is highest for imageio, lower is lower quality
@@ -555,13 +657,12 @@ def postprocess_segment(
         # Process the subsegment
         output_dir = recording_dir / f"subsegment_{i:03d}"
         output_dir.mkdir(parents=True, exist_ok=True)
-        processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
-        processed_video_dir = output_dir  # save videos directly under subsegment dir
+        # processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
+        # processed_video_dir = output_dir  # save videos directly under subsegment dir
         process_subsegment(
             subsegment_frames_by_color_coding,
             subsegment_kinematic_states,
-            processed_kinematic_states_path,
-            processed_video_dir,
+            output_dir,
             fps,
             image_crop_size,
             n_jobs=n_jobs,
@@ -569,14 +670,8 @@ def postprocess_segment(
 
         # Visualize the subsegment if requested
         if visualize:
-            output_video_path = output_dir / "visualization.mp4"
-            visualize_video_using = (
-                processed_video_dir / "processed_nmf_sim_render_colorcode_0.mp4"
-            )
             visualize_subsegment(
-                processed_kinematic_states_path,
-                visualize_video_using,
-                output_video_path,
+                processed_subsegment_dir=output_dir,
                 fps=fps,
                 camera_elevation=camera_elevation,
                 max_abs_azimuth=max_abs_azimuth,

@@ -12,7 +12,39 @@ from flygym.arena import BaseArena, FlatTerrain
 from flygym.preprogrammed import all_leg_dofs
 
 from biomechpose.simulate_nmf.data import interpolate_trajectories
-from biomechpose.simulate_nmf.utils import parse_nmf_joint_name, parse_nmf_keypoint_name
+from biomechpose.simulate_nmf.utils import parse_nmf_joint_name
+
+
+# Define color combo by body segment
+color_by_link = {
+    "Coxa": "cyan",
+    "Femur": "yellow",
+    "Tibia": "blue",
+    "Tarsus": "green",
+    "Antenna": "magenta",
+    "Thorax": "gray",
+}
+color_by_kinematic_chain = {
+    "LF": "red",  # left front leg
+    "LM": "green",  # left mid leg
+    "LH": "blue",  # left hind leg
+    "RF": "cyan",  # right front leg
+    "RM": "magenta",  # right mid leg
+    "RH": "yellow",  # right hind leg
+    "L": "red",  # left antenna
+    "R": "green",  # right antenna
+    "Thorax": "white",  # thorax
+}
+color_palette = {
+    "red": (1, 0, 0, 1),
+    "green": (0, 1, 0, 1),
+    "blue": (0, 0, 1, 1),
+    "yellow": (1, 1, 0, 1),
+    "magenta": (1, 0, 1, 1),
+    "cyan": (0, 1, 1, 1),
+    "gray": (0.4, 0.4, 0.4, 1),
+    "white": (1, 1, 1, 1),
+}
 
 
 class SpotlightArena(FlatTerrain):
@@ -69,37 +101,6 @@ class FlyForRendering(Fly):
         )
 
     def _assign_colors(self):
-        palette = {
-            "red": (1, 0, 0, 1),
-            "green": (0, 1, 0, 1),
-            "blue": (0, 0, 1, 1),
-            "yellow": (1, 1, 0, 1),
-            "magenta": (1, 0, 1, 1),
-            "cyan": (0, 1, 1, 1),
-            "gray": (0.4, 0.4, 0.4, 1),
-            "white": (1, 1, 1, 1),
-        }
-
-        # Define color combo by body segment
-        color_by_link = {
-            "Coxa": "cyan",
-            "Femur": "yellow",
-            "Tibia": "blue",
-            "Tarsus": "green",
-            "Antenna": "magenta",
-            "Thorax": "gray",
-        }
-        color_by_kinematic_chain = {
-            "LF": "red",  # left front leg
-            "LM": "green",  # left mid leg
-            "LH": "blue",  # left hind leg
-            "RF": "cyan",  # right front leg
-            "RM": "magenta",  # right mid leg
-            "RH": "yellow",  # right hind leg
-            "L": "red",  # left antenna
-            "R": "green",  # right antenna
-            "Thorax": "white",  # thorax
-        }
         self._segment_name_to_color_combo_rgba = {}
 
         # Leg segments
@@ -109,8 +110,8 @@ class FlyForRendering(Fly):
                 for link in ["Coxa", "Femur", "Tibia"]:
                     segment_name = f"{leg}{link}"
                     color_combo = (
-                        palette[color_by_link[link]],
-                        palette[color_by_kinematic_chain[leg]],
+                        color_palette[color_by_link[link]],
+                        color_palette[color_by_kinematic_chain[leg]],
                     )
                     self._segment_name_to_color_combo_rgba[segment_name] = color_combo
 
@@ -118,8 +119,8 @@ class FlyForRendering(Fly):
                 for tarsus_idx in range(1, 6):
                     segment_name = f"{leg}Tarsus{tarsus_idx}"
                     color_combo = (
-                        palette[color_by_link["Tarsus"]],
-                        palette[color_by_kinematic_chain[leg]],
+                        color_palette[color_by_link["Tarsus"]],
+                        color_palette[color_by_kinematic_chain[leg]],
                     )
                     self._segment_name_to_color_combo_rgba[segment_name] = color_combo
 
@@ -128,20 +129,20 @@ class FlyForRendering(Fly):
             for link in ["Pedicel", "Funiculus", "Arista"]:
                 segment_name = f"{side}{link}"
                 color_combo = (
-                    palette[color_by_link["Antenna"]],
-                    palette[color_by_kinematic_chain[side]],
+                    color_palette[color_by_link["Antenna"]],
+                    color_palette[color_by_kinematic_chain[side]],
                 )
                 self._segment_name_to_color_combo_rgba[segment_name] = color_combo
 
         # Special case for Thorax
         thorax_color_combo = (
-            palette[color_by_link["Thorax"]],
-            palette[color_by_kinematic_chain["Thorax"]],
+            color_palette[color_by_link["Thorax"]],
+            color_palette[color_by_kinematic_chain["Thorax"]],
         )
         self._segment_name_to_color_combo_rgba["Thorax"] = thorax_color_combo
 
         # Set default color combo for segments not listed above
-        self._default_color_combo_rgba = (palette["gray"], palette["gray"])
+        self._default_color_combo_rgba = (color_palette["gray"], color_palette["gray"])
 
     def _set_geom_colors(self):
         """This method is inherited fly flygym.Fly, but we override it to
