@@ -1,4 +1,5 @@
 import random
+from matplotlib import pyplot as plt
 import torch
 import numpy as np
 import os
@@ -28,3 +29,10 @@ def set_random_seed(seed: int = 42) -> None:
     torch.use_deterministic_algorithms(True, warn_only=True)
 
     print(f"🎲 Random seed set to {seed} for reproducible results")
+
+
+def configure_matplotlib_style():
+    import matplotlib
+
+    matplotlib.style.use("fast")
+    plt.rcParams["font.family"] = "Arial"

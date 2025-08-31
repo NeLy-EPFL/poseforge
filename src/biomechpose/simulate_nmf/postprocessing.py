@@ -6,6 +6,7 @@ import imageio.v2 as imageio
 import shutil
 import tempfile
 import os
+from distinctipy import get_colors
 from collections import defaultdict
 from pathlib import Path
 from tqdm import tqdm
@@ -16,6 +17,9 @@ from biomechpose.simulate_nmf.utils import (
     keypoint_name_lookup_canonical_to_nmf,
     kchain_plotting_colors,
 )
+from biomechpose.util import configure_matplotlib_style
+
+configure_matplotlib_style()
 
 keypoint_segments = [
     f"{side}{pos}{keypoint_name_lookup_canonical_to_nmf[link]}"
@@ -389,14 +393,103 @@ def process_subsegment(
     )
 
 
+def _draw_pose_2d_and_3d(
+    ax_pose2d: plt.Axes,
+    ax_pose3d: plt.Axes,
+    *,
+    frame_index: int,
+    frame: np.ndarray,
+    df_row: pd.Series,
+    camera_elevation: float,
+    azimuth_rotation_period: float,
+    max_abs_azimuth: float,
+):
+    # Calculate azimuth for this frame
+    azimuth = (
+        np.cos(2 * np.pi * frame_index / azimuth_rotation_period) * max_abs_azimuth
+    )
+    ax_pose3d.view_init(elev=camera_elevation, azim=azimuth)
+
+    # Plot 2D image
+    ax_pose2d.imshow(frame)
+
+    # Overlay keypoints on 2D image (note that coords are in row, col, depth)
+    # Legs
+    for leg in legs:
+        color = kchain_plotting_colors[leg]
+        all_positions = []
+        for kpt in leg_keypoints:
+            segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
+            all_positions.append(df_row[f"keypoint_pos_camera_{leg}{segment_name}"])
+        all_positions = np.array(all_positions)
+        ax_pose2d.plot(
+            all_positions[:, 0], all_positions[:, 1], color=color, linewidth=2
+        )
+    # Antenna
+    for side in "LR":
+        color = kchain_plotting_colors[f"{side}Antenna"]
+        pos = df_row[f"keypoint_pos_camera_{side}Pedicel"]
+        ax_pose2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
+
+    # Plot 3D keypoints
+    for leg in legs:
+        color = kchain_plotting_colors[leg]
+        all_positions = []
+        for kpt in leg_keypoints:
+            segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
+            all_positions.append(df_row[f"keypoint_pos_world_{leg}{segment_name}"])
+        all_positions = np.array(all_positions)
+        ax_pose3d.plot(
+            all_positions[:, 0],
+            all_positions[:, 1],
+            all_positions[:, 2],
+            marker="o",
+            color=color,
+            linewidth=2,
+        )
+    # Antenna
+    for side in "LR":
+        color = kchain_plotting_colors[f"{side}Antenna"]
+        pos = df_row[f"keypoint_pos_world_{side}Pedicel"]
+        ax_pose3d.plot(pos[0], pos[1], pos[2], marker="o", color=color, markersize=5)
+
+    ax_pose2d.set_axis_off()
+    ax_pose3d.set_xlabel("anterior-posterior")
+    ax_pose3d.set_ylabel("lateral")
+    ax_pose3d.set_zlabel("dorsal-ventral")
+    ax_pose3d.set_xlim(-2, 3)
+    ax_pose3d.set_ylim(-2, 2)
+    ax_pose3d.set_zlim(-0.5, 2)
+    ax_pose3d.set_aspect("equal")
+
+
+def _draw_segmentation_labels_map(
+    ax_seglabel: plt.Axes,
+    seg_labels: np.ndarray,
+    seg_labels_color_palette: list[np.ndarray],
+):
+    assert seg_labels.max() <= len(seg_labels_color_palette) - 1, (
+        f"seg_labels has max value {seg_labels.max()} but only "
+        f"{len(seg_labels_color_palette)} colors are available."
+    )
+    visualized_map = np.zeros((*seg_labels.shape, 3), dtype=np.uint8)
+    for i in range(0, len(seg_labels_color_palette)):
+        visualized_map[seg_labels == i] = np.array(seg_labels_color_palette[i]) * 255
+
+    ax_seglabel.imshow(visualized_map)
+    ax_seglabel.axis("off")
+
+
 def visualize_single_frame(
     frame_index: int,
     frame: np.ndarray,
     df_row: pd.Series,
+    seg_labels: np.ndarray,
     temp_dir: Path,
     camera_elevation: float,
     azimuth_rotation_period: float,
     max_abs_azimuth: float,
+    seg_labels_color_palette: list[np.ndarray],
 ):
     """
     Worker function for parallel frame visualization.
@@ -414,78 +507,35 @@ def visualize_single_frame(
         Tuple of (frame_index, path_to_saved_frame)
     """
     # Create a new figure for this worker (thread-safe)
-    fig = plt.figure(figsize=(12, 6))
-    ax_2d = fig.add_subplot(1, 2, 1)
-    ax_3d = fig.add_subplot(1, 2, 2, projection="3d")
+    fig = plt.figure(figsize=(18, 6))
+    ax_pose2d = fig.add_subplot(1, 3, 1)
+    ax_pose3d = fig.add_subplot(1, 3, 2, projection="3d")
+    ax_seglabel = fig.add_subplot(1, 3, 3)
+    ax_pose2d.set_title("2D pose overlay")
+    ax_pose3d.set_title("3D pose")
+    ax_seglabel.set_title("Segmentation labels")
 
-    try:
-        # Calculate azimuth for this frame
-        azimuth = (
-            np.cos(2 * np.pi * frame_index / azimuth_rotation_period) * max_abs_azimuth
-        )
-        ax_3d.view_init(elev=camera_elevation, azim=azimuth)
+    # Plot 2D and 3D pose
+    _draw_pose_2d_and_3d(
+        ax_pose2d,
+        ax_pose3d,
+        frame_index=frame_index,
+        frame=frame,
+        df_row=df_row,
+        camera_elevation=camera_elevation,
+        azimuth_rotation_period=azimuth_rotation_period,
+        max_abs_azimuth=max_abs_azimuth,
+    )
 
-        # Plot 2D image
-        ax_2d.imshow(frame)
+    # Draw segmentation labels map
+    _draw_segmentation_labels_map(ax_seglabel, seg_labels, seg_labels_color_palette)
 
-        # Overlay keypoints on 2D image (note that coords are in row, col, depth)
-        # Legs
-        for leg in legs:
-            color = kchain_plotting_colors[leg]
-            all_positions = []
-            for kpt in leg_keypoints:
-                segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
-                all_positions.append(df_row[f"keypoint_pos_camera_{leg}{segment_name}"])
-            all_positions = np.array(all_positions)
-            ax_2d.plot(
-                all_positions[:, 0], all_positions[:, 1], color=color, linewidth=2
-            )
-        # Antenna
-        for side in "LR":
-            color = kchain_plotting_colors[f"{side}Antenna"]
-            pos = df_row[f"keypoint_pos_camera_{side}Pedicel"]
-            ax_2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
+    # Save the figure
+    viz_frame_path = temp_dir / f"frame_{frame_index:06d}.png"
+    fig.savefig(viz_frame_path)
+    plt.close(fig)
 
-        # Plot 3D keypoints
-        for leg in legs:
-            color = kchain_plotting_colors[leg]
-            all_positions = []
-            for kpt in leg_keypoints:
-                segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
-                all_positions.append(df_row[f"keypoint_pos_world_{leg}{segment_name}"])
-            all_positions = np.array(all_positions)
-            ax_3d.plot(
-                all_positions[:, 0],
-                all_positions[:, 1],
-                all_positions[:, 2],
-                marker="o",
-                color=color,
-                linewidth=2,
-            )
-        # Antenna
-        for side in "LR":
-            color = kchain_plotting_colors[f"{side}Antenna"]
-            pos = df_row[f"keypoint_pos_world_{side}Pedicel"]
-            ax_3d.plot(pos[0], pos[1], pos[2], marker="o", color=color, markersize=5)
-
-        ax_2d.set_axis_off()
-        ax_3d.set_xlabel("anterior-posterior")
-        ax_3d.set_ylabel("lateral")
-        ax_3d.set_zlabel("dorsal-ventral")
-        ax_3d.set_xlim(-2, 3)
-        ax_3d.set_ylim(-2, 2)
-        ax_3d.set_zlim(-0.5, 2)
-        ax_3d.set_aspect("equal")
-
-        # Save the figure
-        viz_frame_path = temp_dir / f"frame_{frame_index:06d}.png"
-        fig.savefig(viz_frame_path)
-
-        return frame_index, viz_frame_path
-
-    finally:
-        # Always close the figure to free memory
-        plt.close(fig)
+    return frame_index, viz_frame_path
 
 
 def visualize_subsegment(
@@ -512,6 +562,29 @@ def visualize_subsegment(
             f"number of kinematic states ({len(kinematic_states_df)})."
         )
 
+    # Load segmentation labels
+    seg_labels_data = np.load(
+        processed_subsegment_dir / "segmentation_labels.npz", allow_pickle=True
+    )
+    seg_labels_all = seg_labels_data["labels"]
+
+    # Define color palette for segmentation labels visualization
+    max_num_labels = len(seg_labels_data["label_keys"])
+    assert seg_labels_data["label_keys"][0] == "Background"
+    assert seg_labels_data["label_keys"][1] == "OtherSegments"
+    assert seg_labels_data["label_keys"][2] == "Thorax"
+    color_palette = [
+        np.array([0.0, 0.0, 0.0]),  # Background
+        np.array([0.5, 0.5, 0.5]),  # OtherSegments
+        np.array([0.75, 0.75, 0.75]),  # Thorax
+    ]
+    color_palette += get_colors(
+        max_num_labels - 3,
+        exclude_colors=color_palette,
+        colorblind_type="Deuteranomaly",
+        rng=42,
+    )
+
     # Make temp directory for visualizations
     temp_dir = Path(
         tempfile.mkdtemp(prefix="visualizations_", dir=os.environ.get("TMPDIR", "/tmp"))
@@ -528,10 +601,12 @@ def visualize_subsegment(
             i,
             frame,
             kinematic_states_df.iloc[i],
+            seg_labels_all[i],
             temp_dir,
             camera_elevation,
             azimuth_rotation_period,
             max_abs_azimuth,
+            seg_labels_color_palette=color_palette,
         )
         for i, frame in tqdm(
             enumerate(frames),
