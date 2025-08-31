@@ -1,0 +1,13 @@
+python -u src/biomechpose/style_transfer/scripts/train_cut_model.py \
+    --dataroot bulk_data/style_transfer/aymanns2022_spotlight_dataset \
+    --name spotlight202506_to_aymanns2022 \
+    --CUT_mode CUT \
+    --checkpoints_dir bulk_data/style_transfer/checkpoints/test_trial \
+    --tensorboard_log_dir bulk_data/style_transfer/logs/test_trial \
+    --n_epochs 40 \
+    --n_epochs_decay 40 \
+    --ngf 64 \
+    --netG stylegan2 \
+    --batch_size 2 \
+    --lambda_GAN 0.5 \
+    --save_epoch_freq 1

@@ -404,9 +404,10 @@ $RECYCLE.BIN/
 
 
 bulk_data/
-logs
-wandb
+logs/
+wandb/
 *.mp4
 *.jpg
 *.pth
 *.png
+temp/
