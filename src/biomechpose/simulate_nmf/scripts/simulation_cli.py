@@ -8,6 +8,7 @@ from pathlib import Path
 from biomechpose.simulate_nmf.data import load_kinematic_recording
 from biomechpose.simulate_nmf.simulate import simulate_one_segment
 from biomechpose.simulate_nmf.postprocessing import postprocess_segment
+from biomechpose.util import print_hardware_availability
 
 
 def simulate_using_kinematic_prior(
@@ -55,4 +56,5 @@ def simulate_using_kinematic_prior(
 
 
 if __name__ == "__main__":
+    print_hardware_availability(check_gpu=False)
     tyro.cli(simulate_using_kinematic_prior)
