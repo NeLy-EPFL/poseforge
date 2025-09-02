@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import os
 import psutil
+import warnings
 from matplotlib import pyplot as plt
 
 
@@ -29,14 +30,17 @@ def set_random_seed(seed: int = 42) -> None:
     # Generator for DataLoader workers
     torch.use_deterministic_algorithms(True, warn_only=True)
 
-    print(f"🎲 Random seed set to {seed} for reproducible results")
+    print(f"Random seed set to {seed} for reproducible results")
 
 
 def configure_matplotlib_style():
     import matplotlib
+    import logging
 
     matplotlib.style.use("fast")
     plt.rcParams["font.family"] = "Arial"
+    # suppress matplotlib font manager warnings
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
 
 def print_hardware_availability(check_gpu: bool = False):

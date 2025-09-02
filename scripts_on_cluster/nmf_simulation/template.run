@@ -3,8 +3,8 @@
 #SBATCH --job-name <<<JOB_NAME>>>
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 12
-#SBATCH --mem 64GB
+#SBATCH --cpus-per-task 18
+#SBATCH --mem 96GB
 #SBATCH --time 4:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
