@@ -146,7 +146,7 @@ def extract_spotlight_recording_frames_from_specs(
             row = dataframe.iloc[frame_idx_among_selection]
             image_filename = row["image"]
             input_path = trial_dir / "all" / image_filename
-            output_path = out_dir / f"{trial_dir.name}_{image_filename}.jpg"
+            output_path = out_dir / f"{trial_dir.name}_{image_filename}"
             out_dir.mkdir(parents=True, exist_ok=True)
             copyfile(input_path, output_path)
 
