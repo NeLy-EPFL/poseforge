@@ -1,0 +1,39 @@
+#!/bin/bash -l
+
+#SBATCH --job-name <<<JOB_NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 18
+#SBATCH --mem 96GB
+#SBATCH --time 4:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output <<<LOG_OUTPUT_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+conda activate biomechpose
+
+# Set up FlyGym rendering for headless machines
+export MUJOCO_GL="egl"
+export PYOPENGL_PLATFORM="egl"
+
+# Define paths
+project_root="/home/sibwang/biomechpose"
+simulation_cli_path="src/biomechpose/simulate_nmf/scripts/simulation_cli.py"
+
+# Setup
+cd $project_root
+
+# Training
+echo "Simulation starting at $(date)"
+
+python -u $simulation_cli_path \
+    --recorded_trial_path <<<RECORDED_TRIAL_PATH>>> \
+    --trial_output_dir <<<TRIAL_OUTPUT_DIR>>> \
+    --segment-ids <<<SEGMENT_IDS>>> \
+    --input_timestep 0.01 \
+    --sim_timestep 0.0001
+
+echo "Simulation ends at $(date)"

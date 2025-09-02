@@ -4709,14 +4709,14 @@ typing-extensions = ">=4.12.0"
 
 [[package]]
 name = "tyro"
-version = "0.9.24"
+version = "0.9.31"
 description = "CLI interfaces & config objects, from types"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "tyro-0.9.24-py3-none-any.whl", hash = "sha256:d8152e47375419752210da455226007b4bb9bd9c65af1de8fb12daf0658c91dc"},
-    {file = "tyro-0.9.24.tar.gz", hash = "sha256:5a9ef93d1b8e93cff2c5d82789a571d905d152e92af82a3ec96a17d668194df3"},
+    {file = "tyro-0.9.31-py3-none-any.whl", hash = "sha256:565305246fbfe7c288b7c44d5af58782a582b885c662ff223e9933779c1c10a3"},
+    {file = "tyro-0.9.31.tar.gz", hash = "sha256:e858b21f4d179db9fb52b292d3a544aca0bb439399bd59f1943cf96382f15a68"},
 ]
 
 [package.dependencies]
@@ -4930,4 +4930,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.12.*"
-content-hash = "d2169453e365927e691104e7a93d83a2eac485b03830489733b1d379c42be15b"
+content-hash = "35636e113acae83b6f627f235a79cc46a36a49e786b31580d442a76943a3bca9"

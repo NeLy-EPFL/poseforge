@@ -325,7 +325,6 @@ def process_subsegment(
     segment_label_parser = SegmentLabelParser()
 
     # Process frames in parallel
-    print(f"Processing {num_frames} frames in parallel using {n_jobs} cores...")
     # Prepare arguments for each frame
     frame_args = []
     for i_frame in range(num_frames):
@@ -340,7 +339,13 @@ def process_subsegment(
 
     # Process frames in parallel
     # Use 'loky' backend for CPU-intensive image processing operations
-    results = Parallel(n_jobs=n_jobs, backend="loky")(
+    parallel_executor = Parallel(n_jobs=n_jobs, backend="loky")
+    effective_n_jobs = parallel_executor._effective_n_jobs()
+    print(
+        f"Processing {num_frames} frames in parallel using {n_jobs} cores "
+        f"(effectively {effective_n_jobs} cores)..."
+    )
+    results = parallel_executor(
         delayed(process_single_frame)(*args)
         for args in tqdm(frame_args, desc="Processing frames", disable=None)
     )
@@ -596,11 +601,13 @@ def visualize_subsegment(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Visualize frames in parallel
+    parallel_executor = Parallel(n_jobs=n_jobs, backend="loky")
+    effective_n_jobs = parallel_executor._effective_n_jobs()
     print(
-        f"Visualizing {len(frames)} frames in parallel using "
-        f"{n_jobs if n_jobs > 0 else 'all available'} cores..."
+        f"Visualizing {len(frames)} frames in parallel using {n_jobs} cores "
+        f"(effectively {effective_n_jobs} cores)..."
     )
-    results = Parallel(n_jobs=n_jobs, backend="loky")(
+    results = parallel_executor(
         delayed(visualize_single_frame)(
             i,
             frame,

@@ -36,7 +36,7 @@ def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path) -> dict[Path, i
                     "subsegment_"
                 ):
                     continue
-                video_file = subseg_dir / "processed_simulation_rendering.mp4"
+                video_file = subseg_dir / "processed_nmf_sim_render_colorcode_0.mp4"
                 if not video_file.is_file():
                     logging.warning(f"Expected video file {video_file} does not exist.")
                 num_frames = check_num_frames_in_video(video_file)
@@ -160,7 +160,9 @@ if __name__ == "__main__":
         "bulk_data/behavior_images/spotlight_aligned_and_cropped"
     )
     # Output directory for extracted training images
-    output_dir = Path("bulk_data/style_transfer/aymanns2022_spotlight_dataset")
+    output_dir = Path(
+        "bulk_data/style_transfer/aymanns2022_pseudocolor_spotlight_dataset"
+    )
 
     # Fix random state for reproducibility
     random_seed = 42
