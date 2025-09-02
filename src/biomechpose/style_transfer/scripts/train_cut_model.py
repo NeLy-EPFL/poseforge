@@ -6,6 +6,10 @@ import time
 import torch
 import numpy as np
 import wandb
+import pickle
+import json
+from argparse import Namespace
+from pathlib import Path
 from cut.options.train_options import TrainOptions
 from cut.data import create_dataset
 from cut.models import create_model
@@ -15,12 +19,32 @@ from cut.util import util
 from biomechpose.util import set_random_seed
 
 
+def save_options(
+    train_options_obj: TrainOptions, parsed_opt: Namespace, output_path: Path | str
+):
+    output_path = Path(output_path)
+    options_dict = {"values": {}, "defaults": {}}
+    for key, val in sorted(vars(parsed_opt).items()):
+        default = train_options_obj.parser.get_default(key)
+        options_dict["values"][key] = val
+        options_dict["defaults"][key] = default
+
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    with open(output_path, "w") as f:
+        json.dump(options_dict, f, indent=2, sort_keys=True)
+
+
 if __name__ == "__main__":
     # Set random seed for reproducibility
     set_random_seed(42)
 
-    # Get training options
-    opt = TrainOptions().parse()
+    # Get training options and save a copy
+    train_options_obj = TrainOptions()
+    opt: Namespace = train_options_obj.parse()
+    opt_file_path = Path(opt.checkpoints_dir) / "train_options.json"
+    save_options(train_options_obj, opt, opt_file_path)
+
+    # Compute total number of epochs to train
     total_num_epochs = opt.n_epochs + opt.n_epochs_decay
 
     # Create a dataset given opt.dataset_mode and other options
@@ -155,3 +179,4 @@ if __name__ == "__main__":
         visualizer.close()
     if opt.wandb_project:
         wandb.finish()
+
