@@ -1,0 +1,51 @@
+#!/bin/bash -l
+
+#SBATCH --job-name cut_<<<NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 32
+#SBATCH --mem 64GB
+#SBATCH --time 71:59:59
+#SBATCH --partition=l40s
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output <<<OUTPUT_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+conda activate biomechpose
+
+# Define paths
+project_root="/home/sibwang/biomechpose"
+training_script_path="src/biomechpose/style_transfer/scripts/train_cut_model.py"
+dataset_path="bulk_data/style_transfer/aymanns2022_pseudocolor_spotlight_dataset"
+checkpoints_path="<<<CHECKPOINT_DIR>>>"
+logs_path="<<<LOG_DIR>>>"
+
+# Setup
+cd $project_root
+export WANDB_DIR="<<<WANDB_DIR>>>"
+
+# Training
+echo "Training starting at $(date)"
+
+python -u $training_script_path \
+    --dataroot "$dataset_path" \
+    --name "<<<NAME>>>-cont1" \
+    --CUT_mode "CUT" \
+    --checkpoints_dir "$checkpoints_path/<<<NAME>>>" \
+    --tensorboard_log_dir "$logs_path/<<<NAME>>>" \
+    --epoch 100 \
+    --n_epochs 100 \
+    --n_epochs_decay 100 \
+    --lr 0.0001 \
+    --ngf <<<NGF>>> \
+    --netG "<<<NETG>>>" \
+    --batch_size <<<BATCH_SIZE>>> \
+    --lambda_GAN <<<LAMBDA_GAN>>> \
+    --save_epoch_freq 1 \
+    --num_threads 32 \
+    --wandb_project "biomechpose-image-style-transfer"
+
+echo "Training ends at $(date)"
