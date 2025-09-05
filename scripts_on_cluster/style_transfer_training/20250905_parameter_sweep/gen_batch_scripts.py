@@ -47,10 +47,19 @@ def make_run_script(ngf, netG, batch_size, lambda_GAN):
 if __name__ == "__main__":
     counter = 0
     
+    # Using stylegan2 (6 blocks)
     netG = "stylegan2"
     for ngf in [16, 32, 48]:
         for batch_size in [2, 4]:
             for lambda_GAN in [0.2, 0.1]:
+                make_run_script(ngf, netG, batch_size, lambda_GAN)
+                counter += 1
+    
+    # Using smallstylegan2 (2 blocks)
+    netG = "smallstylegan2"
+    for ngf in [16, 32, 48]:
+        for batch_size in [2]:
+            for lambda_GAN in [0.2, 0.5, 1.0]:
                 make_run_script(ngf, netG, batch_size, lambda_GAN)
                 counter += 1
 
