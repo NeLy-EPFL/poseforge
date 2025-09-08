@@ -186,7 +186,7 @@ def define_all_checkpoints_to_test(
 
 
 if __name__ == "__main__":
-    # ========== Configuration ==========
+    # ==================== Configuration ====================
     # Define directories to training campaigns
     training_data_basedir = Path(
         "~/Data/scitas_data/biomechpose/bulk_data/style_transfer"
@@ -194,6 +194,7 @@ if __name__ == "__main__":
     training_campaign_dirs = [
         training_data_basedir / "20250903_parameter_sweep",
         training_data_basedir / "20250905_parameter_sweep",
+        training_data_basedir / "20250905_continued_training",
     ]
 
     # Define which behavior clip to use for testing
@@ -210,11 +211,11 @@ if __name__ == "__main__":
     parallelism = "cuda"  # "cpu" or "cuda"
 
     # Define where the output should be saved
-    output_basedir = Path("bulk_data/style_transfer/_synthetic_output")
+    output_basedir = Path("bulk_data/style_transfer/synthetic_output")
 
     # Set logging level
     logging.basicConfig(level=logging.WARNING)
-    # ========== End Configuration ==========
+    # ==================== End Configuration ====================
 
     # Index all inference runs required
     all_checkpoints_to_test = define_all_checkpoints_to_test(
