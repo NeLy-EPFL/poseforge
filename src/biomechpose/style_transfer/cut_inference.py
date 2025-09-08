@@ -11,6 +11,7 @@ from torchvision.transforms.functional import to_pil_image
 
 from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper
+from biomechpose.util import default_video_writing_ffmpeg_params
 
 
 class _CUTOptions:
@@ -238,7 +239,7 @@ def process_simulation(
         fps=fps,
         codec="libx264",
         quality=10,  # 10 is highest for imageio, lower is lower quality
-        ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
+        ffmpeg_params=default_video_writing_ffmpeg_params
     ) as video_writer:
         # Process frames in batches
         for i in trange(0, len(video_frames), batch_size, disable=not progress_bar):

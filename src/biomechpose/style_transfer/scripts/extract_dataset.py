@@ -7,6 +7,8 @@ from collections import defaultdict
 from tqdm import tqdm
 from pathlib import Path
 
+from biomechpose.util import read_frames_from_video
+
 
 def check_num_frames_in_video(video_path: Path) -> int:
     """
@@ -61,31 +63,6 @@ def list_spotlight_recordings_and_num_frames(
     return num_frames_dict
 
 
-def read_frames_from_video(
-    video_path: Path, frame_indices: list[int] | None
-) -> dict[int, np.ndarray]:
-    """Read specific frames from a video file.
-
-    Args:
-        video_path (Path): Path to the video file.
-        frame_indices (list[int] | None): List of frame indices to read.
-            If None, read all frames.
-
-    Raises:
-        ValueError: If the video file cannot be read.
-        IndexError: If the frame indices are invalid.
-
-    Returns:
-        dict[int, np.ndarray]: A dictionary mapping frame indices to their
-        corresponding image arrays.
-    """
-    frames_dict = {}
-    with imageio.get_reader(video_path) as reader:
-        for idx in frame_indices:
-            frames_dict[idx] = reader.get_data(idx)
-    return frames_dict
-
-
 def extract_nmf_simulation_frames_from_specs(frame_specs: list[tuple[Path, int, Path]]):
     """Extract frames from NeuroMechFly simulation videos based on spec
     list (defined below).
@@ -106,7 +83,8 @@ def extract_nmf_simulation_frames_from_specs(frame_specs: list[tuple[Path, int, 
     print("Extracting frames from NeuroMechFly simulation videos...")
     for video_path, specs in tqdm(specs_by_video.items(), disable=None):
         frame_indices = [frame_idx for frame_idx, _ in specs]
-        frames_dict = read_frames_from_video(video_path, frame_indices)
+        frames, fps = read_frames_from_video(video_path, frame_indices)
+        frames_dict = {idx: frame for idx, frame in zip(frame_indices, frames)}
         for frame_idx, output_dir in specs:
             output_dir.mkdir(parents=True, exist_ok=True)
             trial, segment_id, subsegment_id = str(video_path.parent).split("/")[-3:]

@@ -58,7 +58,6 @@ def test_checkpoint(
             "campaign_name": campaign_name,
             "trial_name": trial_name,
             "run_name": run_name,
-            "epoch": epoch,
             "checkpoint_path": str(checkpoint_path),
             "simulation_data_dirs": [str(x.absolute()) for x in simulation_data_dirs],
         }
@@ -134,12 +133,12 @@ def decide_checkpoints_to_test(
     available_epochs = np.array(sorted(checkpointed_epochs_lookup.keys()))
     start_epoch = available_epochs[0]
     end_epoch = available_epochs[-1] + 1
-    desired_epochs = list(range(start_epoch, end_epoch, epochs_interval))
+    desired_epochs = list(range(start_epoch, end_epoch + 1, epochs_interval))
     selected_checkpoints = {}
     for desired_epoch in desired_epochs:
         distance = np.abs(available_epochs - desired_epoch)
-        closest_epoch = available_epochs[np.argmin(distance)]
-        selected_checkpoints[desired_epoch] = checkpointed_epochs_lookup[closest_epoch]
+        closest_epoch = int(available_epochs[np.argmin(distance)])
+        selected_checkpoints[closest_epoch] = checkpointed_epochs_lookup[closest_epoch]
     return selected_checkpoints
 
 
