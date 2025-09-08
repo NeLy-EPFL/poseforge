@@ -227,7 +227,7 @@ if __name__ == "__main__":
     print(f"Total number of checkpoints to test: {len(all_checkpoints_to_test)}")
 
     # Check if specified parallelism option is available
-    if parallelism and not torch.cuda.is_available():
+    if parallelism == "cuda" and not torch.cuda.is_available():
         logging.error("CUDA device requested but not available. Using CPU instead.")
         parallelism = "cpu"
     if parallelism not in ["cpu", "cuda"]:
