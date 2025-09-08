@@ -75,7 +75,7 @@ def print_hardware_availability(check_gpu: bool = False):
 
 def read_frames_from_video(
     video_path: Path, frame_indices: list[int] | None = None
-) -> dict[int, np.ndarray]:
+) -> tuple[list[np.ndarray], float]:
     """Read specific frames from a video file.
 
     Args:

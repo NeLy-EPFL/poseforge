@@ -3,6 +3,7 @@ import json
 import cv2
 import numpy as np
 import imageio.v2 as imageio
+from typing import Any
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
@@ -12,7 +13,7 @@ from biomechpose.util import read_frames_from_video, default_video_writing_ffmpe
 
 def index_visualized_videos(
     run_dir: Path,
-) -> tuple[dict[int, dict[int, Path]], dict[str, Path], dict[str, any]]:
+) -> tuple[dict[int, dict[int, Path]], dict[str, Path], dict[str, Any]]:
     """Index visualized videos by example simulation and epoch number.
 
     Returns:
@@ -63,7 +64,7 @@ def draw_frame(
     video_top_left_corner_xy: tuple[int, int],
     num_cols_excluding_original: int,
     simulation_name: str,
-    hparams: dict[str, any],
+    hparams: dict[str, Any],
     styled_frames_names: list[str],
     text_area_height: int,
 ):
@@ -146,7 +147,7 @@ def generate_summary_video_for_styled_videos(
     output_path: Path,
     num_cols_excluding_original: int = 5,
     simulation_name: str = "",
-    hparams: dict[str, any] = {},
+    hparams: dict[str, Any] = {},
 ):
     # Read the simulated video frames
     simulated_frames, fps = read_frames_from_video(simulated_video_path)

@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import json
 import logging
+from typing import Any
 from tqdm import tqdm
 from pathlib import Path
 from joblib import Parallel, delayed
@@ -75,7 +76,7 @@ def test_checkpoint(
         )
 
 
-def parse_hyperparameters(trial_name: str) -> dict | None:
+def parse_hyperparameters(trial_name: str) -> dict[str, Any] | None:
     """Given the name of a training trial, parse its hyperparameters and
     return them as a dictionary."""
     trial_name_regex = r"ngf(?P<ngf>\d+)_netG(?P<net>[a-zA-Z0-9]+)_batsize(?P<batsize>\d+)_lambGAN(?P<lambGAN>[\d.]+)"
