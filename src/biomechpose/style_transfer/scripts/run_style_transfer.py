@@ -1,124 +1,272 @@
 import re
 import numpy as np
 import torch
-import imageio.v2 as imageio
+import json
+import logging
+from tqdm import tqdm
 from pathlib import Path
-from tqdm import trange
-from torchvision.transforms.functional import to_pil_image
+from joblib import Parallel, delayed
 
-from biomechpose.style_transfer.cut_inference import InferencePipeline
+from biomechpose.style_transfer import get_inference_pipeline, process_simulation
 
 
-def process_subsegment(
-    inference_pipeline: InferencePipeline,
-    subsegment_dir: Path,
-    output_path: Path,
-    batch_size: int = 4,
+def test_checkpoint(
+    campaign_name: str,
+    trial_name: str,
+    run_name: str,
+    epoch: int,
+    checkpoint_path: Path,
+    simulation_data_dirs: list[Path],
+    output_basedir: Path,
+    batch_size: int | None = None,
+    device: str | torch.device = "cuda",
+    progress_bar: bool = False,
 ) -> None:
-    video_path = subsegment_dir / "processed_nmf_sim_render_colorcode_0.mp4"
-    with imageio.get_reader(str(video_path), "ffmpeg") as reader:
-        fps = reader.get_meta_data()["fps"]
-        video_frames = [frame for frame in reader]
-    print(f"Read {len(video_frames)} frames from {video_path}")
+    """Visualize the performance of a model checkpoint by running inference
+    on a set of NeuroMechFly-rendered behavior clips.
 
-    # Create output directory if it doesn't exist
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    Args:
+        campaign_name: Name of the training campaign
+            (e.g. "20250903_parameter_sweep")
+        trial_name: Name of the training trial
+            (e.g. "ngf32_netGstylegan2_batsize4_lambGAN0.5")
+        run_name: Name of the training run
+            (e.g. "ngf32_netGstylegan2_batsize4_lambGAN0.5-cont1")
+        epoch: Epoch number of the checkpoint (e.g. 100)
+        checkpoint_path: Path to the checkpoint file
+            (e.g. ".../ngf32_netGstylegan2_batsize4_lambGAN0.5-cont1/100_net_G.pth")
+        simulation_data_dirs: List of paths to simulation directories,
+            each containing a NeuroMechFly-rendered behavior clip
+            (e.g. one named "processed_nmf_sim_render_colorcode_0.mp4")
+        output_basedir: Base directory where output videos should be saved
+            (file structure under this directory will be:
+            {run_name}/epoch{epoch:03d}_examplesim{i:02d}.mp4)
+        batch_size: Number of frames to process in a batch. If None, the
+            maximum possible batch size will be automatically detected.
+        device: Device to run inference on ("cpu" or "cuda")
+        progress_bar: Whether to show a progress bar during inference
+    """
+    # Make output directory
+    output_dir = output_basedir / run_name
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create video writer
-    with imageio.get_writer(
-        str(output_path),
-        "ffmpeg",
-        fps=fps,
-        codec="libx264",
-        quality=10,  # 10 is highest for imageio, lower is lower quality
-        ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
-    ) as video_writer:
-        # Process frames in batches
-        for i in trange(0, len(video_frames), batch_size, disable=None):
-            # Get batch of frames (each frame is HWC format, uint8, 0-255)
-            input_batch_frames = video_frames[i : i + batch_size]
-            
-            # Convert each frame to PIL Image directly (imageio frames are already in the right format)
-            from PIL import Image
-            input_batch_pil = [Image.fromarray(frame) for frame in input_batch_frames]
-            
-            output_batch = inference_pipeline.infer(input_batch_pil)
-            for j in range(output_batch.shape[0]):
-                frame = output_batch[j]
-                video_writer.append_data(frame)
+    # Parse and save hyperparameters
+    model_hparams = parse_hyperparameters(trial_name)
+    with open(output_dir / "metadata.json", "w") as f:
+        metadata = {
+            "hyperparameters": model_hparams,
+            "campaign_name": campaign_name,
+            "trial_name": trial_name,
+            "run_name": run_name,
+            "epoch": epoch,
+            "checkpoint_path": str(checkpoint_path),
+            "simulation_data_dirs": [str(x.absolute()) for x in simulation_data_dirs],
+        }
+        json.dump(metadata, f, indent=2)
+
+    # Get inference timeline
+    inference_pipeline = get_inference_pipeline(checkpoint_path, model_hparams, device)
+
+    # Run inference for each simulation run
+    for i, sim_dir in enumerate(simulation_data_dirs):
+        input_path = sim_dir / "processed_nmf_sim_render_colorcode_0.mp4"
+        output_path = output_dir / f"epoch{epoch:03d}_examplesim{i:02d}.mp4"
+        process_simulation(
+            inference_pipeline, input_path, output_path, batch_size, progress_bar
+        )
 
 
-def get_inference_pipeline(checkpoint_path: Path, params: dict) -> InferencePipeline:
-    # Some parameters can be assumed
-    input_nc = params.get("input_nc", 3)
-    output_nc = params.get("output_nc", 3)
-    image_side_length = params.get("image_side_length", 256)
-    nce_layers = params.get("nce_layers", [0, 4, 8, 12, 16])
+def parse_hyperparameters(trial_name: str) -> dict | None:
+    """Given the name of a training trial, parse its hyperparameters and
+    return them as a dictionary."""
+    trial_name_regex = r"ngf(?P<ngf>\d+)_netG(?P<net>[a-zA-Z0-9]+)_batsize(?P<batsize>\d+)_lambGAN(?P<lambGAN>[\d.]+)"
+    match = re.match(trial_name_regex, trial_name)
+    if match:
+        return {
+            "ngf": int(match.group("ngf")),
+            "net": match.group("net"),
+            "batsize": int(match.group("batsize")),
+            "lambGAN": float(match.group("lambGAN")),
+        }
+    else:
+        logging.warning(f"Could not parse parameters from trial name: {trial_name}")
+        return None
 
-    # Other parameters must be stated explicitly
-    ngf = params["ngf"]
-    netG = params["net"]
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def find_runs_within_trial_dir(trial_dir: Path) -> dict[str, Path]:
+    """Given a trial directory, find all the runs that it might contain and
+    return them as a dictionary (run name -> run path)."""
+    # Find all train_opt.txt files, which are saved at the beginning of each run
+    train_opt_paths = list(trial_dir.rglob("train_opt.txt"))
+    run_paths = {}
+    for train_opt_path in train_opt_paths:
+        run_name = train_opt_path.parent.name
+        run_paths[run_name] = train_opt_path.parent
+    return run_paths
 
-    inference_pipeline = InferencePipeline(
-        checkpoint_path,
-        input_nc=input_nc,
-        output_nc=output_nc,
-        ngf=ngf,
-        netG=netG,
-        image_side_length=image_side_length,
-        nce_layers=nce_layers,
-        device=device,
-    )
-    return inference_pipeline
+
+def find_available_checkpoints(
+    run_dir: Path, network: str = "net_G"
+) -> dict[int, Path]:
+    """Given a run directory, find all saved network checkpoints."""
+    checkpoint_paths_by_epoch = {}
+    for path in run_dir.glob(f"*_{network}.pth"):
+        epoch_str = path.stem.replace(f"_{network}", "")
+        try:
+            epoch = int(epoch_str)
+            checkpoint_paths_by_epoch[epoch] = path
+        except ValueError:
+            continue
+
+    return checkpoint_paths_by_epoch
+
+
+def decide_checkpoints_to_test(
+    checkpointed_epochs_lookup: dict[int, Path],
+    epochs_interval: int,
+) -> dict[int, Path]:
+    """Given a dictionary of available checkpoints (epoch number -> path),
+    and a desired epoch interval (i.e. run inference using checkpoints
+    every N epochs), return a dictionary of selected checkpoints
+    (epoch number -> path) so that the selected checkpoints are the
+    closest available checkpoints to the desired epochs (note that a
+    checkpoint might not have been saved at the exact desired epoch)."""
+    available_epochs = np.array(sorted(checkpointed_epochs_lookup.keys()))
+    start_epoch = available_epochs[0]
+    end_epoch = available_epochs[-1] + 1
+    desired_epochs = list(range(start_epoch, end_epoch, epochs_interval))
+    selected_checkpoints = {}
+    for desired_epoch in desired_epochs:
+        distance = np.abs(available_epochs - desired_epoch)
+        closest_epoch = available_epochs[np.argmin(distance)]
+        selected_checkpoints[desired_epoch] = checkpointed_epochs_lookup[closest_epoch]
+    return selected_checkpoints
+
+
+def define_all_checkpoints_to_test(
+    training_campaign_dirs: list[Path],
+    epochs_interval: int,
+) -> list[tuple[str, str, str, int, Path]]:
+    """Given a list of training campaign directories, scan through all
+    trials and all runs within the trial and return a list of inference run
+    specifications (each a tuple of
+    (campaign_name, trial_name, run_name, epoch, checkpoint_path))."""
+    all_checkpoints_to_test = []
+
+    for campaign_dir in training_campaign_dirs:
+        trial_dirs = [
+            path for path in (campaign_dir / "checkpoints").iterdir() if path.is_dir()
+        ]
+        for trial_dir in trial_dirs:
+            runs = find_runs_within_trial_dir(trial_dir)
+            for run_name, run_dir in runs.items():
+                # Decide which checkpoints to test
+                available_checkpoints = find_available_checkpoints(run_dir)
+                if available_checkpoints is None:
+                    logging.warning(
+                        f"No available checkpoints found in run directory: {run_dir}"
+                    )
+                    continue
+                selected_checkpoints = decide_checkpoints_to_test(
+                    available_checkpoints, epochs_interval=epochs_interval
+                )
+
+                # For each selected checkpoint, add specs to the list
+                for epoch, checkpoint_path in selected_checkpoints.items():
+                    specs = (
+                        campaign_dir.name,
+                        trial_dir.name,
+                        run_name,
+                        epoch,
+                        checkpoint_path,
+                    )
+                    all_checkpoints_to_test.append(specs)
+
+    return sorted(all_checkpoints_to_test)
 
 
 if __name__ == "__main__":
-    checkpoints_basedir = Path(
-        "/home/sibwang/Data/scitas_data/biomechpose/bulk_data/style_transfer/20250828_parameter_sweep/checkpoints"
-    )
-    subsegment_dir = Path(
-        "bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/segment_007/subsegment_000"
-    )
+    # ========== Configuration ==========
+    # Define directories to training campaigns
+    training_data_basedir = Path(
+        "~/Data/scitas_data/biomechpose/bulk_data/style_transfer"
+    ).expanduser()
+    training_campaign_dirs = [
+        training_data_basedir / "20250903_parameter_sweep",
+        training_data_basedir / "20250905_parameter_sweep",
+    ]
 
-    # Detect trials and their parameters
-    trial_name_regex = r"ngf(?P<ngf>\d+)_netG(?P<net>[a-zA-Z0-9]+)_batsize(?P<batsize>\d+)_lambGAN(?P<lambGAN>[\d.]+)"
-    trials = sorted(list([x.name for x in checkpoints_basedir.iterdir() if x.is_dir()]))
-    params_by_trial = {}
-    for path in sorted(list(checkpoints_basedir.iterdir())):
-        trial_name = path.name
-        match = re.match(trial_name_regex, trial_name)
-        if match:
-            params_by_trial[trial_name] = {
-                "ngf": int(match.group("ngf")),
-                "net": match.group("net"),
-                "batsize": int(match.group("batsize")),
-                "lambGAN": float(match.group("lambGAN")),
-            }
-        else:
-            print(f"Warning: Could not parse parameters from trial name: {trial_name}")
+    # Define which behavior clip to use for testing
+    simulation_dirs = [
+        Path("bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/segment_001/subsegment_000")
+    ]
 
-    # Test-run models one by one
-    for trial_name, params in params_by_trial.items():
-        print(f"=== Processing trial: {trial_name} with params: {params} ===")
-        # Recursively search for "latest_net_G.pth" in the trial directory
-        checkpoint_files = list(
-            (checkpoints_basedir / trial_name).rglob("latest_net_G.pth")
-        )
-        if not checkpoint_files:
-            print(
-                f"Warning: No 'latest_net_G.pth' found in {checkpoints_basedir / trial_name}"
+    # Define how often checkpoints should be sampled
+    epochs_interval = 20
+
+    # Define how inference runs should be executed.
+    # Empirically, running on a single NVIDIA RTX 3080 Ti GPU is 5-10x
+    # faster than a 16-core 11th Gen Intel Core i9-11900K CPU
+    parallelism = "cuda"  # "cpu" or "cuda"
+
+    # Define where the output should be saved
+    output_basedir = Path("bulk_data/style_transfer/_synthetic_output")
+
+    # Set logging level
+    logging.basicConfig(level=logging.WARNING)
+    # ========== End Configuration ==========
+
+    # Index all inference runs required
+    all_checkpoints_to_test = define_all_checkpoints_to_test(
+        training_campaign_dirs, epochs_interval
+    )
+    num_campaigns = len(set([specs[0] for specs in all_checkpoints_to_test]))
+    num_trials = len(set([specs[1] for specs in all_checkpoints_to_test]))
+    num_runs = len(set([specs[2] for specs in all_checkpoints_to_test]))
+    print(f"Total number of checkpoints to test: {len(all_checkpoints_to_test)}")
+
+    # Check if specified parallelism option is available
+    if parallelism and not torch.cuda.is_available():
+        logging.error("CUDA device requested but not available. Using CPU instead.")
+        parallelism = "cpu"
+    if parallelism not in ["cpu", "cuda"]:
+        logging.error(f"Unknown parallelism mode: {parallelism}. Using CPU instead.")
+        parallelism = "cpu"
+
+    # Run inference for each checkpoint
+    if parallelism == "cpu":
+        # Run many models in parallel on different CPU cores, but each
+        # model will run without hardware acceleration
+        def cpu_worker(specs):
+            campaign_name, trial_name, run_name, epoch, checkpoint_path = specs
+            test_checkpoint(
+                campaign_name,
+                trial_name,
+                run_name,
+                epoch,
+                checkpoint_path,
+                simulation_dirs,
+                output_basedir,
+                batch_size=4,
+                device="cpu",
             )
-            continue
-        checkpoint_path = checkpoint_files[0]
-        print(f"Using checkpoint: {checkpoint_path}")
-        inference_pipeline = get_inference_pipeline(checkpoint_path, params)
 
-        trial, segment, subsegment = subsegment_dir.parts[-3:]
-        output_path = (
-            Path("bulk_data/style_transfer/synthetic_output")
-            / f"{trial_name}_{trial}_{segment}_{subsegment}.mp4"
+        Parallel(n_jobs=-1)(
+            delayed(cpu_worker)(specs) for specs in tqdm(all_checkpoints_to_test)
         )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        process_subsegment(inference_pipeline, subsegment_dir, output_path)
+    elif parallelism == "cuda":
+        # Run models one by one, each on the GPU so that the computational
+        # graph runs with hardware acceleration
+        for specs in tqdm(all_checkpoints_to_test):
+            campaign_name, trial_name, run_name, epoch, checkpoint_path = specs
+            test_checkpoint(
+                campaign_name,
+                trial_name,
+                run_name,
+                epoch,
+                checkpoint_path,
+                simulation_dirs,
+                output_basedir,
+                batch_size=None,  # auto-detect
+                device="cuda",
+            )
