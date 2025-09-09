@@ -171,7 +171,7 @@ def generate_summary_video_for_styled_videos(
             )
 
     # Resize simulated video to have the same shape as the styled videos using high-quality interpolation
-    target_shape = styled_frames[0].shape
+    target_shape = list(styled_frames_dict.values())[0][0].shape
     simulated_frames_resized = [
         cv2.resize(
             frame, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_LANCZOS4
