@@ -192,6 +192,12 @@ class InferencePipeline:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        if len(batch_size_hist) == 1:
+            raise RuntimeError(
+                "Out-of-memory error occurred at the initial batch size. "
+                "No batch size was found that fits in memory. "
+                f"Tried batch size: {batch_size_hist[0]}"
+            )
         max_batch_size = batch_size_hist[-2]
         logging.info(f"Maximum batch size is: {max_batch_size}")
         self.max_batch_size = max_batch_size
