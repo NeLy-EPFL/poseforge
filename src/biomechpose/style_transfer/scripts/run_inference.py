@@ -82,9 +82,17 @@ def get_inference_pipeline_and_max_batch_size(
 
 if __name__ == "__main__":
     # Define model and data paths
-    checkpoint_path = Path(
-        "bulk_data/style_transfer/production/trained_models/ngf32_netGstylegan2_batsize4_lambGAN0.1/161_net_G.pth"
-    )
+    models = [
+        # (model_name, epoch)
+        ("ngf16_netGsmallstylegan2_batsize2_lambGAN0.2", 121),
+        ("ngf16_netGstylegan2_batsize4_lambGAN0.2", 200),
+        ("ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1", 161),
+        ("ngf32_netGstylegan2_batsize4_lambGAN0.1", 161),
+        ("ngf32_netGstylegan2_batsize4_lambGAN0.5", 141),
+        ("ngf32_netGstylegan2_batsize4_lambGAN1.0", 161),
+        ("ngf48_netGstylegan2_batsize4_lambGAN0.1", 141),
+    ]
+    checkpoints_basedir = Path("bulk_data/style_transfer/production/trained_models/")
     nmf_renderings_basedir = Path("bulk_data/nmf_rendering/")
     output_basedir = Path("bulk_data/style_transfer/production/translated_sim_videos/")
 
@@ -97,34 +105,46 @@ if __name__ == "__main__":
 
     # Index all simulations to process
     all_simulation_paths = get_all_simulation_paths(nmf_renderings_basedir)
-    logging.info(f"Total number of simulations to process: {len(all_simulation_paths)}")
+    print(f"Total number of simulations to process: {len(all_simulation_paths)}")
 
-    # Parse model hyperparameters from the checkpoint path
-    model_training_run_name = checkpoint_path.parent.name
-    model_hparams = parse_hyperparameters_from_trial_name(model_training_run_name)
+    # Run inference using each model
+    print(f"Total number of models to use: {len(models)}")
+    for model_name, epoch in models:
+        print(f"Running inference using model {model_name}, epoch {epoch}")
+        checkpoint_path = checkpoints_basedir / model_name / f"{epoch}_net_G.pth"
 
-    # Set up inference pipeline
-    inference_pipeline, max_batch_size = get_inference_pipeline_and_max_batch_size(
-        checkpoint_path, all_simulation_paths[0], device
-    )
+        # Parse model hyperparameters from the checkpoint path
+        model_training_run_name = checkpoint_path.parent.name
+        model_hparams = parse_hyperparameters_from_trial_name(model_training_run_name)
 
-    # Process each simulation
-    for i, simulation_path in enumerate(tqdm(all_simulation_paths)):
-        trial, segment, subsegment = simulation_path.parts[-3:]
-        input_video_path = simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
-        output_dir = output_basedir / trial / segment / subsegment
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_video_path = output_dir / f"styled_video_{model_training_run_name}.mp4"
-
-        process_simulation(
-            inference_pipeline,
-            input_video_path,
-            output_video_path,
-            batch_size=max_batch_size,
-            progress_bar=False,
+        # Set up inference pipeline
+        inference_pipeline, max_batch_size = get_inference_pipeline_and_max_batch_size(
+            checkpoint_path, all_simulation_paths[0], device
         )
 
-        # Periodic memory cleanup every 10 simulations
-        if (i + 1) % 10 == 0:
-            logging.info(f"Processed {i + 1} simulations. Running memory cleanup...")
-            clear_memory_cache()
+        # Process each simulation
+        for i, simulation_path in enumerate(tqdm(all_simulation_paths)):
+            trial, segment, subsegment = simulation_path.parts[-3:]
+            input_video_path = (
+                simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
+            )
+            output_dir = output_basedir / trial / segment / subsegment
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_video_path = (
+                output_dir / f"styled_video_{model_training_run_name}_epoch{epoch}.mp4"
+            )
+
+            process_simulation(
+                inference_pipeline,
+                input_video_path,
+                output_video_path,
+                batch_size=max_batch_size,
+                progress_bar=False,
+            )
+
+            # Periodic memory cleanup every 10 simulations
+            if (i + 1) % 10 == 0:
+                logging.info(
+                    f"Processed {i + 1} simulations. Running memory cleanup..."
+                )
+                clear_memory_cache()
