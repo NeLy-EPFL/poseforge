@@ -200,20 +200,22 @@ def generate_summary_video_for_styled_videos(
     ) as video_writer:
         for frame_idx in range(len(simulated_frames_resized)):
             simulated_frame = simulated_frames_resized[frame_idx]
-            styled_frames = []
-            styled_frames_names = []
+            styled_frames_same_timestep_different_epochs = []
+            styled_frames_epoch_names = []
             for epoch, styled_frames_full_video in styled_frames_dict.items():
-                styled_frames.append(styled_frames_full_video[frame_idx])
-                styled_frames_names.append(f"Epoch {epoch}")
+                styled_frames_same_timestep_different_epochs.append(
+                    styled_frames_full_video[frame_idx]
+                )
+                styled_frames_epoch_names.append(f"Epoch {epoch}")
             image = draw_frame(
                 (canvas_width, canvas_height),
                 simulated_frame,
-                styled_frames,
+                styled_frames_same_timestep_different_epochs,
                 (0, text_area_height),
                 num_cols_excluding_original,
                 simulation_name,
                 hparams,
-                styled_frames_names,
+                styled_frames_epoch_names,
                 text_area_height,
             )
             video_writer.append_data(image)
