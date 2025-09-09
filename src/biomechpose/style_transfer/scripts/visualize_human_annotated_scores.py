@@ -42,7 +42,7 @@ def expand_human_generated_scores_file(scores_df_raw: pd.DataFrame) -> pd.DataFr
         elif hparams["net"] == "stylegan2":
             num_blocks = 6
         else:
-            raise ValueError(f"Unknown net type: {entry['net']}")
+            raise ValueError(f"Unknown net type: {hparams['net']}")
         columns["ngf"].append(hparams["ngf"])
         columns["net"].append(hparams["net"])
         columns["num_blocks"].append(num_blocks)
