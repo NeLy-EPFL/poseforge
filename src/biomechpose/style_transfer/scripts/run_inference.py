@@ -67,7 +67,6 @@ def get_inference_pipeline_and_max_batch_size(
         logging.info(f"  {k}: {v}")
 
     # Auto-detect largest batch size that fits in GPU memory
-    example_simulation_path = all_simulation_paths[0]
     example_input_video_path = (
         example_simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
     )
