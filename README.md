@@ -14,9 +14,14 @@ Pose estimation guided by a biomechanical model.
 ### Part II: Preprocess Spotlight behavior recordings
 1. Run `python src/biomechpose/spotlight_pipeline/scripts/extract_spotlight_frames.py`
     - This script processes each Spotlight experimental trial by extracting, aligning, and cropping frames from the behavior video, and saving the processed frames as individual images in an output directory.
-2. **[Only to train the flip detection model]** Run `python src/biomechpose/spotlight_pipeline/scripts/train_flip_detection_model.py`
+
+> [!NOTE]
+> The following step is only for training the flip detection model. It should not be used during production.
+>
+> 2. Run `python src/biomechpose/spotlight_pipeline/scripts/train_flip_detection_model.py`
     - This script trains a binary image classifier that detects whether the fly is flipped in the Spotlight arena.
     - Prerequisite: Manual labels of whether the fly is flipped must be supplied. This is done by creating a `manual_label/` subdirectory under the directory containing extracted frames from each Spotlight experimental trial, further creating a `manual_label/flipped` and a `manual_label/not_flipped` subdirectories, and copying the extracted frames into the appropriate folder.
+
 3. Run `python src/biomechpose/spotlight_pipeline/scripts/detect_flipped_flies.py`
     - This script generates a label file indicating whether the fly is flipped in each extracted Spotlight behavioral frame. Those in which the fly is flipped will be excluded in subsequent steps.
 
@@ -30,20 +35,24 @@ Pose estimation guided by a biomechanical model.
     - Hyperparameters can be selected by training many models with different hyperparameters on a cluster (e.g. SCITAS). See `scripts_on_cluster/style_transfer_training/` for an example pipeline to machine-generate a batch of `*.run` scripts that can be submitted to the Slurm scheduler on a cluster.
     - In the training procedure, we use Weights and Biases (https://wandb.ai/) to simplify the task of monitoring the training runs and visualizing their results.
 
-**[The following is only for evaluating the models and selecting the best one(s) for production]**
+> [!NOTE]
+> The following steps are only for evaluating trained models and selecting the best one(s). They should not be used during inference time.
+> 
+> 3. Run `python src/biomechpose/style_transfer/scripts/test_trained_models.py`
+>     - This script runs inference on a manually selected, representative set of simulation data, using checkpoints from different training stages of each training run (e.g. once every 20 epochs).
+>     - The user must manually specify a set of simulation data to use for testing and a set of model checkpoints to test. To do so, edit parameters in the `__main__` section of the script.
+> 4. Run `python src/biomechpose/style_transfer/scripts/visualize_inference_results.py`
+>     - For each training run, this script merges videos its inference results at different stage of training into a single summary video for easier comparison. The original NeuroMechFly simulation rendering is also included in the summary video.
+> 5. Manually generate a `bulk_data/style_transfer/synthetic_output/summary_videos/quality_assessment/human_annotated_scores.csv` file with the following columns:
+>     - `run`: Name of the training run, e.g. "ngf32_netGsmallstylegan2_batsize4_lambGAN0.1"
+>     - `best_epoch`: Epoch number of the best model in this run
+>     - `score`: Human-annotated score for the best model (1-5, higher is better)
+>     - `note`: Optional note about the run
+> 6. Run `python src/biomechpose/style_transfer/scripts/visualize_human_annotated_scores.py`
+>     - This generates visualizations aimed to help refine model hyperparameters and iteratively retrain the models.
 
-3. Run `python src/biomechpose/style_transfer/scripts/test_trained_models.py`
-    - This script runs inference on a manually selected, representative set of simulation data, using checkpoints from different training stages of each training run (e.g. once every 20 epochs).
-    - The user must manually specify a set of simulation data to use for testing and a set of model checkpoints to test. To do so, edit parameters in the `__main__` section of the script.
-4. Run `python src/biomechpose/style_transfer/scripts/visualize_inference_results.py`
-    - For each training run, this script merges videos its inference results at different stage of training into a single summary video for easier comparison. The original NeuroMechFly simulation rendering is also included in the summary video.
-5. Manually generate a `bulk_data/style_transfer/synthetic_output/summary_videos/quality_assessment/human_annotated_scores.csv` file with the following columns:
-    - `run`: Name of the training run, e.g. "ngf32_netGsmallstylegan2_batsize4_lambGAN0.1"
-    - `best_epoch`: Epoch number of the best model in this run
-    - `score`: Human-annotated score for the best model (1-5, higher is better)
-    - `note`: Optional note about the run
-6. Run `python src/biomechpose/style_transfer/scripts/visualize_human_annotated_scores.py`
-    - This generates visualizations aimed to help refine model hyperparameters and iteratively retrain the models.
+7. Run `python src/biomechpose/style_transfer/scripts/run_inference.py`
+    - This script uses a selected trained style transfer model to translate all NeuroMechFly rendering data into the domain of Spotlight behavior recordings.
 
 
 ### Part IV: Generalized pose estimation

@@ -11,7 +11,7 @@ from torchvision.transforms.functional import to_pil_image
 
 from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper
-from biomechpose.util import default_video_writing_ffmpeg_params
+from biomechpose.util import default_video_writing_ffmpeg_params, read_frames_from_video
 
 
 class _CUTOptions:
@@ -64,7 +64,9 @@ class InferencePipeline:
         device: str | torch.device = "cuda",
         print_architecture: bool = False,
     ):
-        _opt = _CUTOptions(input_nc, output_nc, ngf, netG, image_side_length, nce_layers)
+        _opt = _CUTOptions(
+            input_nc, output_nc, ngf, netG, image_side_length, nce_layers
+        )
         self.opt = OptionsWrapper(_opt)
         self.model = CUTModel(self.opt)
         self.input_nc = input_nc
@@ -86,6 +88,7 @@ class InferencePipeline:
             tuple(1 / s for s in normalize_std),
         )
         self._print_architecture = print_architecture
+        self.max_batch_size = None
 
     def infer(self, input_images: list[Image.Image]) -> np.ndarray:
         input_images_transformed = torch.stack(
@@ -191,6 +194,7 @@ class InferencePipeline:
 
         max_batch_size = batch_size_hist[-2]
         logging.info(f"Maximum batch size is: {max_batch_size}")
+        self.max_batch_size = max_batch_size
         return max_batch_size
 
 
@@ -219,9 +223,7 @@ def process_simulation(
             inference. Defaults to True.
     """
     # Load input video
-    with imageio.get_reader(str(input_video_path), "ffmpeg") as reader:
-        fps = reader.get_meta_data()["fps"]
-        video_frames = [frame for frame in reader]
+    video_frames, fps = read_frames_from_video(input_video_path)
 
     # Auto-detect batch size if not specified
     if batch_size is None:
@@ -239,7 +241,7 @@ def process_simulation(
         fps=fps,
         codec="libx264",
         quality=10,  # 10 is highest for imageio, lower is lower quality
-        ffmpeg_params=default_video_writing_ffmpeg_params
+        ffmpeg_params=default_video_writing_ffmpeg_params,
     ) as video_writer:
         # Process frames in batches
         for i in trange(0, len(video_frames), batch_size, disable=not progress_bar):
