@@ -167,7 +167,7 @@ def generate_summary_video_for_styled_videos(
             raise RuntimeError(
                 f"Frame count mismatch between simulated video "
                 f"({len(simulated_frames)}) and styled video "
-                f"{video_path} ({len(styled_frames)}). Using {len(simulated_frames)}."
+                f"{video_path} ({len(styled_frames)})."
             )
 
     # Resize simulated video to have the same shape as the styled videos using high-quality interpolation

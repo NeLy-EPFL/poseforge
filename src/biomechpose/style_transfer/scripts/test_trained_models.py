@@ -147,7 +147,7 @@ def define_all_checkpoints_to_test(
             for run_name, run_dir in runs.items():
                 # Decide which checkpoints to test
                 available_checkpoints = find_available_checkpoints(run_dir)
-                if available_checkpoints is None:
+                if len(available_checkpoints) == 0:
                     logging.warning(
                         f"No available checkpoints found in run directory: {run_dir}"
                     )
