@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import os
 import psutil
+import gc
+import logging
 import imageio.v2 as imageio
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -31,7 +33,7 @@ def set_random_seed(seed: int = 42) -> None:
     # Generator for DataLoader workers
     torch.use_deterministic_algorithms(True, warn_only=True)
 
-    print(f"🎲 Random seed set to {seed} for reproducible results")
+    logging.info(f"Random seed set to {seed} for reproducible results")
 
 
 def configure_matplotlib_style():
@@ -111,3 +113,13 @@ default_video_writing_ffmpeg_params = [
     "-level",
     "4.0",  # H.264 level
 ]
+
+
+def clear_memory_cache():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        # Log current GPU memory usage
+        allocated = torch.cuda.memory_allocated() / 1000**3  # GB
+        cached = torch.cuda.memory_reserved() / 1000**3  # GB
+        logging.info(f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached")

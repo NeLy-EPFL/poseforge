@@ -11,7 +11,11 @@ from torchvision.transforms.functional import to_pil_image
 
 from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper
-from biomechpose.util import default_video_writing_ffmpeg_params, read_frames_from_video
+from biomechpose.util import (
+    default_video_writing_ffmpeg_params,
+    read_frames_from_video,
+    clear_memory_cache,
+)
 
 
 class _CUTOptions:
@@ -210,6 +214,7 @@ def process_simulation(
     output_video_path: Path,
     batch_size: int | None = None,
     progress_bar: bool = True,
+    clear_memory_cache_after: bool = True,
 ) -> None:
     """Run style transfer on a NeuroMechFly-rendered behavior clip using a
     trained style transfer model.
@@ -227,6 +232,10 @@ def process_simulation(
             batch size will be automatically detected. Defaults to None.
         progress_bar (bool, optional): Whether to show a progress bar during
             inference. Defaults to True.
+        clear_memory_cache_after (bool, optional): Whether to run garbage
+            collection and clear CUDA memory cache after processing the
+            simulation. This can help reduce memory usage when processing
+            multiple simulations in a row. Defaults to True.
     """
     # Load input video
     video_frames, fps = read_frames_from_video(input_video_path)
@@ -258,6 +267,16 @@ def process_simulation(
             for j in range(output_batch.shape[0]):
                 frame = output_batch[j]
                 video_writer.append_data(frame)
+
+            # Explicitly clean up batch variables to prevent memory accumulation
+            del input_batch_frames, input_batch_pil, output_batch
+
+    # Clean up video frames after processing
+    del video_frames
+
+    # Force garbage collection and clear CUDA cache
+    if clear_memory_cache_after:
+        clear_memory_cache()
 
 
 def get_inference_pipeline(
