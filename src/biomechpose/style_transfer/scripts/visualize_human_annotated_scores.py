@@ -81,6 +81,7 @@ if __name__ == "__main__":
         diag_kind="kde",
     )
     plt.savefig(visualizations_output_dir / "pairplot.png")
+    plt.close()
 
     # Plot best scores vs. values for each hyperparameter
     fig, axes = plt.subplots(
@@ -101,3 +102,4 @@ if __name__ == "__main__":
         ax.set_xlabel(param)
         ax.set_ylabel("Best score")
     plt.savefig(visualizations_output_dir / "scatterplot.png")
+    plt.close()
