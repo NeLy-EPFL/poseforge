@@ -2,7 +2,6 @@ import torch
 import numpy as np
 import torchvision
 import logging
-import gc
 import imageio.v2 as imageio
 from tqdm import trange
 from pathlib import Path
@@ -192,9 +191,7 @@ class InferencePipeline:
                     raise e
 
         del dummy_input_arr, dummy_input_pil
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        clear_memory_cache()
 
         if len(batch_size_hist) == 1:
             raise RuntimeError(
