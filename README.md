@@ -4,11 +4,22 @@ Pose estimation guided by a biomechanical model.
 
 
 ## Complete pipeline and code structure
+
+> ![IMPORTANT]
+> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of the original [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) repository.
+> To install it:
+>
+> ```bash
+> git clone https://github.com/sibocw/contrastive-unpaired-translation.git
+> cd contrastive-unpaired-translation
+> pip install -e .
+> ```
+
 ### Part I: Simulate motion priors in NeuroMechFly and generate renderings
 1. Run `python src/biomechpose/simulate_nmf/scripts/copy_kinematic_recording.py`
     - This script scans data from Aymanns et al. (2022) from the NeLy lab server (also publicly available on Harvard Dataverse: https://doi.org/10.7910/DVN/QQMNQK), extracts key kinematic data, and saves them as pickle files.
 2. Run `python src/biomechpose/simulate_nmf/scripts/run_simulation.py`
-    - This script selects non-resting segments from the recorded kinematics from Aymanns et al. Then, it simulates the selected segments using NeuroMechFly (https://neuromechfly.org/) and saves the visual renderings.
+    - This script selects non-resting segments from the recorded kinematics from Aymanns et al. Then, it simulates the selected segments using [NeuroMechFly](https://neuromechfly.org/) and saves the visual renderings.
     - Because Aymanns et al. reports _tethered_ fly behaviors, replaying them on flat terrain might result in failures (e.g. fly flipping upside down).  This script includes code that filters out such periods and further splits each segment into several (though typically just one) subsegments.
 
 ### Part II: Preprocess Spotlight behavior recordings
@@ -30,10 +41,10 @@ Pose estimation guided by a biomechanical model.
 1. Run `python src/biomechpose/style_transfer/scripts/extract_dataset.py`
     - This script randomly extracts subsets of NeuroMechFly rendering frames and Spotlight recording frames for training the style transfer model.
 2. Run `bash src/biomechpose/style_transfer/scripts/train_cut_model_caller.sh`
-    - This script trains a Contrastive Unpaired Translation (CUT) model using a demonstrative set of hyperparameters.
+    - This script trains a [Contrastive Unpaired Translation (CUT)](https://taesung.me/ContrastiveUnpairedTranslation/) model using a demonstrative set of hyperparameters.
     - This shell script calls the CLI from `src/biomechpose/style_transfer/scripts/train_cut_model.py`. The advantage of having a shell script that calls a Python CLI is that we can change hyperparameters simply by passing them to the Python training script via the CLI from the shell script(s), as opposed to having to make multiple copies of the Python training script. This is handy for hyperparameter tuning.
-    - Hyperparameters can be selected by training many models with different hyperparameters on a cluster (e.g. SCITAS). See `scripts_on_cluster/style_transfer_training/` for an example pipeline to machine-generate a batch of `*.run` scripts that can be submitted to the Slurm scheduler on a cluster.
-    - In the training procedure, we use Weights and Biases (https://wandb.ai/) to simplify the task of monitoring the training runs and visualizing their results.
+    - Hyperparameters can be selected by training many models with different hyperparameters on a cluster (e.g. [SCITAS](https://www.epfl.ch/research/facilities/scitas/)). See `scripts_on_cluster/style_transfer_training/` for an example pipeline to machine-generate a batch of `*.run` scripts that can be submitted to the [Slurm](https://slurm.schedmd.com/documentation.html) scheduler on a cluster.
+    - In the training procedure, we use [Weights and Biases](https://wandb.ai/) to simplify the task of monitoring the training runs and visualizing their results.
 
 > [!NOTE]
 > The following steps are only for evaluating trained models and selecting the best one(s). They should not be used during inference time.
