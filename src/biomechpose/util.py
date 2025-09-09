@@ -38,9 +38,12 @@ def set_random_seed(seed: int = 42) -> None:
 
 def configure_matplotlib_style():
     import matplotlib
+    import logging
 
     matplotlib.style.use("fast")
     plt.rcParams["font.family"] = "Arial"
+    # suppress matplotlib font manager warnings
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
 
 def print_hardware_availability(check_gpu: bool = False):
