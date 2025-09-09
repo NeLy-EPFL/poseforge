@@ -98,6 +98,9 @@ if __name__ == "__main__":
     # Set logging level
     logging.basicConfig(level=logging.INFO)
 
+    # Set memory cache cleanup interval
+    memory_cleanup_interval = 10  # Run memory cleanup every 10 simulations
+
     # Check if GPU is available
     ensure_gpu_availability()
     device = "cuda"
@@ -141,8 +144,8 @@ if __name__ == "__main__":
                 progress_bar=False,
             )
 
-            # Periodic memory cleanup every 10 simulations
-            if (i + 1) % 10 == 0:
+            # Periodic memory cleanup every once in a while
+            if (i + 1) % memory_cleanup_interval == 0:
                 logging.info(
                     f"Processed {i + 1} simulations. Running memory cleanup..."
                 )
