@@ -146,4 +146,4 @@ if __name__ == "__main__":
                 logging.info(
                     f"Processed {i + 1} simulations. Running memory cleanup..."
                 )
-                clear_memory_cache()
+                clear_memory_cache(logging_level=logging.INFO)

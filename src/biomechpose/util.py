@@ -43,7 +43,7 @@ def configure_matplotlib_style():
     matplotlib.style.use("fast")
     plt.rcParams["font.family"] = "Arial"
     # suppress matplotlib font manager warnings
-    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
 def print_hardware_availability(check_gpu: bool = False):
@@ -118,11 +118,14 @@ default_video_writing_ffmpeg_params = [
 ]
 
 
-def clear_memory_cache():
+def clear_memory_cache(logging_level=logging.DEBUG):
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         # Log current GPU memory usage
         allocated = torch.cuda.memory_allocated() / 1000**3  # GB
         cached = torch.cuda.memory_reserved() / 1000**3  # GB
-        logging.info(f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
+        logging.log(
+            logging_level,
+            f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached",
+        )
