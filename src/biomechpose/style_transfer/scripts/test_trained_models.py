@@ -1,14 +1,16 @@
-import re
 import numpy as np
 import torch
 import json
 import logging
-from typing import Any
 from tqdm import tqdm
 from pathlib import Path
 from joblib import Parallel, delayed
 
-from biomechpose.style_transfer import get_inference_pipeline, process_simulation
+from biomechpose.style_transfer import (
+    get_inference_pipeline,
+    process_simulation,
+    parse_hyperparameters_from_trial_name,
+)
 
 
 def test_checkpoint(
@@ -52,7 +54,7 @@ def test_checkpoint(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse and save hyperparameters
-    model_hparams = parse_hyperparameters(trial_name)
+    model_hparams = parse_hyperparameters_from_trial_name(trial_name)
     with open(output_dir / "metadata.json", "w") as f:
         metadata = {
             "hyperparameters": model_hparams,
@@ -74,23 +76,6 @@ def test_checkpoint(
         process_simulation(
             inference_pipeline, input_path, output_path, batch_size, progress_bar
         )
-
-
-def parse_hyperparameters(trial_name: str) -> dict[str, Any] | None:
-    """Given the name of a training trial, parse its hyperparameters and
-    return them as a dictionary."""
-    trial_name_regex = r"ngf(?P<ngf>\d+)_netG(?P<net>[a-zA-Z0-9]+)_batsize(?P<batsize>\d+)_lambGAN(?P<lambGAN>[\d.]+)"
-    match = re.match(trial_name_regex, trial_name)
-    if match:
-        return {
-            "ngf": int(match.group("ngf")),
-            "net": match.group("net"),
-            "batsize": int(match.group("batsize")),
-            "lambGAN": float(match.group("lambGAN")),
-        }
-    else:
-        logging.warning(f"Could not parse parameters from trial name: {trial_name}")
-        return None
 
 
 def find_runs_within_trial_dir(trial_dir: Path) -> dict[str, Path]:
