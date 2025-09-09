@@ -5,7 +5,7 @@ Pose estimation guided by a biomechanical model.
 
 ## Complete pipeline and code structure
 
-> ![IMPORTANT]
+> [!IMPORTANT]  
 > This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of the original [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) repository.
 > To install it:
 >
