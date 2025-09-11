@@ -72,7 +72,7 @@ if __name__ == "__main__":
             end_idx_exclusive = min(num_segments, start_idx + max_segs_per_run)
             segment_ids = list(range(start_idx, end_idx_exclusive))
             job_configs.append((in_path, segment_ids))
-    print(f"Total numer of recording sections to simulate: {num_segments_total}")
+    print(f"Total number of recording sections to simulate: {num_segments_total}")
 
     # Generate scripts
     for recorded_trial_path, segment_ids in job_configs:
