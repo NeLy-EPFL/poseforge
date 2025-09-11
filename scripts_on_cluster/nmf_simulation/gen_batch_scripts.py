@@ -56,6 +56,7 @@ def make_run_script(recorded_trial_path, segment_ids):
 if __name__ == "__main__":
     # Identify jobs to run
     job_configs = []
+    num_segments_total = 0
     for in_path in tqdm(trial_data_files, desc="Building job specs"):
         # Check how many segments there are per trial
         kinematic_recording_segments = load_kinematic_recording(
@@ -66,10 +67,12 @@ if __name__ == "__main__":
             filtered_frac_threshold=0.5,
         )
         num_segments = len(kinematic_recording_segments)
+        num_segments_total += num_segments
         for start_idx in range(0, num_segments, max_segs_per_run):
             end_idx_exclusive = min(num_segments, start_idx + max_segs_per_run)
             segment_ids = list(range(start_idx, end_idx_exclusive))
             job_configs.append((in_path, segment_ids))
+    print(f"Total numer of recording sections to simulate: {num_segments_total}")
 
     # Generate scripts
     for recorded_trial_path, segment_ids in job_configs:
