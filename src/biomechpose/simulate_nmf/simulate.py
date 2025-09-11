@@ -91,6 +91,9 @@ class SpotlightArena(FlatTerrain):
 class FlyForRendering(Fly):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.all_body_segment_names = [
+            body.name for body in self.model.find_all("body") if body.name != "FlyBody"
+        ]
         self._add_mesh_state_sensors()
         self._assign_colors()
         self.current_color_coding: int = -1
@@ -186,62 +189,40 @@ class FlyForRendering(Fly):
             objname=segment_name,
         )
 
-        # Rotation in body frame (xbody), i.e. at joint with parent body
-        sensors["quat_atparent"] = self.model.sensor.add(
-            "framequat",
-            name=f"{segment_name}_quat_atparent",
-            objtype="xbody",
-            objname=segment_name,
-        )
+        # The following sensors are not currently used, so we comment them out to
+        # avoid cluttering the simulation with too many sensors.
+        # # Rotation in body frame (xbody), i.e. at joint with parent body
+        # sensors["quat_atparent"] = self.model.sensor.add(
+        #     "framequat",
+        #     name=f"{segment_name}_quat_atparent",
+        #     objtype="xbody",
+        #     objname=segment_name,
+        # )
 
-        # Position in inertial frame (body), i.e. at COM of body
-        sensors["pos_com"] = self.model.sensor.add(
-            "framepos",
-            name=f"{segment_name}_pos_com",
-            objtype="body",
-            objname=segment_name,
-        )
+        # # Position in inertial frame (body), i.e. at COM of body
+        # sensors["pos_com"] = self.model.sensor.add(
+        #     "framepos",
+        #     name=f"{segment_name}_pos_com",
+        #     objtype="body",
+        #     objname=segment_name,
+        # )
 
-        # Rotation in inertial frame (body), i.e. at COM of body
-        sensors["quat_com"] = self.model.sensor.add(
-            "framequat",
-            name=f"{segment_name}_quat_com",
-            objtype="body",
-            objname=segment_name,
-        )
+        # # Rotation in inertial frame (body), i.e. at COM of body
+        # sensors["quat_com"] = self.model.sensor.add(
+        #     "framequat",
+        #     name=f"{segment_name}_quat_com",
+        #     objtype="body",
+        #     objname=segment_name,
+        # )
 
         return sensors
 
     def _add_mesh_state_sensors(self):
         self.body_segment_sensor_lookup = defaultdict(dict)
-
-        # Add sensors to leg segments
-        legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
-        leg_links = ["Coxa", "Femur", "Tibia"] + [f"Tarsus{i}" for i in range(1, 6)]
-        for leg in legs:
-            # Add keypoint position sensors for each link except the claws
-            # (which are already handled by FlyGym's end effector sensors)
-            for link in leg_links:
-                seg_name = f"{leg}{link}"
-                sensors = self._add_pos_and_quat_sensors(seg_name)
-                for sensor_type, sensor_obj in sensors.items():
-                    self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
-
-        # Add antennal segments
-        sides = ["L", "R"]
-        antennal_links = ["Pedicel", "Funiculus", "Arista"]
-        for side in sides:
-            for link in antennal_links:
-                seg_name = f"{side}{link}"
-                sensors = self._add_pos_and_quat_sensors(seg_name)
-                for sensor_type, sensor_obj in sensors.items():
-                    self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
-
-        # Add thorax
-        seg_name = "Thorax"
-        sensors = self._add_pos_and_quat_sensors(seg_name)
-        for sensor_type, sensor_obj in sensors.items():
-            self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
+        for segment_name in self.all_body_segment_names:
+            sensors = self._add_pos_and_quat_sensors(segment_name)
+            for sensor_type, sensor_obj in sensors.items():
+                self.body_segment_sensor_lookup[sensor_type][segment_name] = sensor_obj
 
 
 class SingleFlySimulationForRendering(SingleFlySimulation):
@@ -382,16 +363,31 @@ def run_neuromechfly_simulation(
     sim, camera, dm_camera, body_segment_sensor_lookup = set_up_simulation(
         render_window_size, render_play_speed, render_fps, sim_timestep
     )
+    body_prefix = [
+        x for x in sim.physics.named.data.xpos.axes.row.names if x.endswith("/FlyBody")
+    ]
+    assert (
+        len(body_prefix) == 1
+    ), r"Expecting exactly one body named '{prefix}/FlyBody'."
+    body_prefix = body_prefix[0].split("/")[0]  # should be something like "0/" or "1/"
+    body_segments_list_with_prefix = [
+        f"{body_prefix}/{segment_name}"
+        for segment_name in sim.fly.all_body_segment_names
+    ]
 
     # list[float]
     timestamps_hist = []
     # list[ndarray of shape (n_joints,)]
     joints_angles_hist = []
     body_segment_state_hists = {
+        # Determined through framepos and framequat sensors added to each body segment:
         "pos_atparent": [],  # list[ndarray of shape (n_segments, 3)]
         "pos_com": [],  # list[ndarray of shape (3,)]
         "quat_atparent": [],  # list[ndarray of shape (n_segments, 4)]
         "quat_com": [],  # list[ndarray of shape (4,)]
+        # Global xpos/xquat accessed through MjData:
+        "pos_global": [],
+        "quat_global": [],
     }
     # list[ndarray of shape (3, 3), ie. (forward/left/up, x/y/z)]
     cardinal_vectors_hist = []
@@ -402,7 +398,7 @@ def run_neuromechfly_simulation(
 
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
-        # if sim_frame_id == 5000: break  # For debugging, remove later
+        # if sim_frame_id == 3000: break  # For debugging, comment out in production
         action = {"joints": trajectories_interp[sim_frame_id]}
         try:
             observation, reward, terminated, truncated, info = sim.step(action)
@@ -421,12 +417,18 @@ def run_neuromechfly_simulation(
         # Store joint angles
         joints_angles_hist.append(observation["joints"][0, :].copy())
 
-        # Store mesh states
+        # Store mesh states (from sensors added to each body segment)
         for sensor_type, sensor_info in body_segment_sensor_lookup.items():
             num_sensors = len(sensor_info["segments_list"])
             bound_sensors = sensor_info["bound_sensors_list"]
             sensor_readings = bound_sensors.sensordata.copy().reshape((num_sensors, -1))
             body_segment_state_hists[sensor_type].append(sensor_readings)
+
+        # Store global body segment states (from MjData)
+        pos_global = sim.physics.named.data.xpos[body_segments_list_with_prefix]
+        quat_global = sim.physics.named.data.xquat[body_segments_list_with_prefix]
+        body_segment_state_hists["pos_global"].append(pos_global)
+        body_segment_state_hists["quat_global"].append(quat_global)
 
         # Store forward vector
         cardinal_vectors_hist.append(observation["cardinal_vectors"].copy())
@@ -444,6 +446,8 @@ def run_neuromechfly_simulation(
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
             break
 
+    sim.close()
+
     hist_dict = {
         "values": {
             "timestamp": timestamps_hist,
@@ -455,9 +459,7 @@ def run_neuromechfly_simulation(
         },
         "keys": {
             "joint_angles": sim.fly.actuated_joints,
-            # body_seg_states: all sensor types share the same list of body segments.
-            # Use pos_com just as an example
-            "body_seg_states": body_segment_sensor_lookup["pos_com"]["segments_list"],
+            "body_segments": sim.fly.all_body_segment_names,
             "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
         },
     }
@@ -478,7 +480,11 @@ def make_kinematic_states_dataframe(hist_dict):
     for sensor_type, sensor_data in hist_dict["values"]["body_seg_states"].items():
         # sensor_data_arr has shape shape (nframes, nsegs, 3 for pos or 4 quaternion)
         sensor_data_arr = np.array(sensor_data, dtype=np.float32)
-        for i, seg_name in enumerate(hist_dict["keys"]["body_seg_states"]):
+        if sensor_data_arr.size == 0:
+            # This sensor has not actually been added (e.g. commented out in
+            # FlyForRendering._add_pos_and_quat_sensors because it is not used)
+            continue
+        for i, seg_name in enumerate(hist_dict["keys"]["body_segments"]):
             list_of_arrs = list(sensor_data_arr[:, i, :])
             columns[f"body_seg_{sensor_type}_{seg_name}"] = list_of_arrs
 
