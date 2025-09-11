@@ -9,6 +9,7 @@ readme = "README.md"
 requires-python = "3.12.*"
 dependencies = [
     "numpy>=2.0,<3",
+    "scipy>=1.16.1,<2",
     "pandas>=2.3,<3",
     "jupyter>=1.1,<2",
     "matplotlib>=3.10,<4",
@@ -29,6 +30,7 @@ dependencies = [
     "distinctipy>=1.3.4,<2",
     "psutil>=7.0.0,<8",
     "seaborn==0.13.2",
+    "pyvista==0.46.3",
     # "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",
 ]
 
