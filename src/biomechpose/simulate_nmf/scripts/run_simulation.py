@@ -73,7 +73,8 @@ if __name__ == "__main__":
         trial_name = trial_path.stem
         kinematic_recording_segments = load_kinematic_recording(
             recording_path=trial_path,
-            min_duration_frames=10,
+            min_duration_sec=0.2,
+            input_timestep=input_timestep,
             filter_size=5,
             filtered_frac_threshold=0.5,
         )
@@ -81,7 +82,16 @@ if __name__ == "__main__":
         num_segments = len(kinematic_recording_segments)
         print(f"### Processing trial: {trial_name} ({num_segments} segments) ###")
         for segment_id, segment in enumerate(kinematic_recording_segments):
-            print(f"=== Simulating segment {segment_id + 1}/{num_segments} ===")
+            print(f"=== Simulating segment #{segment_id} ({num_segments} total) ===")
             output_subdir = output_basedir / trial_name / f"segment_{segment_id:03d}"
-            simulate_one_segment(segment, output_subdir, input_timestep, sim_timestep)
-            postprocess_segment(output_subdir, visualize=True)
+            is_success = simulate_one_segment(
+                segment,
+                output_subdir,
+                input_timestep,
+                sim_timestep,
+                min_sim_duration_sec=0.2,
+            )
+            if is_success:
+                postprocess_segment(
+                    output_subdir, visualize=True, min_subsegment_duration_sec=0.1
+                )

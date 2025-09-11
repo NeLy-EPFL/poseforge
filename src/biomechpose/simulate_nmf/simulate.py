@@ -358,7 +358,12 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
 
 
 def run_neuromechfly_simulation(
-    trajectories_interp, render_window_size, render_play_speed, render_fps, sim_timestep
+    trajectories_interp,
+    render_window_size,
+    render_play_speed,
+    render_fps,
+    sim_timestep,
+    min_sim_duration_sec,
 ):
     sim, camera, dm_camera, body_segment_sensor_lookup = set_up_simulation(
         render_window_size, render_play_speed, render_fps, sim_timestep
@@ -446,7 +451,15 @@ def run_neuromechfly_simulation(
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
             break
 
+    final_simulated_time_sec = sim.curr_time
     sim.close()
+
+    if final_simulated_time_sec < min_sim_duration_sec or sim_frame_id == 0:
+        print(
+            f"Simulation failed too early at {final_simulated_time_sec:.3f} sec. "
+            f"Discarding results."
+        )
+        return camera, None
 
     hist_dict = {
         "values": {
@@ -519,8 +532,14 @@ def simulate_one_segment(
     render_fps: int = 300,
     render_play_speed: float = 0.1,
     render_window_size=(720, 720),
-) -> None:
-    """Simulate a single segment of kinematic recording in FlyGym."""
+    min_sim_duration_sec: float = 0.2,
+) -> bool:
+    """Simulate a single segment of kinematic recording in FlyGym. Note
+    that no result will be saved if simulation fails before
+    `min_sim_duration_sec` is reached.
+    
+    This function returns whether or not the simulation was successful.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Interpolate the trajectories to match the simulation timestep
@@ -538,7 +557,12 @@ def simulate_one_segment(
         render_play_speed,
         render_fps,
         sim_timestep,
+        min_sim_duration_sec,
     )
+    
+    # Do nothing if simulation failed before the minimum required duration is reached
+    if hist_dict is None:
+        return False
 
     # Save kinematic states as Pandas DataFrame
     kinematic_states_df = make_kinematic_states_dataframe(hist_dict)
@@ -546,3 +570,5 @@ def simulate_one_segment(
 
     # Save rendered frames as a video
     camera.save_video(output_dir)
+    
+    return True
