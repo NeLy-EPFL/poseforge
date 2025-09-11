@@ -5,7 +5,7 @@
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 18
 #SBATCH --mem 96GB
-#SBATCH --time 4:00:00
+#SBATCH --time 10:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
 #SBATCH --output <<<LOG_OUTPUT_FILE>>>

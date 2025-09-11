@@ -5,7 +5,7 @@ from biomechpose.simulate_nmf.data import load_kinematic_recording
 
 
 # Job execution parameters
-max_segs_per_run = 5
+max_segs_per_run = 20
 
 # Data filtering parameters
 min_duration_frames = 10
@@ -28,8 +28,8 @@ log_dir.mkdir(exist_ok=True, parents=True)
 # Define paths relevant to data
 output_basedir = project_dir / "bulk_data/nmf_rendering"
 recorded_trials_dir = project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/"
-# trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
-trial_data_files = [project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"]
+trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
+
 # Read template script
 with open(template_path) as f:
     template_str = f.read()
@@ -60,7 +60,8 @@ if __name__ == "__main__":
         # Check how many segments there are per trial
         kinematic_recording_segments = load_kinematic_recording(
             recording_path=in_path,
-            min_duration_frames=10,
+            min_duration_sec=0.2,
+            input_timestep=0.01,
             filter_size=5,
             filtered_frac_threshold=0.5,
         )
