@@ -364,6 +364,7 @@ def run_neuromechfly_simulation(
     render_fps,
     sim_timestep,
     min_sim_duration_sec,
+    max_sim_steps=None,
 ):
     sim, camera, dm_camera, body_segment_sensor_lookup = set_up_simulation(
         render_window_size, render_play_speed, render_fps, sim_timestep
@@ -403,7 +404,11 @@ def run_neuromechfly_simulation(
 
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
-        # if sim_frame_id == 3000: break  # For debugging, comment out in production
+        # Stop if we have reached the desired number of simulation steps (for testing)
+        if max_sim_steps is not None and sim_frame_id >= max_sim_steps:
+            break
+
+        # Step physics simulation
         action = {"joints": trajectories_interp[sim_frame_id]}
         try:
             observation, reward, terminated, truncated, info = sim.step(action)
@@ -533,12 +538,32 @@ def simulate_one_segment(
     render_play_speed: float = 0.1,
     render_window_size=(720, 720),
     min_sim_duration_sec: float = 0.2,
+    max_sim_steps: int | None = None,
 ) -> bool:
     """Simulate a single segment of kinematic recording in FlyGym. Note
     that no result will be saved if simulation fails before
     `min_sim_duration_sec` is reached.
-    
-    This function returns whether or not the simulation was successful.
+
+    Args:
+        kinematic_recording_segment (pd.DataFrame): A segment of kinematic
+            recording, as returned by `load_kinematic_recording()`.
+        output_dir (Path): Directory to save simulation results.
+        input_timestep (float): Timestep of input kinematics (from Aymanns
+            et al. 2022).
+        sim_timestep (float): Timestep to use in the physics simulation.
+        render_fps (int): FPS to use when rendering the simulation.
+        render_play_speed (float): Play speed to use when rendering the
+            simulation.
+        render_window_size (tuple[int, int]): Window size to use when
+            rendering the simulation.
+        min_sim_duration_sec (float): Minimum simulation duration to
+            consider the simulation successful.
+        max_sim_steps (int | None): If not None, limit the number of
+            simulation steps to this number. This is mainly for testing.
+
+    Returns:
+        bool: Whether the simulation was successful (i.e. reached
+            `min_sim_duration_sec`).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -558,8 +583,9 @@ def simulate_one_segment(
         render_fps,
         sim_timestep,
         min_sim_duration_sec,
+        max_sim_steps=max_sim_steps,
     )
-    
+
     # Do nothing if simulation failed before the minimum required duration is reached
     if hist_dict is None:
         return False
@@ -570,5 +596,5 @@ def simulate_one_segment(
 
     # Save rendered frames as a video
     camera.save_video(output_dir)
-    
+
     return True
