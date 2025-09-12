@@ -309,6 +309,7 @@ class CameraForRendering(Camera):
 
 
 def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep):
+    # Set up fly
     fly = FlyForRendering(
         init_pose="stretch",
         control="position",
@@ -317,34 +318,54 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         spawn_pos=(0, 0, 0.5),
         joint_stiffness=0.1,
     )
+
+    # Set up camera
     camera_params = {
         "mode": "track",
         "pos": (0, 0, -100),
         "euler": (0, np.pi, -np.pi / 2),
         "fovy": 5,
     }
+    # The FlyGym camera receives two parameters: a FPS and a play speed. For example,
+    # you might tell the camera "I want a video that replays my simulation at 0.1 speed,
+    # and I want this slow-mo video to have a FPS of 25 FPS." You give these parameters
+    # to the camera, and the camera will figure out "I need save a snapshot every
+    # play_speed/fps = 0.1/25 = 0.004 seconds."
+    # However, in our case, we want to have a fixed data saving/rendering speed, for
+    # example 300 Hz to match Spotlight recordings. We might also want a nice number
+    # (e.g. 0.1x) for the play speed. This means that instead of deciding the effective
+    # data saving/rendering rate based on the desired play speed and FPS, we need to
+    # decide the FPS based on the desired play speed and the target data rate.
+    flygym_camera_fps = render_fps * render_play_speed
     camera = CameraForRendering(
         attachment_point=fly.model.worldbody,
         camera_name=f"flytrack_cam",
         camera_parameters=camera_params,
         window_size=render_window_size,
         play_speed=render_play_speed,
-        fps=render_fps * render_play_speed,
+        fps=flygym_camera_fps,
         draw_contacts=False,
         play_speed_text=False,
     )
+
+    # Set up simulation
     sim = SingleFlySimulationForRendering(
         fly=fly,
         cameras=[camera],
         arena=SpotlightArena(),
         timestep=sim_timestep,
     )
+    # Get a dm_control.mujoco.Camera object shadowing the FlyGym Camera
+    # that we set up above. This is used to extract the camera matrix more
+    # easily during simulation.
     dm_camera = dm_control.mujoco.Camera(
         sim.physics,
         camera_id=camera.camera_id,
         width=camera.window_size[0],
         height=camera.window_size[1],
     )
+
+    # Set up state sensors for body segments
     body_segment_sensor_lookup = {}
     for sensor_type, sensors_dict in fly.body_segment_sensor_lookup.items():
         body_segment_sensor_lookup[sensor_type] = {
@@ -534,7 +555,7 @@ def simulate_one_segment(
     output_dir: Path,
     input_timestep: float,
     sim_timestep: float,
-    render_fps: int = 300,
+    output_data_freq: int = 300,
     render_play_speed: float = 0.1,
     render_window_size=(720, 720),
     min_sim_duration_sec: float = 0.2,
@@ -551,9 +572,14 @@ def simulate_one_segment(
         input_timestep (float): Timestep of input kinematics (from Aymanns
             et al. 2022).
         sim_timestep (float): Timestep to use in the physics simulation.
-        render_fps (int): FPS to use when rendering the simulation.
+        output_data_freq (int): frequency (in Hz) to save data and render
+            frames. Note that is not the frequency of the physics. It only
+            affects the data saving rate.
         render_play_speed (float): Play speed to use when rendering the
-            simulation.
+            simulation. This affects neither the simulation itself nor the
+            rendering and saving of data during the simulation. It only
+            affects how the rendered video is played (i.e. the metadata of
+            the output video used by media players).
         render_window_size (tuple[int, int]): Window size to use when
             rendering the simulation.
         min_sim_duration_sec (float): Minimum simulation duration to
@@ -564,6 +590,26 @@ def simulate_one_segment(
     Returns:
         bool: Whether the simulation was successful (i.e. reached
             `min_sim_duration_sec`).
+
+    Example:
+        Assume we want to simulate data from Aymanns et al. 2022 in
+        NeuroMechFly. We need to understand/decide:
+
+            1. At what frequency were the original kinematics from Aymanns
+               et al. recorded? The answer is 100 Hz.
+            2. At what frequency do we want to run the physics simulation?
+               For stability, let's use a small timestep of 0.0001 sec.
+            3. At what frequency do we want to save the simulation data and
+               rendered frames? Let's say we want to match the simulated
+               video with Spotlight behavior recordings recorded at 300 Hz.
+            4. At what speed do we want to play the rendered video? This is
+               for visualization only and does not affect the simulation or
+               data saving. Let's say we want to use a slow play speed of
+               0.1x to better see the details of the fly's movements.
+
+        Then, we should set `output_data_freq` to 300, `input_timestep` to
+        0.01, `sim_timestep` to 0.0001, and `render_play_speed` to 0.1 when
+        calling this function.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -580,7 +626,7 @@ def simulate_one_segment(
         trajectories_interp,
         render_window_size,
         render_play_speed,
-        render_fps,
+        output_data_freq,
         sim_timestep,
         min_sim_duration_sec,
         max_sim_steps=max_sim_steps,

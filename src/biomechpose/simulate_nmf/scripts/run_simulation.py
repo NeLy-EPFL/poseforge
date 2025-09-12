@@ -64,6 +64,8 @@ def simulate_using_kinematic_prior(
     segment_ids: list[int] | None = None,
     input_timestep: float = 0.01,
     sim_timestep: float = 0.0001,
+    output_data_freq: int = 300,
+    render_play_speed: float = 1.0,
     max_segments_per_trial: int | None = None,
     max_sim_steps_per_segment: int | None = None,
 ) -> None:
@@ -79,6 +81,15 @@ def simulate_using_kinematic_prior(
         input_timestep (float): Timestep of input kinematics (from Aymanns
             et al. 2022).
         sim_timestep (float): Timestep to use in the physics simulation.
+        output_data_freq (int): frequency (in Hz) to save data and render
+            frames. Note that is not the frequency of the physics. It only
+            affects the data saving rate. For example, if we want to match
+            simulations to Spotlight recordings captured at 300 FPS, we
+            should set this to 300.
+        render_play_speed (float): Play speed to use when rendering the
+            simulation. This affects neither the simulation itself nor the
+            rendering and saving of data during the simulation. It only
+            affects how the rendered video is played.
         max_segments_per_trial (int | None): If not None, limit the number
             of segments per trial to this number. This is mainly for
             testing.
@@ -124,10 +135,12 @@ def simulate_using_kinematic_prior(
         segment = kinematic_recording_segments[segment_id]
         output_subdir = trial_output_dir / f"segment_{segment_id:03d}"
         is_success = simulate_one_segment(
-            segment,
-            output_subdir,
-            input_timestep,
-            sim_timestep,
+            kinematic_recording_segment=segment,
+            output_dir=output_subdir,
+            input_timestep=input_timestep,
+            sim_timestep=sim_timestep,
+            output_data_freq=output_data_freq,
+            render_play_speed=render_play_speed,
             min_sim_duration_sec=0.2,
             max_sim_steps=max_sim_steps_per_segment,
         )
