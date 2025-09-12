@@ -300,7 +300,7 @@ def get_inference_pipeline(
 
     # Other parameters must be stated explicitly
     ngf = params["ngf"]
-    netG = params["net"]
+    netG = params["netG"]
 
     # Determine device ("cpu" for CPU vs. "cuda" for GPU)
     if device == "cuda" and not torch.cuda.is_available():
