@@ -1,0 +1,46 @@
+#!/bin/bash -l
+
+#SBATCH --job-name cut_<<<NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 32
+#SBATCH --mem 64GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=l40s
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output <<<STDOUT_STDERR_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+conda activate biomechpose
+
+# Define paths
+project_root="/home/sibwang/biomechpose"
+inference_script_path="src/biomechpose/style_transfer/scripts/run_inference.py"
+simulations_basedir="bulk_data/nmf_rendering/"
+output_basedir="bulk_data/style_transfer/production/translated_videos"
+input_video_filename="processed_nmf_sim_render_colorcode_0.mp4"
+
+# Setup
+cd $project_root
+
+# Training
+echo "Start running inference at $(date)"
+
+python -u $inference_script_path \
+    --checkpoint-path <<<CHECKPOINT_PATH>>> \
+    --simulations-basedir $simulations_basedir \
+    --output-basedir $output_basedir \
+    --ngf <<<NGF>>> \
+    --netG "<<<NETG>>>" \
+    --training-batch-size <<<TRAINING_BATCH_SIZE>>> \
+    --lambGAN <<<LAMBDA_GAN>>> \
+    --input-video-filename $input_video_filename \
+    --output-video-filename <<<OUTPUT_VIDEO_FILENAME>>> \
+    --device "cuda" \
+    --memory-cleanup-interval 10 \
+    --verbose
+
+echo "Inference ends at $(date)"

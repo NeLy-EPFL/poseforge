@@ -29,7 +29,7 @@ def find_all_simulation_paths(nmf_renderings_basedir: Path) -> list[Path]:
 
 def run_inference_cli(
     checkpoint_path: str,
-    simulation_base_dir: str,
+    simulations_basedir: str,
     output_basedir: str,
     ngf: int,
     netG: str,
@@ -47,13 +47,13 @@ def run_inference_cli(
 
     Args:
         checkpoint_path (str): Path to the trained model checkpoint file.
-        simulation_base_dir (str): Base directory containing NeuroMechFly
+        simulations_basedir (str): Base directory containing NeuroMechFly
             simulation subdirectories. All directories nested under this base
             base directory that contain a "processed_kinematic_states.pkl"
             file will be processed.
         output_basedir (str): Base directory to save styled videos. The
             directory structure under this base directory will mirror that
-            under `simulation_base_dir`.
+            under `simulations_basedir`.
         ngf (int): Number of generator filters in the last conv layer. This
             must match the value used during training.
         netG (str): Type of generator architecture. This must match the
@@ -84,7 +84,7 @@ def run_inference_cli(
         verbose (bool): Whether to print detailed logs.
     """
     checkpoint_path = Path(checkpoint_path)
-    simulation_base_dir = Path(simulation_base_dir)
+    simulations_basedir = Path(simulations_basedir)
     output_basedir = Path(output_basedir)
 
     # Set logging level
@@ -94,7 +94,7 @@ def run_inference_cli(
         logging.basicConfig(level=logging.WARNING)
 
     # Index simulations to process
-    all_simulation_paths = find_all_simulation_paths(Path(simulation_base_dir))
+    all_simulation_paths = find_all_simulation_paths(Path(simulations_basedir))
     print(f"Total number of simulations to process: {len(all_simulation_paths)}")
     if len(all_simulation_paths) == 0:
         return
@@ -115,7 +115,7 @@ def run_inference_cli(
             example_input_video_path, frame_indices=[0]
         )
         inference_batch_size = inference_pipeline.detect_max_batch_size(
-            input_image_shape=video_frames[0].shape, exponential=True
+            input_image_shape=video_frames[0].shape, exponential=True, end=512
         )
 
     # Process each simulation
@@ -123,7 +123,7 @@ def run_inference_cli(
     for i, simulation_path in enumerate(tqdm(all_simulation_paths, disable=None)):
         input_video_path = simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
         output_dir = Path(
-            str(simulation_path).replace(str(simulation_base_dir), str(output_basedir))
+            str(simulation_path).replace(str(simulations_basedir), str(output_basedir))
         )
         assert (
             output_basedir in output_dir.parents
@@ -153,7 +153,7 @@ if __name__ == "__main__":
     # # Example call
     # run_inference_cli(
     #     checkpoint_path="bulk_data/style_transfer/production/trained_models/ngf16_netGsmallstylegan2_batsize2_lambGAN0.2/121_net_G.pth",
-    #     simulation_base_dir="bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/",
+    #     simulations_basedir="bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/",
     #     output_basedir="bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly1_trial001",
     #     ngf=16,
     #     netG="smallstylegan2",
