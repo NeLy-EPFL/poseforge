@@ -91,6 +91,9 @@ class SpotlightArena(FlatTerrain):
 class FlyForRendering(Fly):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.all_body_segment_names = [
+            body.name for body in self.model.find_all("body") if body.name != "FlyBody"
+        ]
         self._add_mesh_state_sensors()
         self._assign_colors()
         self.current_color_coding: int = -1
@@ -186,62 +189,40 @@ class FlyForRendering(Fly):
             objname=segment_name,
         )
 
-        # Rotation in body frame (xbody), i.e. at joint with parent body
-        sensors["quat_atparent"] = self.model.sensor.add(
-            "framequat",
-            name=f"{segment_name}_quat_atparent",
-            objtype="xbody",
-            objname=segment_name,
-        )
+        # The following sensors are not currently used, so we comment them out to
+        # avoid cluttering the simulation with too many sensors.
+        # # Rotation in body frame (xbody), i.e. at joint with parent body
+        # sensors["quat_atparent"] = self.model.sensor.add(
+        #     "framequat",
+        #     name=f"{segment_name}_quat_atparent",
+        #     objtype="xbody",
+        #     objname=segment_name,
+        # )
 
-        # Position in inertial frame (body), i.e. at COM of body
-        sensors["pos_com"] = self.model.sensor.add(
-            "framepos",
-            name=f"{segment_name}_pos_com",
-            objtype="body",
-            objname=segment_name,
-        )
+        # # Position in inertial frame (body), i.e. at COM of body
+        # sensors["pos_com"] = self.model.sensor.add(
+        #     "framepos",
+        #     name=f"{segment_name}_pos_com",
+        #     objtype="body",
+        #     objname=segment_name,
+        # )
 
-        # Rotation in inertial frame (body), i.e. at COM of body
-        sensors["quat_com"] = self.model.sensor.add(
-            "framequat",
-            name=f"{segment_name}_quat_com",
-            objtype="body",
-            objname=segment_name,
-        )
+        # # Rotation in inertial frame (body), i.e. at COM of body
+        # sensors["quat_com"] = self.model.sensor.add(
+        #     "framequat",
+        #     name=f"{segment_name}_quat_com",
+        #     objtype="body",
+        #     objname=segment_name,
+        # )
 
         return sensors
 
     def _add_mesh_state_sensors(self):
         self.body_segment_sensor_lookup = defaultdict(dict)
-
-        # Add sensors to leg segments
-        legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
-        leg_links = ["Coxa", "Femur", "Tibia"] + [f"Tarsus{i}" for i in range(1, 6)]
-        for leg in legs:
-            # Add keypoint position sensors for each link except the claws
-            # (which are already handled by FlyGym's end effector sensors)
-            for link in leg_links:
-                seg_name = f"{leg}{link}"
-                sensors = self._add_pos_and_quat_sensors(seg_name)
-                for sensor_type, sensor_obj in sensors.items():
-                    self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
-
-        # Add antennal segments
-        sides = ["L", "R"]
-        antennal_links = ["Pedicel", "Funiculus", "Arista"]
-        for side in sides:
-            for link in antennal_links:
-                seg_name = f"{side}{link}"
-                sensors = self._add_pos_and_quat_sensors(seg_name)
-                for sensor_type, sensor_obj in sensors.items():
-                    self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
-
-        # Add thorax
-        seg_name = "Thorax"
-        sensors = self._add_pos_and_quat_sensors(seg_name)
-        for sensor_type, sensor_obj in sensors.items():
-            self.body_segment_sensor_lookup[sensor_type][seg_name] = sensor_obj
+        for segment_name in self.all_body_segment_names:
+            sensors = self._add_pos_and_quat_sensors(segment_name)
+            for sensor_type, sensor_obj in sensors.items():
+                self.body_segment_sensor_lookup[sensor_type][segment_name] = sensor_obj
 
 
 class SingleFlySimulationForRendering(SingleFlySimulation):
@@ -328,6 +309,7 @@ class CameraForRendering(Camera):
 
 
 def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep):
+    # Set up fly
     fly = FlyForRendering(
         init_pose="stretch",
         control="position",
@@ -336,34 +318,54 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         spawn_pos=(0, 0, 0.5),
         joint_stiffness=0.1,
     )
+
+    # Set up camera
     camera_params = {
         "mode": "track",
         "pos": (0, 0, -100),
         "euler": (0, np.pi, -np.pi / 2),
         "fovy": 5,
     }
+    # The FlyGym camera receives two parameters: a FPS and a play speed. For example,
+    # you might tell the camera "I want a video that replays my simulation at 0.1 speed,
+    # and I want this slow-mo video to have a FPS of 25 FPS." You give these parameters
+    # to the camera, and the camera will figure out "I need save a snapshot every
+    # play_speed/fps = 0.1/25 = 0.004 seconds."
+    # However, in our case, we want to have a fixed data saving/rendering speed, for
+    # example 300 Hz to match Spotlight recordings. We might also want a nice number
+    # (e.g. 0.1x) for the play speed. This means that instead of deciding the effective
+    # data saving/rendering rate based on the desired play speed and FPS, we need to
+    # decide the FPS based on the desired play speed and the target data rate.
+    flygym_camera_fps = render_fps * render_play_speed
     camera = CameraForRendering(
         attachment_point=fly.model.worldbody,
         camera_name=f"flytrack_cam",
         camera_parameters=camera_params,
         window_size=render_window_size,
         play_speed=render_play_speed,
-        fps=render_fps * render_play_speed,
+        fps=flygym_camera_fps,
         draw_contacts=False,
         play_speed_text=False,
     )
+
+    # Set up simulation
     sim = SingleFlySimulationForRendering(
         fly=fly,
         cameras=[camera],
         arena=SpotlightArena(),
         timestep=sim_timestep,
     )
+    # Get a dm_control.mujoco.Camera object shadowing the FlyGym Camera
+    # that we set up above. This is used to extract the camera matrix more
+    # easily during simulation.
     dm_camera = dm_control.mujoco.Camera(
         sim.physics,
         camera_id=camera.camera_id,
         width=camera.window_size[0],
         height=camera.window_size[1],
     )
+
+    # Set up state sensors for body segments
     body_segment_sensor_lookup = {}
     for sensor_type, sensors_dict in fly.body_segment_sensor_lookup.items():
         body_segment_sensor_lookup[sensor_type] = {
@@ -377,21 +379,42 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
 
 
 def run_neuromechfly_simulation(
-    trajectories_interp, render_window_size, render_play_speed, render_fps, sim_timestep
+    trajectories_interp,
+    render_window_size,
+    render_play_speed,
+    render_fps,
+    sim_timestep,
+    min_sim_duration_sec,
+    max_sim_steps=None,
 ):
     sim, camera, dm_camera, body_segment_sensor_lookup = set_up_simulation(
         render_window_size, render_play_speed, render_fps, sim_timestep
     )
+    body_prefix = [
+        x for x in sim.physics.named.data.xpos.axes.row.names if x.endswith("/FlyBody")
+    ]
+    assert (
+        len(body_prefix) == 1
+    ), r"Expecting exactly one body named '{prefix}/FlyBody'."
+    body_prefix = body_prefix[0].split("/")[0]  # should be something like "0/" or "1/"
+    body_segments_list_with_prefix = [
+        f"{body_prefix}/{segment_name}"
+        for segment_name in sim.fly.all_body_segment_names
+    ]
 
     # list[float]
     timestamps_hist = []
     # list[ndarray of shape (n_joints,)]
     joints_angles_hist = []
     body_segment_state_hists = {
+        # Determined through framepos and framequat sensors added to each body segment:
         "pos_atparent": [],  # list[ndarray of shape (n_segments, 3)]
         "pos_com": [],  # list[ndarray of shape (3,)]
         "quat_atparent": [],  # list[ndarray of shape (n_segments, 4)]
         "quat_com": [],  # list[ndarray of shape (4,)]
+        # Global xpos/xquat accessed through MjData:
+        "pos_global": [],
+        "quat_global": [],
     }
     # list[ndarray of shape (3, 3), ie. (forward/left/up, x/y/z)]
     cardinal_vectors_hist = []
@@ -402,7 +425,11 @@ def run_neuromechfly_simulation(
 
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
-        # if sim_frame_id == 5000: break  # For debugging, remove later
+        # Stop if we have reached the desired number of simulation steps (for testing)
+        if max_sim_steps is not None and sim_frame_id >= max_sim_steps:
+            break
+
+        # Step physics simulation
         action = {"joints": trajectories_interp[sim_frame_id]}
         try:
             observation, reward, terminated, truncated, info = sim.step(action)
@@ -421,12 +448,18 @@ def run_neuromechfly_simulation(
         # Store joint angles
         joints_angles_hist.append(observation["joints"][0, :].copy())
 
-        # Store mesh states
+        # Store mesh states (from sensors added to each body segment)
         for sensor_type, sensor_info in body_segment_sensor_lookup.items():
             num_sensors = len(sensor_info["segments_list"])
             bound_sensors = sensor_info["bound_sensors_list"]
             sensor_readings = bound_sensors.sensordata.copy().reshape((num_sensors, -1))
             body_segment_state_hists[sensor_type].append(sensor_readings)
+
+        # Store global body segment states (from MjData)
+        pos_global = sim.physics.named.data.xpos[body_segments_list_with_prefix]
+        quat_global = sim.physics.named.data.xquat[body_segments_list_with_prefix]
+        body_segment_state_hists["pos_global"].append(pos_global)
+        body_segment_state_hists["quat_global"].append(quat_global)
 
         # Store forward vector
         cardinal_vectors_hist.append(observation["cardinal_vectors"].copy())
@@ -444,6 +477,16 @@ def run_neuromechfly_simulation(
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
             break
 
+    final_simulated_time_sec = sim.curr_time
+    sim.close()
+
+    if final_simulated_time_sec < min_sim_duration_sec or sim_frame_id == 0:
+        print(
+            f"Simulation failed too early at {final_simulated_time_sec:.3f} sec. "
+            f"Discarding results."
+        )
+        return camera, None
+
     hist_dict = {
         "values": {
             "timestamp": timestamps_hist,
@@ -455,9 +498,7 @@ def run_neuromechfly_simulation(
         },
         "keys": {
             "joint_angles": sim.fly.actuated_joints,
-            # body_seg_states: all sensor types share the same list of body segments.
-            # Use pos_com just as an example
-            "body_seg_states": body_segment_sensor_lookup["pos_com"]["segments_list"],
+            "body_segments": sim.fly.all_body_segment_names,
             "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
         },
     }
@@ -478,7 +519,11 @@ def make_kinematic_states_dataframe(hist_dict):
     for sensor_type, sensor_data in hist_dict["values"]["body_seg_states"].items():
         # sensor_data_arr has shape shape (nframes, nsegs, 3 for pos or 4 quaternion)
         sensor_data_arr = np.array(sensor_data, dtype=np.float32)
-        for i, seg_name in enumerate(hist_dict["keys"]["body_seg_states"]):
+        if sensor_data_arr.size == 0:
+            # This sensor has not actually been added (e.g. commented out in
+            # FlyForRendering._add_pos_and_quat_sensors because it is not used)
+            continue
+        for i, seg_name in enumerate(hist_dict["keys"]["body_segments"]):
             list_of_arrs = list(sensor_data_arr[:, i, :])
             columns[f"body_seg_{sensor_type}_{seg_name}"] = list_of_arrs
 
@@ -510,11 +555,62 @@ def simulate_one_segment(
     output_dir: Path,
     input_timestep: float,
     sim_timestep: float,
-    render_fps: int = 300,
+    output_data_freq: int = 300,
     render_play_speed: float = 0.1,
     render_window_size=(720, 720),
-) -> None:
-    """Simulate a single segment of kinematic recording in FlyGym."""
+    min_sim_duration_sec: float = 0.2,
+    max_sim_steps: int | None = None,
+) -> bool:
+    """Simulate a single segment of kinematic recording in FlyGym. Note
+    that no result will be saved if simulation fails before
+    `min_sim_duration_sec` is reached.
+
+    Args:
+        kinematic_recording_segment (pd.DataFrame): A segment of kinematic
+            recording, as returned by `load_kinematic_recording()`.
+        output_dir (Path): Directory to save simulation results.
+        input_timestep (float): Timestep of input kinematics (from Aymanns
+            et al. 2022).
+        sim_timestep (float): Timestep to use in the physics simulation.
+        output_data_freq (int): frequency (in Hz) to save data and render
+            frames. Note that is not the frequency of the physics. It only
+            affects the data saving rate.
+        render_play_speed (float): Play speed to use when rendering the
+            simulation. This affects neither the simulation itself nor the
+            rendering and saving of data during the simulation. It only
+            affects how the rendered video is played (i.e. the metadata of
+            the output video used by media players).
+        render_window_size (tuple[int, int]): Window size to use when
+            rendering the simulation.
+        min_sim_duration_sec (float): Minimum simulation duration to
+            consider the simulation successful.
+        max_sim_steps (int | None): If not None, limit the number of
+            simulation steps to this number. This is mainly for testing.
+
+    Returns:
+        bool: Whether the simulation was successful (i.e. reached
+            `min_sim_duration_sec`).
+
+    Example:
+        Assume we want to simulate data from Aymanns et al. 2022 in
+        NeuroMechFly. We need to understand/decide:
+
+            1. At what frequency were the original kinematics from Aymanns
+               et al. recorded? The answer is 100 Hz.
+            2. At what frequency do we want to run the physics simulation?
+               For stability, let's use a small timestep of 0.0001 sec.
+            3. At what frequency do we want to save the simulation data and
+               rendered frames? Let's say we want to match the simulated
+               video with Spotlight behavior recordings recorded at 300 Hz.
+            4. At what speed do we want to play the rendered video? This is
+               for visualization only and does not affect the simulation or
+               data saving. Let's say we want to use a slow play speed of
+               0.1x to better see the details of the fly's movements.
+
+        Then, we should set `output_data_freq` to 300, `input_timestep` to
+        0.01, `sim_timestep` to 0.0001, and `render_play_speed` to 0.1 when
+        calling this function.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Interpolate the trajectories to match the simulation timestep
@@ -530,9 +626,15 @@ def simulate_one_segment(
         trajectories_interp,
         render_window_size,
         render_play_speed,
-        render_fps,
+        output_data_freq,
         sim_timestep,
+        min_sim_duration_sec,
+        max_sim_steps=max_sim_steps,
     )
+
+    # Do nothing if simulation failed before the minimum required duration is reached
+    if hist_dict is None:
+        return False
 
     # Save kinematic states as Pandas DataFrame
     kinematic_states_df = make_kinematic_states_dataframe(hist_dict)
@@ -540,3 +642,5 @@ def simulate_one_segment(
 
     # Save rendered frames as a video
     camera.save_video(output_dir)
+
+    return True

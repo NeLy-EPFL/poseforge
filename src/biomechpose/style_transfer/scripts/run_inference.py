@@ -4,15 +4,11 @@ import sys
 from tqdm import tqdm
 from pathlib import Path
 
-from biomechpose.style_transfer import (
-    get_inference_pipeline,
-    process_simulation,
-    parse_hyperparameters_from_trial_name,
-)
+from biomechpose.style_transfer import get_inference_pipeline, process_simulation
 from biomechpose.util import read_frames_from_video, clear_memory_cache
 
 
-def ensure_gpu_availability():
+def ensure_gpu_availability() -> None:
     if not torch.cuda.is_available():
         logging.warning(
             "CUDA device not available. Inference using CPU is extremely slow. "
@@ -21,132 +17,151 @@ def ensure_gpu_availability():
         sys.exit(1)
 
 
-def get_all_simulation_paths(nmf_renderings_basedir):
-    """Given the base directory containing all NMF simulations, return a
-    sorted list of all simulation (i.e. subsegment) directories."""
-    all_simulation_paths = []
-    for motion_prior_trial_dir in nmf_renderings_basedir.iterdir():
-        if not motion_prior_trial_dir.is_dir():
-            logging.warning(
-                f"Unexpected file under nmf_renderings_basedir: "
-                f"{motion_prior_trial_dir}. Skipping."
-            )
-            continue
-        for segment_dir in motion_prior_trial_dir.glob("segment_*"):
-            if not segment_dir.is_dir():
-                logging.warning(
-                    f"Unexpected file under motion prior directory: {segment_dir}. "
-                    f"Skipping."
-                )
-                continue
-            for subsegment_dir in segment_dir.glob("subsegment_*"):
-                if not subsegment_dir.is_dir():
-                    logging.warning(
-                        f"Unexpected file under simulated segment directory: "
-                        f"{subsegment_dir}. Skipping."
-                    )
-                    continue
-                all_simulation_paths.append(subsegment_dir)
-    all_simulation_paths = sorted(all_simulation_paths)
-    return all_simulation_paths
+def find_all_simulation_paths(nmf_renderings_basedir: Path) -> list[Path]:
+    """Find paths to all NeuroMechFly simulations directories under the
+    base root directory."""
+    all_simulation_paths = [
+        file.parent
+        for file in nmf_renderings_basedir.rglob("processed_kinematic_states.pkl")
+    ]
+    return sorted(list(all_simulation_paths))
 
 
-def get_inference_pipeline_and_max_batch_size(
-    checkpoint_path, example_simulation_path, device
-):
-    """Set up the inference pipeline and auto-detect the maximum batch size
-    that fits in GPU memory."""
-    # Parse model hyperparameters from the checkpoint path
-    run_name = checkpoint_path.parent.name
-    model_hparams = parse_hyperparameters_from_trial_name(run_name)
+def run_inference_cli(
+    checkpoint_path: str,
+    simulations_basedir: str,
+    output_basedir: str,
+    ngf: int,
+    netG: str,
+    training_batch_size: int,
+    lambGAN: float,
+    input_video_filename: str = "processed_nmf_sim_render_colorcode_0.mp4",
+    output_video_filename: str = "domain_translated_video.mp4",
+    inference_batch_size: int | None = None,
+    device: str = "cuda",
+    memory_cleanup_interval: int = 10,
+    verbose: bool = False,
+) -> None:
+    """Run style transfer inference on NeuroMechFly simulations to make the
+    renderings look like Spotelight behavior recordings.
 
-    # Get the inference pipeline
+    Args:
+        checkpoint_path (str): Path to the trained model checkpoint file.
+        simulations_basedir (str): Base directory containing NeuroMechFly
+            simulation subdirectories. All directories nested under this base
+            base directory that contain a "processed_kinematic_states.pkl"
+            file will be processed.
+        output_basedir (str): Base directory to save styled videos. The
+            directory structure under this base directory will mirror that
+            under `simulations_basedir`.
+        ngf (int): Number of generator filters in the last conv layer. This
+            must match the value used during training.
+        netG (str): Type of generator architecture. This must match the
+            architecture used during training.
+        training_batch_size (int): Batch size used during training.
+        lambGAN (float): Weight for the GAN loss during training.
+        input_video_filename (str): Filename of the input video within each
+            simulation directory. For example,
+            "processed_nmf_sim_render_colorcode_0.mp4", which is the
+            pseudocolor rendering of the NeuroMechFly simulations with leg
+            segments shown in artificially bright colors to enhance
+            contrast against the body. This must be the same rendering
+            resolution used during training.
+        output_video_filename (str): Filename of the styled output video
+            within each output directory.
+        inference_batch_size (int | None): Batch size to use during
+            inference. This is different from the training batch size; this
+            number only affects inference speed and memory usage. If None,
+            the largest batch size that fits in GPU memory will be
+            automatically detected.
+        device (str): Device to use for inference ("cuda" for GPU vs.
+            "cpu" for CPU). It is HIGHLY recommended to use a GPU, as
+            inference on CPU is EXTREMELY slow.
+        memory_cleanup_interval (int): Interval (in number of simulations
+            processed) to perform memory cleanup. This can help avoid
+            out-of-memory errors when processing a large number of
+            simulations.
+        verbose (bool): Whether to print detailed logs.
+    """
+    checkpoint_path = Path(checkpoint_path)
+    simulations_basedir = Path(simulations_basedir)
+    output_basedir = Path(output_basedir)
+
+    # Set logging level
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+
+    # Index simulations to process
+    all_simulation_paths = find_all_simulation_paths(Path(simulations_basedir))
+    print(f"Total number of simulations to process: {len(all_simulation_paths)}")
+    if len(all_simulation_paths) == 0:
+        return
+
+    # Set up inference pipeline
+    print(f"Getting inference pipeline for model at {checkpoint_path}...")
+    model_hparams = {
+        "ngf": ngf,
+        "netG": netG,
+        "batsize": training_batch_size,
+        "lambGAN": lambGAN,
+    }
     inference_pipeline = get_inference_pipeline(checkpoint_path, model_hparams, device)
-    logging.info(f"Loaded model from {checkpoint_path} with hyperparameters:")
-    for k, v in model_hparams.items():
-        logging.info(f"  {k}: {v}")
+    if inference_batch_size is None:
+        # Auto-detect largest batch size that fits in GPU memory
+        example_input_video_path = all_simulation_paths[0] / input_video_filename
+        video_frames, fps = read_frames_from_video(
+            example_input_video_path, frame_indices=[0]
+        )
+        inference_batch_size = inference_pipeline.detect_max_batch_size(
+            input_image_shape=video_frames[0].shape, exponential=True, end=512
+        )
 
-    # Auto-detect largest batch size that fits in GPU memory
-    example_input_video_path = (
-        example_simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
-    )
-    video_frames, fps = read_frames_from_video(example_input_video_path)
-    max_batch_size = inference_pipeline.detect_max_batch_size(
-        input_image_shape=video_frames[0].shape, exponential=True
-    )
-    logging.info(f"Detected maximum batch size: {max_batch_size}")
+    # Process each simulation
+    print(f"Processing {len(all_simulation_paths)} simulations...")
+    for i, simulation_path in enumerate(tqdm(all_simulation_paths, disable=None)):
+        input_video_path = simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
+        output_dir = Path(
+            str(simulation_path).replace(str(simulations_basedir), str(output_basedir))
+        )
+        assert (
+            output_basedir in output_dir.parents
+        ), "Output directory is outside the specified output base directory"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / output_video_filename
 
-    return inference_pipeline, max_batch_size
+        process_simulation(
+            inference_pipeline,
+            input_video_path,
+            output_path,
+            batch_size=inference_batch_size,
+            progress_bar=False,
+        )
+
+        # Periodic memory cleanup every once in a while
+        if (i + 1) % memory_cleanup_interval == 0:
+            logging.info(f"Processed {i + 1} simulations. Running memory cleanup...")
+            clear_memory_cache(logging_level=logging.INFO)
 
 
 if __name__ == "__main__":
-    # Define model and data paths
-    models = [
-        # (model_name, epoch)
-        ("ngf16_netGsmallstylegan2_batsize2_lambGAN0.2", 121),
-        ("ngf16_netGstylegan2_batsize4_lambGAN0.2", 200),
-        ("ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1", 161),
-        ("ngf32_netGstylegan2_batsize4_lambGAN0.1", 161),
-        ("ngf32_netGstylegan2_batsize4_lambGAN0.5", 141),
-        ("ngf32_netGstylegan2_batsize4_lambGAN1.0", 161),
-        ("ngf48_netGstylegan2_batsize4_lambGAN0.1", 141),
-    ]
-    checkpoints_basedir = Path("bulk_data/style_transfer/production/trained_models/")
-    nmf_renderings_basedir = Path("bulk_data/nmf_rendering/")
-    output_basedir = Path("bulk_data/style_transfer/production/translated_sim_videos/")
+    import tyro
 
-    # Set logging level
-    logging.basicConfig(level=logging.INFO)
+    tyro.cli(run_inference_cli)
 
-    # Set memory cache cleanup interval
-    memory_cleanup_interval = 10  # Run memory cleanup every 10 simulations
-
-    # Check if GPU is available
-    ensure_gpu_availability()
-    device = "cuda"
-
-    # Index all simulations to process
-    all_simulation_paths = get_all_simulation_paths(nmf_renderings_basedir)
-    print(f"Total number of simulations to process: {len(all_simulation_paths)}")
-
-    # Run inference using each model
-    print(f"Total number of models to use: {len(models)}")
-    for model_name, epoch in models:
-        print(f"Running inference using model {model_name}, epoch {epoch}")
-        checkpoint_path = checkpoints_basedir / model_name / f"{epoch}_net_G.pth"
-
-        # Parse model hyperparameters from the checkpoint path
-        model_training_run_name = checkpoint_path.parent.name
-        model_hparams = parse_hyperparameters_from_trial_name(model_training_run_name)
-
-        # Set up inference pipeline
-        inference_pipeline, max_batch_size = get_inference_pipeline_and_max_batch_size(
-            checkpoint_path, all_simulation_paths[0], device
-        )
-
-        # Process each simulation
-        for i, simulation_path in enumerate(tqdm(all_simulation_paths)):
-            trial, segment, subsegment = simulation_path.parts[-3:]
-            input_video_path = (
-                simulation_path / "processed_nmf_sim_render_colorcode_0.mp4"
-            )
-            output_dir = output_basedir / trial / segment / subsegment
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_video_path = (
-                output_dir / f"styled_video_{model_training_run_name}_epoch{epoch}.mp4"
-            )
-
-            process_simulation(
-                inference_pipeline,
-                input_video_path,
-                output_video_path,
-                batch_size=max_batch_size,
-                progress_bar=False,
-            )
-
-            # Periodic memory cleanup every once in a while
-            if (i + 1) % memory_cleanup_interval == 0:
-                logging.info(
-                    f"Processed {i + 1} simulations. Running memory cleanup..."
-                )
-                clear_memory_cache(logging_level=logging.INFO)
+    # # Example call
+    # run_inference_cli(
+    #     checkpoint_path="bulk_data/style_transfer/production/trained_models/ngf16_netGsmallstylegan2_batsize2_lambGAN0.2/121_net_G.pth",
+    #     simulations_basedir="bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/",
+    #     output_basedir="bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly1_trial001",
+    #     ngf=16,
+    #     netG="smallstylegan2",
+    #     training_batch_size=2,
+    #     lambGAN=0.2,
+    #     model_name="ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
+    #     inference_batch_size=None,  # auto-detect
+    #     device="cuda",
+    #     memory_cleanup_interval=10,
+    #     verbose=True,
+    # )

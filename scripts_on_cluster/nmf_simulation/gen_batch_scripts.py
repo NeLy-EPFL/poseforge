@@ -5,7 +5,7 @@ from biomechpose.simulate_nmf.data import load_kinematic_recording
 
 
 # Job execution parameters
-max_segs_per_run = 5
+max_segs_per_run = 20
 
 # Data filtering parameters
 min_duration_frames = 10
@@ -28,8 +28,8 @@ log_dir.mkdir(exist_ok=True, parents=True)
 # Define paths relevant to data
 output_basedir = project_dir / "bulk_data/nmf_rendering"
 recorded_trials_dir = project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/"
-# trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
-trial_data_files = [project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl"]
+trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
+
 # Read template script
 with open(template_path) as f:
     template_str = f.read()
@@ -56,19 +56,23 @@ def make_run_script(recorded_trial_path, segment_ids):
 if __name__ == "__main__":
     # Identify jobs to run
     job_configs = []
+    num_segments_total = 0
     for in_path in tqdm(trial_data_files, desc="Building job specs"):
         # Check how many segments there are per trial
         kinematic_recording_segments = load_kinematic_recording(
             recording_path=in_path,
-            min_duration_frames=10,
+            min_duration_sec=0.2,
+            input_timestep=0.01,
             filter_size=5,
             filtered_frac_threshold=0.5,
         )
         num_segments = len(kinematic_recording_segments)
+        num_segments_total += num_segments
         for start_idx in range(0, num_segments, max_segs_per_run):
             end_idx_exclusive = min(num_segments, start_idx + max_segs_per_run)
             segment_ids = list(range(start_idx, end_idx_exclusive))
             job_configs.append((in_path, segment_ids))
+    print(f"Total number of recording sections to simulate: {num_segments_total}")
 
     # Generate scripts
     for recorded_trial_path, segment_ids in job_configs:

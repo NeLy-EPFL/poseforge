@@ -40,7 +40,8 @@ def extract_joint_angles_trajectory(
 
 def load_kinematic_recording(
     recording_path: str | Path,
-    min_duration_frames: int,
+    min_duration_sec: float,
+    input_timestep: float,
     filter_size: int = 5,
     filtered_frac_threshold: float = 0.5,
 ) -> list[pd.DataFrame]:
@@ -50,8 +51,10 @@ def load_kinematic_recording(
 
     Args:
         recording_path: Path to the kinematic recording PKL file.
-        min_duration_frames: Minimum number of frames a segment must have
+        min_duration_sec: Minimum duration (seconds) a segment must have
             to be included.
+        input_timestep: Timestep of the input kinematic recording
+            (seconds). E.g. 0.01 for 100 Hz recordings.
         filter_size: Size of the moving average filter to denoise the
             resting mask.
         filtered_frac_threshold: Threshold for the moving average filter to
@@ -82,7 +85,7 @@ def load_kinematic_recording(
         if is_not_resting and segment_start is None:
             segment_start = i
         elif not is_not_resting and segment_start is not None:
-            if i - segment_start >= min_duration_frames:
+            if i - segment_start >= min_duration_sec / input_timestep:
                 segments.append(kinematic_recording.iloc[segment_start:i])
             segment_start = None
 
