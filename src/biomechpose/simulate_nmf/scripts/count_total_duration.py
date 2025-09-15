@@ -1,16 +1,7 @@
-import cv2
 from pathlib import Path
 from tqdm import tqdm
 
-
-def check_num_frames(video_path: Path) -> int:
-    """Check number of frames in a video file"""
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Failed to open video file: {video_path}")
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
-    return total_frames
+from biomechpose.util import check_num_frames
 
 
 if __name__ == "__main__":

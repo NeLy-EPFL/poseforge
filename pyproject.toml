@@ -18,7 +18,6 @@ dependencies = [
     "tensorboard>=2.19,<3",
     "pillow>=11.3,<12",
     "tqdm>=4.67,<5",
-    "pandas>=2.3,<3",
     "flygym>=1.2.1,<2",  # check this extra carefully
     "tyro==0.9.31",
     "wandb==0.21.1",
@@ -31,6 +30,7 @@ dependencies = [
     "psutil>=7.0.0,<8",
     "seaborn==0.13.2",
     "pyvista==0.46.3",
+    "pytest>=8.4.2,<9",
     # "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",
 ]
 
