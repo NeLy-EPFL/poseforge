@@ -129,3 +129,13 @@ def clear_memory_cache(logging_level=logging.DEBUG):
             logging_level,
             f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached",
         )
+
+
+def check_num_frames(video_path: Path) -> int:
+    """Check number of frames in a video file using imageio.v2"""
+    try:
+        with imageio.get_reader(video_path) as reader:
+            num_frames = reader.count_frames()
+    except Exception as e:
+        raise RuntimeError(f"Failed to open video file: {video_path}") from e
+    return num_frames
