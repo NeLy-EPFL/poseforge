@@ -19,16 +19,16 @@ class ContrastivePretrainingDataset(Dataset):
     into experimental domain using different style transfer models), and
     (`batch_size` * `n_variants` - `n_variants`) negative pairs. For the
     negative pairs, we enforce that all frames are at least
-    `sampling_stride` apart in time.
+    `sampling_stride` frames apart in time.
 
-    In theory, the number of samples that we can draw from this dataset is
+    In theory, the number of samples that can be drawn from this dataset is
     combinatorial (Comb(`nframes`, `batch_size`) conditioned on all pairs
-    of sampled values being at least `sampling_stride` apart). This results
-    in an astronomical large number. Instead, we add the additional
+    of sampled values being at least `sampling_stride` frames apart). This
+    results in an astronomically large number. Instead, we add an extra
     constraint that no frame can be sampled twice in each epoch, regardless
     of combination with other frames in the batch. For example, if
-    `batch_size` is 4 `sampling_stride` is 3, we will reshape the entire
-    set of possible global frame indices as follows:
+    `batch_size` is 4 `sampling_stride` is 3, we will reshape all possible
+    global frame indices as follows:
 
                        |   offset_0 |   offset_1 |   offset_2
         ---------------+------------+------------+------------
@@ -42,22 +42,19 @@ class ContrastivePretrainingDataset(Dataset):
                        |         18 |         19 |         20
                        |         21 |         22 |         23
 
-    There frames are divided into "super-batches" of size
+    Here, frames are divided into "super-batches" of size
     (`batch_size` * `sampling_stride`). Each super-batch is further divided
-    into `sampling_stride` "offsets" each of size `batch_size`. Therefore,
-    this partitions the full dataset into
+    into `sampling_stride` "offsets," each of size `batch_size`. Therefore,
+    this partitions the whole dataset into
     floor(`n_frames_total` / (`batch_size` * `sampling_stride`)) * `sampling_stride`
-    non-overlapping samples, each containing `batch_size` frames and each
-    pair of frames being at least `sampling_stride` apart in time. The
+    non-overlapping samples, each containing `batch_size` frames such that
+    every two frames are at least `sampling_stride` apart in time. The
     remainder of the frames that do not fit into a full super-batch are
-    discarded.
+    discarded. (Note: This actually results in a smaller number of possible
+    samples because the minimum time difference does not apply when the two
+    frames are drawn from different simulations.)
 
-    This actually results in a smaller number of possible samples because
-    the minimum time difference constraint does not apply when the two
-    frames are drawn from different simulations. But for simplicity, this
-    solution works.
-
-    When __getitem__ is called, this dataset returns a Torch tensor of
+    When `__getitem__` is called, this dataset returns a Torch tensor of
     shape (n_variants, batch_size, n_channels, img_height, img_width).
     """
 
