@@ -1,6 +1,8 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import time
 from typing import Any
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
@@ -21,7 +23,6 @@ class ContrastivePretrainingPipeline:
         temperature: float = 0.1,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
-        seed: int = 42,
     ):
         """Initialize the contrastive pretraining pipeline.
 
@@ -37,7 +38,6 @@ class ContrastivePretrainingPipeline:
                 on. Defaults to "cuda".
             use_float16 (bool, optional): Whether to use mixed precision
                 training (float16). Defaults to True.
-            seed (int, optional): Random seed for reproducibility.
         """
         self.feature_extractor = feature_extractor.to(device)
         self.projection_head = projection_head.to(device)
@@ -47,7 +47,6 @@ class ContrastivePretrainingPipeline:
         self.n_variants = dataset.n_variants
         self.device = device
         self.use_float16 = use_float16
-        self.rng = torch.Generator().manual_seed(seed)
 
     def info_nce_loss(self, embeddings: torch.Tensor) -> float:
         """Compute the InfoNCE loss, treating the same frame from different
@@ -108,14 +107,60 @@ class ContrastivePretrainingPipeline:
         loss = F.cross_entropy(logits_matrix, labels_index, reduction="mean")
         return loss
 
+    def check_float16_status(self) -> dict:
+        """Check if the pipeline is configured for float16 and get current status.
+        
+        Returns:
+            dict: Status information about float16 usage.
+        """
+        status = {
+            "use_float16_flag": self.use_float16,
+            "device": str(self.device),
+            "device_supports_half": torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 7,
+        }
+        
+        # Check model parameter dtypes
+        fe_dtypes = set(p.dtype for p in self.feature_extractor.parameters())
+        ph_dtypes = set(p.dtype for p in self.projection_head.parameters())
+        status["feature_extractor_param_dtypes"] = [str(dt) for dt in fe_dtypes]
+        status["projection_head_param_dtypes"] = [str(dt) for dt in ph_dtypes]
+        
+        return status
+
+    def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
+        return torch.optim.Adam(
+            list(self.feature_extractor.parameters())
+            + list(self.projection_head.parameters()),
+            **adam_kwargs,
+        )
+
+    def _update_logs(
+        self,
+        writer: SummaryWriter,
+        *,
+        epoch_idx: int,
+        within_epoch_step_idx: int,
+        avg_loss: float,
+        learning_rate: float,
+    ) -> None:
+        print(
+            f"Epoch {epoch_idx}, step {within_epoch_step_idx}/{len(self.dataset)}), "
+            f"avg loss: {avg_loss:.4f}, lr: {learning_rate}"
+        )
+        global_step_idx = epoch_idx * len(self.dataset) + within_epoch_step_idx
+        writer.add_scalar("Loss/Train", avg_loss, global_step_idx)
+        writer.add_scalar("Training/Epoch", epoch_idx, global_step_idx)
+        writer.add_scalar("Training/LearningRate", learning_rate, global_step_idx)
+
     def train(
         self,
         n_epochs: int,
         checkpoint_dir: Path,
         checkpoint_interval_epochs: int,
         log_dir: Path,
-        logging_interval_steps: int = 100,
+        log_interval_steps: int = 100,
         adam_kwargs: dict[str, Any] = {},
+        seed: int = 42,
     ):
         """Train the model.
 
@@ -131,26 +176,36 @@ class ContrastivePretrainingPipeline:
             adam_kwargs (dict[str, Any], optional): Additional keyword
                 arguments for the Adam optimizer, which will be used for
                 training.
+            seed (int, optional): Random seed for reproducibility.
         """
+        # Set up random number generator
+        rng = np.random.default_rng(seed)
+
         # Setup optimizer
-        self.optimizer = torch.optim.Adam(
-            list(self.feature_extractor.parameters())
-            + list(self.projection_head.parameters()),
-            **adam_kwargs,
-        )
+        self.optimizer = self._create_optimizer(adam_kwargs)
 
         # Setup mixed precision training
         amp_scaler = torch.amp.GradScaler(self.device, enabled=self.use_float16)
+        
+        # Print float16 status at start of training
+        print("=== Float16 status upon initialization ===")
+        status = self.check_float16_status()
+        for key, value in status.items():
+            print(f"  {key}: {value}")
+        print("==========================================")
 
         # Setup TensorBoard writer
         writer = SummaryWriter(log_dir=str(log_dir))
 
         for epoch_idx in range(n_epochs):
+            print(f"Starting epoch {epoch_idx}/{n_epochs}")
+            epoch_start_time = time.time()
+
             # Randomize order of access
-            indices = torch.arange(len(self.dataset))
-            self.rng.shuffle(indices)
+            indices = list(range(len(self.dataset)))
+            rng.shuffle(indices)
             running_loss = 0.0
-            step = 0
+            within_epoch_step_idx = 0
             for sample_idx in indices:
                 # Get batch of data for this iter. Note that given the special sampling
                 # requirements, there's no DataLoader here. The batch is generated
@@ -168,6 +223,17 @@ class ContrastivePretrainingPipeline:
                     h_features = self.feature_extractor(collapsed_batch)
                     z_features = self.projection_head(h_features)
                     loss = self.info_nce_loss(z_features)
+                    
+                    # Debug: Check if float16 is actually being used
+                    if within_epoch_step_idx == 0 and epoch_idx == 0:
+                        print("=== Float16 status during first step ===")
+                        print(f"  Input batch dtype: {collapsed_batch.dtype}")
+                        print(f"  h_features dtype: {h_features.dtype}")
+                        print(f"  z_features dtype: {z_features.dtype}")
+                        print(f"  loss dtype: {loss.dtype}")
+                        print(f"  AMP enabled: {self.use_float16}")
+                        print(f"  AMP scaler enabled: {amp_scaler.is_enabled()}")
+                        print("=======================================")
 
                 # Backpropagate
                 self.optimizer.zero_grad()
@@ -177,24 +243,25 @@ class ContrastivePretrainingPipeline:
 
                 # Logging
                 running_loss += loss.item()
-                if (step + 1) % logging_interval_steps == 0:
-                    avg_loss = running_loss / logging_interval_steps
-                    print(
-                        f"Epoch {epoch_idx} (total {n_epochs}), "
-                        f"Step {step} within this epoch (total {len(self.dataset)}), "
-                        f"Avg loss: {avg_loss:.4f}"
+                if (within_epoch_step_idx + 1) % log_interval_steps == 0:
+                    avg_loss = running_loss / log_interval_steps
+                    learning_rate = self.optimizer.param_groups[0]["lr"]
+                    self._update_logs(
+                        writer,
+                        epoch_idx=epoch_idx,
+                        within_epoch_step_idx=within_epoch_step_idx,
+                        avg_loss=avg_loss,
+                        learning_rate=learning_rate,
                     )
-                    current_step = epoch_idx * len(self.dataset) + step
-                    writer.add_scalar("Loss/Train", avg_loss.item(), current_step)
-                    writer.add_scalar("Training/Epoch", epoch_idx, current_step)
-                    current_lr = self.optimizer.param_groups[0]["lr"]
-                    writer.add_scalar("Training/LearningRate", current_lr, current_step)
                     running_loss = 0.0
-                step += 1
+                within_epoch_step_idx += 1
+
+            epoch_walltime = time.time() - epoch_start_time
+            print(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
 
             # Save checkpoint
             if (epoch_idx + 1) % checkpoint_interval_epochs == 0:
-                checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch_idx+1}.pth"
+                checkpoint_path = checkpoint_dir / f"ckpt_epoch_{epoch_idx:03d}.pth"
                 torch.save(
                     {
                         "feature_extractor": self.feature_extractor.state_dict(),

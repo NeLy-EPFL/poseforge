@@ -1,9 +1,9 @@
-import math
 import torch
 import numpy as np
 import imageio.v2 as imageio
 from torch.utils.data import Dataset
 from pathlib import Path
+from tqdm import tqdm
 
 from biomechpose.util import check_num_frames, read_frames_from_video
 
@@ -65,7 +65,8 @@ class ContrastivePretrainingDataset(Dataset):
         sampling_stride: int = 10,
         transform=None,
         n_channels: int = 3,
-        debug_return_indices: bool = False,
+        cache_sim_length: bool = True,
+        use_cached_sim_length: bool = True,
     ):
         """Initializes ContrastivePretrainingDataset.
 
@@ -94,7 +95,6 @@ class ContrastivePretrainingDataset(Dataset):
         self.sampling_stride = sampling_stride
         self.transform = transform
         self.n_channels = n_channels
-        self.debug_return_indices = debug_return_indices
         self.all_sim_names = list(video_paths_by_sim_names.keys())
         self.n_variants = len(video_paths_by_sim_names[self.all_sim_names[0]])
 
@@ -106,9 +106,8 @@ class ContrastivePretrainingDataset(Dataset):
         self.frame_size = sample_frame.shape[:2]  # (H, W)
 
         # Check number of frames per simulation
-        self.n_frames_per_sim = np.array(
-            [check_num_frames(paths[0]) for paths in video_paths_by_sim_names.values()],
-            dtype=np.int32,
+        self.n_frames_per_sim = self._get_sim_lengths(
+            video_paths_by_sim_names, cache_sim_length, use_cached_sim_length
         )
         self._start_global_ids_per_sim = np.zeros(
             len(self.all_sim_names), dtype=np.int32
@@ -126,14 +125,57 @@ class ContrastivePretrainingDataset(Dataset):
 
         # Calculate length of dataset
         n_super_batches = n_frames_total // (self.batch_size * self.sampling_stride)
+        if n_super_batches == 0:
+            raise ValueError(
+                "Error: Not enough frames to construct one batch. Try including more "
+                "simulation data, reducing `batch_size`, or reducing `sampling_stride`."
+            )
         self.dataset_length = int(n_super_batches) * self.sampling_stride
         n_frames_total_trunc = n_super_batches * self.batch_size * self.sampling_stride
         assert n_frames_total_trunc <= n_frames_total, "Error in n_frames counting"
+        self.total_n_frames = n_frames_total_trunc
 
         # Pre-compute frame indices for each sample in the dataset
         self._frame_indices = np.arange(
             0, n_frames_total_trunc, dtype=np.int32
         ).reshape(n_super_batches, self.batch_size, self.sampling_stride)
+
+    @staticmethod
+    def _get_sim_lengths(
+        video_paths_by_sim_names: dict[str, list[Path]],
+        cache_sim_length: bool,
+        use_cached_sim_length: bool,
+    ) -> np.ndarray:
+        """Get number of frames in each simulation. This process involves
+        reading the metadata of one video per simulation and can take some
+        time, so implement a caching mechanism (the length of the
+        simulation in numbers of frames is saved under a `n_frames.txt`
+        file)."""
+        n_frames_per_sim = np.zeros(len(video_paths_by_sim_names), dtype=np.int32)
+        for sim_idx, paths in tqdm(
+            enumerate(video_paths_by_sim_names.values()),
+            disable=None,
+            total=len(video_paths_by_sim_names),
+        ):
+            if use_cached_sim_length:
+                cache_path = paths[0].parent / "n_frames.txt"
+                if cache_path.is_file():
+                    with open(cache_path, "r") as f:
+                        try:
+                            n_frames_per_sim[sim_idx] = int(f.read().strip())
+                            continue
+                        except ValueError:
+                            # Cache file corrupted - proceed linearly to the next case
+                            pass
+
+            # If reached here, either not using cached length or cache file unavailable
+            sim_length = check_num_frames(paths[0])
+            n_frames_per_sim[sim_idx] = sim_length
+            if cache_sim_length:
+                cache_path = paths[0].parent / "n_frames.txt"
+                with open(cache_path, "w") as f:
+                    f.write(str(sim_length))
+        return n_frames_per_sim
 
     def __len__(self) -> int:
         return self.dataset_length

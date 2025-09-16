@@ -30,7 +30,10 @@ def set_random_seed(seed: int = 42) -> None:
     # Set environment variable for additional determinism
     os.environ["PYTHONHASHSEED"] = str(seed)
 
-    # Generator for DataLoader workers
+    # Make torch deterministic
+    # The following env var must be set for CUDA >= 10.2). See
+    # https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     torch.use_deterministic_algorithms(True, warn_only=True)
 
     logging.info(f"Random seed set to {seed} for reproducible results")
