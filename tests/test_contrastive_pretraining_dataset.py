@@ -3,7 +3,7 @@ import numpy as np
 from pathlib import Path
 
 from biomechpose.util import check_num_frames
-from biomechpose.contrastive_pretraining.dataset import ContrastivePretrainingDataset
+from biomechpose.pose_estimation import SyntheticFramesSampler
 
 
 def test_sampling_contrastive_pretraining_dataset_sampling():
@@ -22,7 +22,7 @@ def test_sampling_contrastive_pretraining_dataset_sampling():
     }
     batch_size = 4
     sampling_stride = 3
-    dataset = ContrastivePretrainingDataset(
+    dataset = SyntheticFramesSampler(
         video_paths,
         batch_size=batch_size,
         sampling_stride=sampling_stride,
@@ -50,7 +50,7 @@ def test_sampling_contrastive_pretraining_dataset_sampling():
     offset = sampling_stride - 1
     sample_idx = super_block_id * sampling_stride + offset
     # This combo is guaranteed to sample frames from both simulations
-    global_frame_ids, sim_ids, local_frame_ids = dataset._sample_batch_frame_ids(
+    global_frame_ids, sim_ids, local_frame_ids = dataset.determine_batch_frame_ids(
         sample_idx
     )
 
@@ -90,7 +90,7 @@ def test_sampling_contrastive_pretraining_dataset_data_loading():
     }
     batch_size = 4
     sampling_stride = 3
-    dataset = ContrastivePretrainingDataset(
+    dataset = SyntheticFramesSampler(
         video_paths,
         batch_size=batch_size,
         sampling_stride=sampling_stride,

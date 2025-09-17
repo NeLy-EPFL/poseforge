@@ -1,15 +1,18 @@
 import torch
 import numpy as np
 import imageio.v2 as imageio
-from torch.utils.data import Dataset
 from pathlib import Path
 from tqdm import tqdm
 
-from biomechpose.util import check_num_frames, read_frames_from_video
+from biomechpose.util import (
+    check_num_frames,
+    read_frames_from_video,
+    default_video_writing_ffmpeg_params,
+)
 
 
-class ContrastivePretrainingDataset(Dataset):
-    """Dataset for contrastive pretraining using an InfoNCE/SimCLR-like
+class SyntheticFramesSampler:
+    """Sampler for contrastive pretraining using an InfoNCE/SimCLR-like
     loss. Each sample is a *batch* of `batch_size` frames drawn from
     `n_variants` videos (i.e. domain-translated versions of the same
     simulation using different style transfer models).
@@ -100,9 +103,10 @@ class ContrastivePretrainingDataset(Dataset):
 
         # Check image size
         sample_video_path = video_paths_by_sim_names[self.all_sim_names[0]][0]
-        [
-            sample_frame,
-        ], fps = read_frames_from_video(sample_video_path, frame_indices=[0])
+        sample_frames, self.fps = read_frames_from_video(
+            sample_video_path, frame_indices=[0]
+        )
+        sample_frame = sample_frames[0]
         self.frame_size = sample_frame.shape[:2]  # (H, W)
 
         # Check number of frames per simulation
@@ -180,7 +184,7 @@ class ContrastivePretrainingDataset(Dataset):
     def __len__(self) -> int:
         return self.dataset_length
 
-    def _sample_batch_frame_ids(
+    def determine_batch_frame_ids(
         self, idx: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Computes the frame indices that should be sampled to construct
@@ -224,7 +228,7 @@ class ContrastivePretrainingDataset(Dataset):
         (n_variants, batch_size, n_channels, img_height, img_width).
         """
         # Get frame IDs to be sampled
-        global_frame_ids, sim_ids, local_frame_ids = self._sample_batch_frame_ids(idx)
+        global_frame_ids, sim_ids, local_frame_ids = self.determine_batch_frame_ids(idx)
 
         output = torch.full(
             (self.n_variants, self.batch_size, self.n_channels, *self.frame_size),
@@ -277,3 +281,88 @@ class ContrastivePretrainingDataset(Dataset):
             "parts of the output tensor were not populated correctly)"
         )
         return output
+
+
+def round_up_to_multiple(x: int, multiple_of: int) -> int:
+    return ((x + multiple_of - 1) // multiple_of) * multiple_of
+
+
+def atomic_batch_to_file(
+    atomic_batch: np.ndarray, fps: int, output_path: Path, spacing: int = 10
+):
+    """Write an atomic batch of frames to a video file.
+
+    Args:
+        atomic_batch (np.ndarray): Array of shape (n_variants, n_frames,
+            n_channels, height, width)
+        output_path (Path): Path to save the video file.
+        fps (int): Frames per second for the output video.
+        spacing (int, optional): Number of pixels to insert between
+    """
+    n_variants, n_frames, n_channels, n_rows, n_cols = atomic_batch.shape
+    n_cols_total = (n_cols * n_variants) + (n_variants - 1) * spacing
+    n_cols_total = round_up_to_multiple(n_cols_total, 16)  # for video encoding
+    n_rows_total = round_up_to_multiple(n_rows, 16)  # for video encoding
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with imageio.get_writer(
+        str(output_path),
+        fps=fps,
+        codec="libx264",
+        quality=10,
+        ffmpeg_params=default_video_writing_ffmpeg_params,
+    ) as video_writer:
+        for frame_idx in range(atomic_batch.shape[1]):
+            image = np.zeros((n_rows_total, n_cols_total, n_channels), dtype=np.uint8)
+            for variant_idx in range(atomic_batch.shape[0]):
+                start_col = variant_idx * (n_cols + spacing)
+                end_col = start_col + n_cols
+                selection = atomic_batch[variant_idx, frame_idx, :, :, :]
+                selection = selection.transpose(1, 2, 0)
+                selection = (selection * 255).astype(np.uint8)
+                image[:n_rows, start_col:end_col, :] = selection
+            video_writer.append_data(image.squeeze())
+
+
+def file_to_atomic_batch(
+    video_path: Path,
+    n_variants: int,
+    image_size: tuple[int, int],
+    n_channels: int = 1,
+    spacing: int = 10,
+) -> np.ndarray:
+    """Read an atomic batch of frames from a video file.
+
+    Args:
+        video_path (Path): Path to the video file.
+        n_variants (int): Number of variants in the atomic batch.
+        image_size (tuple[int, int]): (height, width) of each variant.
+        n_channels (int, optional): Number of image channels. Defaults to 1.
+        spacing (int, optional): Number of pixels inserted between
+            variants. Defaults to 10.
+
+    Returns:
+        atomic_batch (np.ndarray): Array of shape (n_variants, n_frames,
+            n_channels, height, width)
+    """
+    frames, fps = read_frames_from_video(video_path)
+    n_frames = len(frames)
+    if n_frames == 0:
+        raise ValueError(f"Error: no frames found in video {video_path}")
+    n_rows_total, n_cols_total = frames[0].shape[:2]
+    n_rows, n_cols = image_size
+    assert (
+        n_variants * n_cols + (n_variants - 1) * spacing <= n_cols_total
+    ), "Error: width of concatenated video does not match expectation"
+
+    atomic_batch = np.zeros(
+        (n_variants, n_frames, n_channels, n_rows, n_cols), dtype=np.uint8
+    )
+    for frame_idx, frame in enumerate(frames):
+        for variant_idx in range(n_variants):
+            start_col = variant_idx * (n_cols + spacing)
+            end_col = start_col + n_cols
+            selection = frame[:n_rows, start_col:end_col] / 255.0
+            selection = selection.transpose(2, 0, 1)
+            atomic_batch[variant_idx, frame_idx, :, :, :] = selection
+
+    return atomic_batch

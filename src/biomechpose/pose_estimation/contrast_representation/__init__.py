@@ -1,3 +1,2 @@
-from .dataset import ContrastivePretrainingDataset
 from .model import RegNetFeatureExtractor, ContrastiveProjectionHead
 from .pipeline import ContrastivePretrainingPipeline

@@ -2,8 +2,8 @@ import torch
 from pathlib import Path
 from torchvision.transforms import Compose, Grayscale
 
-from biomechpose.contrastive_pretraining import (
-    ContrastivePretrainingDataset,
+from biomechpose.pose_estimation.sampler import SyntheticFramesSampler
+from biomechpose.pose_estimation.contrast_representation import (
     ContrastivePretrainingPipeline,
     RegNetFeatureExtractor,
     ContrastiveProjectionHead,

@@ -7,8 +7,8 @@ from typing import Any
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 
-from biomechpose.contrastive_pretraining.dataset import ContrastivePretrainingDataset
-from biomechpose.contrastive_pretraining.model import (
+from biomechpose.pose_estimation.sampler import SyntheticFramesSampler
+from biomechpose.pose_estimation.contrast_representation.model import (
     RegNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
@@ -19,7 +19,7 @@ class ContrastivePretrainingPipeline:
         self,
         feature_extractor: RegNetFeatureExtractor,
         projection_head: ContrastiveProjectionHead,
-        dataset: ContrastivePretrainingDataset,
+        dataset: SyntheticFramesSampler,
         temperature: float = 0.1,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
@@ -30,7 +30,7 @@ class ContrastivePretrainingPipeline:
             feature_extractor (nn.Module): Backbone feature extractor.
             projection_head (nn.Module): Projection head to generate the
                 embedding in which mutual information is evaluated.
-            dataset (ContrastivePretrainingDataset): Dataset for training.
+            dataset (SyntheticFramesSampler): Dataset for training.
             temperature (float, optional): Temperature parameter for
                 contrastive loss (i.e. scale factor before softmax).
                 Defaults to 0.1.
