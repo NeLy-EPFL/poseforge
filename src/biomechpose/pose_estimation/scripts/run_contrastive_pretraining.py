@@ -71,7 +71,7 @@ if __name__ == "__main__":
         ]
 
     # Create dataset
-    dataset = ContrastivePretrainingDataset(
+    dataset = SyntheticFramesSampler(
         video_paths_by_sim_names,
         batch_size=batch_size,
         sampling_stride=minimum_time_diff_frames,
