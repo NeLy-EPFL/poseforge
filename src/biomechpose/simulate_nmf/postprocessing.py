@@ -508,13 +508,15 @@ def _draw_pose_2d_and_3d(
             ax_pose2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
 
         # Plot 3D keypoints
+        keypoint_pos_world_ds = h5_file["postprocessed/keypoint_pos/world_coords"]
+        # Legs
         for leg in legs:
             color = kchain_plotting_colors[leg]
             all_positions = []
             for kpt in leg_keypoints:
                 segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
                 keypoint_idx = keypoints.index(f"{leg}{segment_name}")
-                pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
+                pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
                 all_positions.append(pos)
             all_positions = np.array(all_positions)
             ax_pose3d.plot(
@@ -529,7 +531,7 @@ def _draw_pose_2d_and_3d(
         for side in "LR":
             segment_name = f"{side}Pedicel"
             keypoint_idx = keypoints.index(segment_name)
-            pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
+            pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
             color = kchain_plotting_colors[f"{side}Antenna"]
             ax_pose3d.plot(
                 pos[0], pos[1], pos[2], marker="o", color=color, markersize=5
