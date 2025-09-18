@@ -36,6 +36,7 @@ def convert_kinematics_dataframe_to_h5(
 ) -> None:
     pd_df = pd.read_pickle(kinematics_path)
     n_timesteps = len(pd_df)
+    h5_file.attrs["n_timesteps"] = n_timesteps
     _n_processed_columns = 0
 
     # Time
@@ -51,7 +52,7 @@ def convert_kinematics_dataframe_to_h5(
     dof_angles_ds = h5_file.create_dataset(
         "joint_angles", data=pd_df[dof_columns].to_numpy(), dtype="float32"
     )
-    dof_angles_ds.attrs["order"] = [col[len("dof_angle_") :] for col in dof_columns]
+    dof_angles_ds.attrs["keys"] = [col[len("dof_angle_") :] for col in dof_columns]
     dof_angles_ds.attrs["units"] = "radians"
     dof_angles_ds.attrs["description"] = (
         "Angles of DoFs tracked in the simulation. "
@@ -92,7 +93,7 @@ def convert_kinematics_dataframe_to_h5(
                 f"{pos_or_quat}_{ref_frame}", data=data_block, dtype="float32"
             )
             if pos_or_quat == "pos":
-                this_ds.attrs["order"] = ["x", "y", "z"]
+                this_ds.attrs["keys"] = ["x", "y", "z"]
                 this_ds.attrs["units"] = "mm"
                 this_ds.attrs["description"] = (
                     f'Position of each body segment in the "{ref_frame}" reference '
@@ -100,7 +101,7 @@ def convert_kinematics_dataframe_to_h5(
                     "order of the segments is given in the 'order' attribute."
                 )
             else:
-                this_ds.attrs["order"] = ["w", "x", "y", "z"]
+                this_ds.attrs["keys"] = ["w", "x", "y", "z"]
                 this_ds.attrs["units"] = "quaternion"
                 this_ds.attrs["description"] = (
                     "Orientation (as a quaternion) of each body segment in the "
@@ -110,7 +111,7 @@ def convert_kinematics_dataframe_to_h5(
                 )
             _n_processed_columns += len(columns)
 
-    body_seg_group.attrs["order"] = segments_order
+    body_seg_group.attrs["keys"] = segments_order
     body_seg_group.attrs["description"] = (
         "Position (in mm) and orientation (as quaternions) of each body segment "
         "tracked in the simulation. Values are provided in several reference frames: "
@@ -124,19 +125,19 @@ def convert_kinematics_dataframe_to_h5(
 
     # Cardinal vectors
     cardinal_vec_group = h5_file.create_group("cardinal_vectors")
-    cardinal_vec_group.attrs["order"] = ["forward", "left", "up"]
+    cardinal_vec_group.attrs["keys"] = ["forward", "left", "up"]
     cardinal_vec_group.attrs["description"] = (
         "Unit vectors pointing in cardinal directions from the perspective of the fly, "
         "i.e. vector pointing forward, to the left, and up from the fly's body. "
         "These vectors are in global coordinates and each of them is of shape "
         "(n_timesteps, 3) where 3 are the x/y/z components."
     )
-    for vec_direction in cardinal_vec_group.attrs["order"]:
+    for vec_direction in cardinal_vec_group.attrs["keys"]:
         data_block = np.vstack(pd_df[f"cardinal_vector_{vec_direction}"])
         this_ds = cardinal_vec_group.create_dataset(
             vec_direction, data=data_block, dtype="float32"
         )
-        this_ds.attrs["order"] = ["x", "y", "z"]
+        this_ds.attrs["keys"] = ["x", "y", "z"]
         _n_processed_columns += 1
 
     # Camera matrix
@@ -153,7 +154,7 @@ def convert_kinematics_dataframe_to_h5(
     fly_base_pos_ds = h5_file.create_dataset(
         "fly_base_pos", data=np.vstack(pd_df["fly_base_pos"]), dtype="float32"
     )
-    fly_base_pos_ds.attrs["order"] = ["x", "y", "z"]
+    fly_base_pos_ds.attrs["keys"] = ["x", "y", "z"]
     fly_base_pos_ds.attrs["units"] = "mm"
     fly_base_pos_ds.attrs["description"] = (
         "Position of the fly's center of mass in global coordinates. This dataset has "

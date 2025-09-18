@@ -6,6 +6,7 @@ import imageio.v2 as imageio
 import shutil
 import tempfile
 import os
+import h5py
 from distinctipy import get_colors
 from collections import defaultdict
 from pathlib import Path
@@ -160,24 +161,23 @@ def center_square_crop_image(image: np.ndarray, side_length) -> np.ndarray:
 
 
 def extract_body_segment_positions(
-    df_row: pd.Series, sensor_type: str, body_segments: list[str] | None
+    h5_file: h5py.File,
+    frame_idx: int,
+    sensor_type: str,
+    body_segments: list[str] | None,
 ):
     # Compile list of body segments
     if body_segments is None:
-        prefix = f"body_seg_{sensor_type}_"
-        body_segments = [
-            col.replace(prefix, "") for col in df_row.index if col.startswith(prefix)
-        ]
+        body_segments = h5_file["body_segment_states"].attrs["keys"].tolist()
 
     # Get positions of each keypoint
-    keys = [f"body_seg_{sensor_type}_{seg}" for seg in body_segments]
-    pos_world = np.array(df_row[keys].to_list()).T
+    pos_world = h5_file[f"body_segment_states/{sensor_type}"][frame_idx, :, :].T
     pos_world_homogeneous = np.vstack(
         [pos_world, np.ones((1, pos_world.shape[1]))]
     )  # (4, num_keypoints)
 
     # Project to camera coordinates using the working approach from the snippet
-    camera_matrix = df_row["camera_matrix"]  # This is 3x4 from MuJoCo
+    camera_matrix = h5_file["camera_matrix"][frame_idx, :, :]  # This is 3x4 from MuJoCo
 
     # Apply camera matrix directly (this gives us the projected coordinates)
     pos_camera = camera_matrix @ pos_world_homogeneous  # (3, num_keypoints)
@@ -186,7 +186,8 @@ def extract_body_segment_positions(
     # coordinates. We don't do this before computing camera coordinates because
     # the camera matrix already includes translation information, and we don't
     # want to double-correct it.
-    pos_world = pos_world - df_row["fly_base_pos"][:, None]
+    fly_base_pos = h5_file["fly_base_pos"][frame_idx, :]
+    pos_world = pos_world - fly_base_pos[:, None]
 
     # Return keypoint positions as a dictionary
     pos_world_dict = {}
@@ -249,75 +250,81 @@ def rotate_keypoint_positions_world(
 
 def process_single_frame(
     rendered_images: np.ndarray,
-    df_row: pd.Series,
+    h5_file_path: Path,  # Changed from h5_file to h5_file_path
+    frame_idx: int,
     crop_size: int,
     segment_label_parser: SegmentLabelParser,
 ):
-    # Get rotation angle and rotation matrix
-    forward_vector = df_row["cardinal_vector_forward"]
-    rotation_angle, rotation_matrix = get_rotation_angle_and_matrix(forward_vector)
+    # Open the h5 file within the worker process
+    with h5py.File(h5_file_path, "r") as h5_file:
+        # Get rotation angle and rotation matrix
+        forward_vector = h5_file["cardinal_vectors/forward"][frame_idx, :]
+        rotation_angle, rotation_matrix = get_rotation_angle_and_matrix(forward_vector)
 
-    # Get image shape before rotation for keypoint processing
-    if len(rendered_images) > 0:
-        image_shape = rendered_images[0].shape[:2]  # (height, width)
-    else:
-        raise ValueError("No rendered images provided")
+        # Get image shape before rotation for keypoint processing
+        if len(rendered_images) > 0:
+            image_shape = rendered_images[0].shape[:2]  # (height, width)
+        else:
+            raise ValueError("No rendered images provided")
 
-    # Rotate and center-crop image
-    rendered_images_transformed = []
-    for img in rendered_images:
-        # note: rotate_image calls scipy.ndimage.rotate which expects angle in degrees
-        # and rotates counter-clockwise, hence the negative sign
-        rotated_img = rotate_image(img, -rotation_angle)
-        img_transformed, start_col, start_row = center_square_crop_image(
-            rotated_img, crop_size
+        # Rotate and center-crop image
+        rendered_images_transformed = []
+        for img in rendered_images:
+            # note: rotate_image calls scipy.ndimage.rotate which expects angle in degrees
+            # and rotates counter-clockwise, hence the negative sign
+            rotated_img = rotate_image(img, -rotation_angle)
+            img_transformed, start_col, start_row = center_square_crop_image(
+                rotated_img, crop_size
+            )
+            rendered_images_transformed.append(img_transformed)
+
+        # Add all derived variables to a single dict
+        derived_variables = {}
+
+        # Gather keypoint positions in coordinates and rotate/center-crop accordingly
+        keypoints_pos_dict_world_raw, keypoints_pos_dict_camera_raw = (
+            extract_body_segment_positions(
+                h5_file, frame_idx, "pos_atparent", keypoint_segments
+            )
         )
-        rendered_images_transformed.append(img_transformed)
+        keypoints_pos_dict_world_rotated = rotate_keypoint_positions_world(
+            keypoints_pos_dict_world_raw, rotation_matrix
+        )
+        keypoints_pos_lookup_cam_rotated = rotate_keypoint_positions_camera(
+            keypoints_pos_dict_camera_raw,
+            rotation_matrix,
+            image_shape=image_shape,
+            start_col=start_col,
+            start_row=start_row,
+        )
+        for body_segment_name, rotated_pos in keypoints_pos_dict_world_rotated.items():
+            derived_variables[f"keypoint_pos_world_{body_segment_name}"] = rotated_pos
+        for body_segment_name, rotated_pos in keypoints_pos_lookup_cam_rotated.items():
+            derived_variables[f"keypoint_pos_camera_{body_segment_name}"] = rotated_pos
 
-    # Add all derived variables to a single dict
-    all_derived_variables = {}
+        # Save object segmentation masks
+        seg_labels = segment_label_parser(rendered_images_transformed)
 
-    # Gather keypoint positions in coordinates and rotate/center-crop accordingly
-    keypoints_pos_dict_world_raw, keypoints_pos_dict_camera_raw = (
-        extract_body_segment_positions(df_row, "pos_atparent", keypoint_segments)
-    )
-    keypoints_pos_dict_world_rotated = rotate_keypoint_positions_world(
-        keypoints_pos_dict_world_raw, rotation_matrix
-    )
-    keypoints_pos_lookup_camera_rotated = rotate_keypoint_positions_camera(
-        keypoints_pos_dict_camera_raw,
-        rotation_matrix,
-        image_shape=image_shape,
-        start_col=start_col,
-        start_row=start_row,
-    )
-    for body_segment_name, rotated_pos in keypoints_pos_dict_world_rotated.items():
-        all_derived_variables[f"keypoint_pos_world_{body_segment_name}"] = rotated_pos
-    for body_segment_name, rotated_pos in keypoints_pos_lookup_camera_rotated.items():
-        all_derived_variables[f"keypoint_pos_camera_{body_segment_name}"] = rotated_pos
-
-    # Save object segmentation masks
-    seg_labels = segment_label_parser(rendered_images_transformed)
-
-    return rendered_images_transformed, all_derived_variables, seg_labels
+        return rendered_images_transformed, derived_variables, seg_labels
 
 
 def process_subsegment(
-    subsegment_frames_by_color_coding: list[list[np.ndarray]],
-    kinematic_states_df: pd.DataFrame,
+    frames_by_color_coding: list[list[np.ndarray]],
+    segment_h5_file_path: Path,  # Changed from segment_h5_file to segment_h5_file_path
+    frames_range: tuple[int, int],
     processed_subsegment_dir: Path,
     fps: int,
     crop_size: int = 464,
     num_color_codings: int = 2,
     n_jobs: int = -1,
 ) -> None:
-    kinematic_states_df = kinematic_states_df.copy()
-    num_frames = len(subsegment_frames_by_color_coding[0])
-    if len(kinematic_states_df) != num_frames:
-        raise ValueError(
-            f"Number of frames in video ({num_frames}) does not match "
-            f"number of kinematic states ({len(kinematic_states_df)})."
-        )
+    frame_idx_start, frame_idx_end = frames_range
+    num_frames = frame_idx_end - frame_idx_start
+
+    # Filter image data
+    subsegment_frames_by_color_coding = [
+        frames[frame_idx_start:frame_idx_end] for frames in frames_by_color_coding
+    ]
 
     processed_subsegment_dir.mkdir(parents=True, exist_ok=True)
 
@@ -327,14 +334,19 @@ def process_subsegment(
     # Process frames in parallel
     # Prepare arguments for each frame
     frame_args = []
-    for i_frame in range(num_frames):
+    for i_frame_within_subsegment in range(num_frames):
         renderings_per_frame = [
-            subsegment_frames_by_color_coding[i_color_code][i_frame]
+            subsegment_frames_by_color_coding[i_color_code][i_frame_within_subsegment]
             for i_color_code in range(num_color_codings)
         ]
-        df_row = kinematic_states_df.iloc[i_frame]
         frame_args.append(
-            (renderings_per_frame, df_row, crop_size, segment_label_parser)
+            (
+                renderings_per_frame,
+                segment_h5_file_path,  # Pass file path instead of file handle
+                frame_idx_start + i_frame_within_subsegment,
+                crop_size,
+                segment_label_parser,
+            )
         )
 
     # Process frames in parallel
@@ -353,11 +365,11 @@ def process_subsegment(
     # Extract results
     transformed_images_all = []
     seg_labels_all = []
-    derived_variables_by_column = defaultdict(list)
+    derived_variables_by_key = defaultdict(list)
     for transformed_images, derived_variables, seg_labels in results:
         transformed_images_all.append(transformed_images)
         for key, value in derived_variables.items():
-            derived_variables_by_column[key].append(value)
+            derived_variables_by_key[key].append(value)
         seg_labels_all.append(seg_labels)
 
     # Write processed images to disk as a video
@@ -383,23 +395,64 @@ def process_subsegment(
             ):
                 writer.append_data(transformed_images[i_color_code])
 
-    # Update dataframe of kinematic states with transformed keypoint positions
-    # Use pd.concat to avoid DataFrame fragmentation warnings
-    new_columns_df = pd.DataFrame(
-        derived_variables_by_column, index=kinematic_states_df.index
-    )
-    kinematic_states_df = pd.concat([kinematic_states_df, new_columns_df], axis=1)
+    out_h5_path = processed_subsegment_dir / "processed_simulation_data.h5"
+    with h5py.File(segment_h5_file_path, "r") as source_h5_file:
+        with h5py.File(out_h5_path, "w") as subsegment_h5_file:
+            # Copy all original data
+            raw_group = subsegment_h5_file.create_group("raw")
+            for key in source_h5_file.keys():
+                source_h5_file.copy(key, raw_group)
 
-    kinematic_states_df.to_pickle(
-        processed_subsegment_dir / "processed_kinematic_states.pkl"
-    )
+            # Create group for postprocessed data
+            postprocessed_group = subsegment_h5_file.create_group("postprocessed")
 
-    # Save segmentation labels
-    np.savez_compressed(
-        processed_subsegment_dir / "segmentation_labels.npz",
-        labels=seg_labels_all,
-        label_keys=segment_label_parser.label_keys,
-    )
+            # Add derived variables
+            keypoint_pos_group = postprocessed_group.create_group("keypoint_pos")
+            for ref_frame in ["camera", "world"]:
+                data_block = np.empty(
+                    (num_frames, len(keypoint_segments), 3), dtype="float32"
+                )
+                for seg_id, body_segment in enumerate(keypoint_segments):
+                    key = f"keypoint_pos_{ref_frame}_{body_segment}"
+                    values = np.array(derived_variables_by_key[key])
+                    data_block[:, seg_id, :] = values
+
+                pos_ds = keypoint_pos_group.create_dataset(
+                    f"{ref_frame}_coords", data=data_block, dtype="float32"
+                )
+                pos_ds.attrs["description"] = (
+                    f"Keypoint positions in {ref_frame} coordinates. Shape is "
+                    "(num_frames, num_keypoints, 3). See the `.attrs['keys']` for the "
+                    "order of keypoints."
+                )
+            keypoint_pos_group.attrs["keys"] = keypoint_segments
+            keypoint_pos_group.attrs["description"] = (
+                "This group contains positions of joint keypoints in the rotated image "
+                "centered around the fly, cropped, and rotated so that the fly faces "
+                'upwards. Keypoint order is given in <this_group>.attrs["keys"].'
+            )
+
+            # Add segmentation labels
+            seg_labels_all = np.array(seg_labels_all)
+            assert (
+                seg_labels_all.max() < 256
+            ), "Unique segmentation labels exceed 255, cannot be stored as uint8."
+            assert (
+                seg_labels_all.min() >= 0
+            ), "Segmentation labels contain negative values, cannot be stored as uint8."
+            seg_labels_ds = postprocessed_group.create_dataset(
+                "segmentation_labels",
+                data=seg_labels_all,
+                dtype="uint8",
+                compression="lzf",
+            )
+            seg_labels_ds.attrs["keys"] = segment_label_parser.label_keys
+            seg_labels_ds.attrs["description"] = (
+                "Segmentation labels (i.e. body segment IDs) for each pixel in the "
+                "processed (i.e. centered, cropped, rotated) images. Shape is "
+                "(num_frames, height, width). See `.attrs['keys']` on this dataset "
+                "for the mapping from label IDs (pixel values) to body segment names."
+            )
 
 
 def _draw_pose_2d_and_3d(
@@ -730,16 +783,14 @@ def postprocess_segment(
         f"Found {len(subsegments_boundaries)} subsegments in which the fly is upright."
     )
 
+    segment_h5_file_path = recording_dir / "simulation_data.h5"
+
     # Process each subsegment
     for i, (start, end) in enumerate(subsegments_boundaries):
         print(
             f"Processing subsegment {i + 1}/{len(subsegments_boundaries)} "
             f"(frames {start}:{end})"
         )
-        subsegment_frames_by_color_coding = [
-            frames[start:end] for frames in frames_by_color_coding
-        ]
-        subsegment_kinematic_states = kinematic_states_df.iloc[start:end]
 
         # Process the subsegment
         output_dir = recording_dir / f"subsegment_{i:03d}"
@@ -747,8 +798,9 @@ def postprocess_segment(
         # processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
         # processed_video_dir = output_dir  # save videos directly under subsegment dir
         process_subsegment(
-            subsegment_frames_by_color_coding,
-            subsegment_kinematic_states,
+            frames_by_color_coding,
+            segment_h5_file_path,  # Pass file path instead of file handle
+            (start, end),
             output_dir,
             fps,
             image_crop_size,
