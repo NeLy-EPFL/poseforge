@@ -93,7 +93,7 @@ class SyntheticFramesSampler:
                 grayscale conversion, or using only the 0th channel), this
                 should be set to 1. If RGB, this should be set to 3.
         """
-        self.video_paths_by_simid = video_paths_by_sim_names
+        self.video_paths_by_sim_names = video_paths_by_sim_names
         self.batch_size = batch_size
         self.sampling_stride = sampling_stride
         self.transform = transform
@@ -245,7 +245,7 @@ class SyntheticFramesSampler:
 
             # Load frames from all variants of this simulation
             sim_name = self.all_sim_names[this_sim_id]
-            variant_paths = self.video_paths_by_simid[sim_name]
+            variant_paths = self.video_paths_by_sim_names[sim_name]
             for variant_id, video_path in enumerate(variant_paths):
                 # Load frames from video
                 # frames: list of (H, W, C=3) arrays

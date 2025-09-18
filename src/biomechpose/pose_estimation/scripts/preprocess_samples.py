@@ -1,5 +1,10 @@
 import numpy as np
+import pandas as pd
+import imageio.v2 as imageio
+import torch
+import torch.nn.functional as F
 from joblib import Parallel, delayed
+from skimage.transform import resize
 from pathlib import Path
 from tqdm import trange
 from torchvision.transforms import Grayscale
@@ -8,9 +13,17 @@ from biomechpose.pose_estimation.sampler import (
     SyntheticFramesSampler,
     atomic_batch_to_file,
 )
+from biomechpose.simulate_nmf.postprocessing import SegmentLabelParser
+from biomechpose.util import (
+    read_frames_from_video,
+    default_video_writing_ffmpeg_params,
+    df_contains_expanded_columns,
+    expand_ndarray_dataframe_columns,
+    restore_expandex_dataframe_columns,
+)
 
 
-def extract_atomic_batches(
+def extract_synthetic_frames_for_atomic_batches(
     sampler: SyntheticFramesSampler,
     sample_idx: int,
     n_variants_per_atomic_batch: int,
@@ -31,9 +44,100 @@ def extract_atomic_batches(
         atomic_batch = batch[start_variant:end_variant, :, :, :, :]
         output_path = (
             output_dir
-            / f"sample{sample_idx:06d}_variantgroup{variant_group_idx:02d}.mp4"
+            / f"synth_videos_batchsample{sample_idx:06d}_variantgroup{variant_group_idx:02d}.mp4"
         )
         atomic_batch_to_file(atomic_batch, fps, output_path)
+
+
+def extract_simulated_seg_labels_for_atomic_batches(
+    sampler: SyntheticFramesSampler,
+    sample_idx: int,
+    segmentation_label_parser: SegmentLabelParser,
+    nmf_sim_rendering_basedir: Path,
+    output_dir: Path,
+    n_rendering_colorcodings: int = 2,
+):
+    _, sim_ids, local_frame_ids = sampler.determine_batch_frame_ids(sample_idx)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extract labels for each simulation involved in the batch
+    labels_all = np.zeros((sampler.batch_size, *sampler.frame_size), dtype=np.uint8)
+    for sim_id in np.unique(sim_ids):
+        sim_name = sampler.all_sim_names[sim_id]
+        mask = sim_ids == sim_id
+        num_frames_in_sim = mask.sum()
+
+        segmentation_labels_path = (
+            nmf_sim_rendering_basedir / sim_name / "segmentation_labels.npz"
+        )
+        segmentation_labels_data = np.load(segmentation_labels_path)
+        sim_length = segmentation_labels_data["labels"].shape[0]
+        mask_within_sim = np.isin(
+            np.arange(sim_length), local_frame_ids[sim_ids == sim_id]
+        )
+        labels = segmentation_labels_data["labels"][mask_within_sim, :, :]
+        labels = labels.astype(np.uint8)
+        label_keys = segmentation_labels_data["label_keys"]
+        assert len(label_keys) <= 255, "Too many unique labels (>255) to fit in uint8"
+        labels_resampled = (
+            F.interpolate(
+                torch.from_numpy(labels)[:, None, :, :],  # additional dim for channels
+                size=sampler.frame_size,
+                mode="nearest",
+            )
+            .squeeze(1)
+            .numpy()
+        )  # remove channels dim
+        labels_all[mask, :, :] = labels_resampled
+
+    # Save label images as a video
+    output_path = output_dir / f"seg_labels_batchsample{sample_idx:06d}.npz"
+    np.savez_compressed(output_path, labels=labels_all, label_keys=label_keys)
+    np.savez(str(output_path) + ".cpr", labels=labels_all, label_keys=label_keys)
+
+
+def extract_simulated_kinematics_labels_for_atomic_batches(
+    sampler: SyntheticFramesSampler,
+    sample_idx: int,
+    nmf_sim_rendering_basedir: Path,
+    output_dir: Path,
+):
+    import time
+
+    st = time.time()
+    _, sim_ids, local_frame_ids = sampler.determine_batch_frame_ids(sample_idx)
+    print(f"  kinstates: sampling done after {(time.time()-st)*1000:.1f} ms")
+    assert np.diff(sim_ids).min() >= 0, "sim_ids should be monotonically increasing"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    kinematics_rows_all = []
+    for sim_id in np.unique(sim_ids):
+        sim_name = sampler.all_sim_names[sim_id]
+        kinematics_path = (
+            nmf_sim_rendering_basedir / sim_name / "processed_kinematic_states.pkl"
+        )
+        print(
+            f"  kinstates: loading {kinematics_path} after {(time.time()-st)*1000:.1f} ms"
+        )
+        kinematics_df = pd.read_pickle(kinematics_path)
+        if df_contains_expanded_columns(kinematics_df):
+            kinematics_df = restore_expandex_dataframe_columns(kinematics_df)
+        print(f"  kinstates: loading done after {(time.time()-st)*1000:.1f} ms")
+        mask_within_sim = np.isin(
+            np.arange(len(kinematics_df)), local_frame_ids[sim_ids == sim_id]
+        )
+        kinematics_df = kinematics_df.loc[mask_within_sim, :]
+        kinematics_rows_all.append(kinematics_df)
+    kinematics_df_all = pd.concat(kinematics_rows_all, axis=0).reset_index(drop=True)
+    assert (
+        len(kinematics_df_all) == sampler.batch_size
+    ), f"Expected {sampler.batch_size} rows, got {len(kinematics_df_all)}"
+    print(f"  kinstates: formatting done after {(time.time()-st)*1000:.1f} ms")
+    output_path = output_dir / f"kinematics_labels_batchsample{sample_idx:06d}.pkl"
+    kinematics_df_all_expanded = expand_ndarray_dataframe_columns(kinematics_df_all)
+    kinematics_df_all_expanded.to_pickle(output_path)
+    print(f"  kinstates: saved to {output_path}")
 
 
 if __name__ == "__main__":
@@ -42,6 +146,7 @@ if __name__ == "__main__":
     atomic_batch_nvariants_max = 4
     transform = Grayscale(num_output_channels=1)
     minimum_time_diff_frames = 60  # 0.2s at 300Hz
+    nmf_sim_rendering_basedir = Path("bulk_data/nmf_rendering/")
     output_dir = Path("bulk_data/pose_estimation/atomic_batches")
 
     # Set the following to a non-None value to limit the scope of the job for testing
@@ -88,24 +193,41 @@ if __name__ == "__main__":
         f"({sampler.total_n_frames / 300:.2f} seconds at 300 FPS)."
     )
 
-    n_atomic_batches_across_variants = (
-        n_variants + atomic_batch_nvariants_max - 1
-    ) // atomic_batch_nvariants_max
-    n_atomic_batches_across_sims = (
-        sampler.total_n_frames + atomic_batch_nframes - 1
-    ) // atomic_batch_nframes
+    # Create segmentation label parser
+    segmentation_label_parser = SegmentLabelParser()
 
-    # # Sequential processing
-    # for batch_id in trange(len(sampler), total=len(sampler)):
-    #     extract_atomic_batches(
-    #         sampler, batch_id, atomic_batch_nvariants_max, output_dir, sampler.fps
-    #     )
+    # Define processing payload
+    def process_one_batch(batch_id: int):
+        import time
 
-    # Parallel processing
-    n_jobs = -1  # Use all available CPU cores
-    Parallel(n_jobs=n_jobs)(
-        delayed(extract_atomic_batches)(
+        st = time.time()
+        extract_synthetic_frames_for_atomic_batches(
             sampler, batch_id, atomic_batch_nvariants_max, output_dir, sampler.fps
         )
-        for batch_id in trange(len(sampler), total=len(sampler))
-    )
+        print(
+            f"Extracted frames for batch {batch_id} in {(time.time()-st)*1000:.1f} ms"
+        )
+
+        st = time.time()
+        extract_simulated_seg_labels_for_atomic_batches(
+            sampler,
+            batch_id,
+            segmentation_label_parser,
+            nmf_sim_rendering_basedir,
+            output_dir,
+        )
+        print(
+            f"Extracted seg labels for batch {batch_id} in {(time.time()-st)*1000:.1f} ms"
+        )
+
+        st = time.time()
+        extract_simulated_kinematics_labels_for_atomic_batches(
+            sampler, batch_id, nmf_sim_rendering_basedir, output_dir
+        )
+        print(
+            f"Extracted kinematics labels for batch {batch_id} in {(time.time()-st)*1000:.1f} ms"
+        )
+
+    # Sequential processing
+    for batch_id in trange(len(sampler), total=len(sampler)):
+        process_one_batch(batch_id)

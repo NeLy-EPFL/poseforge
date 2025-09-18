@@ -1,6 +1,7 @@
 import random
 import torch
 import numpy as np
+import pandas as pd
 import os
 import psutil
 import gc
@@ -142,3 +143,75 @@ def check_num_frames(video_path: Path) -> int:
     except Exception as e:
         raise RuntimeError(f"Failed to open video file: {video_path}") from e
     return num_frames
+
+
+def expand_ndarray_dataframe_columns(df_in: pd.DataFrame) -> pd.DataFrame:
+    """For each column that contains values that are numpy arrays, expand
+    these values to individual columns."""
+    df_out = pd.DataFrame()
+    for col_name in df_in.columns:
+        if isinstance(sample_value := df_in[col_name].iloc[0], np.ndarray):
+            shape = sample_value.shape
+            array_values = np.stack(df_in[col_name].values).reshape(len(df_in), -1)
+            n_subcols = array_values.shape[1]
+            for i in range(n_subcols):
+                shape_str = "x".join(map(str, shape))
+                expanded_col_name = f"!EXPANDED:{col_name}:{shape_str}|{i}"
+                df_out[expanded_col_name] = array_values[:, i]
+        else:
+            df_out[col_name] = df_in[col_name]
+    return df_out
+
+
+def restore_expandex_dataframe_columns(df_in: pd.DataFrame) -> pd.DataFrame:
+    """Restore columns that were expanded by make_dataframe_columns_simple.
+    This makes some columns contain numpy arrays again."""
+    df_out = pd.DataFrame()
+    expansion_map = set(
+        [
+            col_name.split("|")[0]
+            for col_name in df_in.columns
+            if col_name.startswith("!EXPANDED:")
+        ]
+    )
+
+    for col_name in df_in.columns:
+        if col_name.startswith("!EXPANDED:"):
+            base_col_name = col_name.split("|")[0]
+            if base_col_name in expansion_map:
+                _, orig_col_name, shape_str = base_col_name.split(":")
+                shape = tuple(map(int, shape_str.split("x")))
+                size = np.prod(shape)
+                orig_col_values = np.empty(
+                    (len(df_in), size), dtype=df_in[col_name].dtype
+                )
+                for i in range(size):
+                    expanded_col_name = f"{base_col_name}|{i}"
+                    orig_col_values[:, i] = df_in[expanded_col_name].values
+                orig_col_values = orig_col_values.reshape(len(df_in), *shape)
+                df_out[orig_col_name] = [orig_col_values[i] for i in range(len(df_in))]
+                expansion_map.remove(base_col_name)
+            else:
+                continue  # already processed
+        else:
+            df_out[col_name] = df_in[col_name]
+
+    return df_out
+
+
+def df_contains_expanded_columns(df: pd.DataFrame) -> bool:
+    """Check if a dataframe contains any expanded columns"""
+    if len(df) == 0:
+        raise ValueError("DataFrame is empty")
+    return any(col_name.startswith("!EXPANDED:") for col_name in df.columns)
+
+
+def df_contains_ndarrays(df: pd.DataFrame) -> bool:
+    """Check if a dataframe contains any columns with numpy arrays"""
+    if len(df) == 0:
+        raise ValueError("DataFrame is empty")
+    return any(
+        isinstance(sample_value, np.ndarray)
+        for col_name in df.columns
+        for sample_value in [df[col_name].iloc[0]]
+    )
