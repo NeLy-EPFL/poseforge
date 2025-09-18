@@ -420,6 +420,7 @@ def process_subsegment(
                 pos_ds = keypoint_pos_group.create_dataset(
                     f"{ref_frame}_coords", data=data_block, dtype="float32"
                 )
+                pos_ds.attrs["keys"] = keypoint_segments
                 pos_ds.attrs["description"] = (
                     f"Keypoint positions in {ref_frame} coordinates. Shape is "
                     "(num_frames, num_keypoints, 3). See the `.attrs['keys']` for the "
@@ -461,7 +462,7 @@ def _draw_pose_2d_and_3d(
     *,
     frame_index: int,
     frame: np.ndarray,
-    df_row: pd.Series,
+    processed_sim_data_path: Path,
     camera_elevation: float,
     azimuth_rotation_period: float,
     max_abs_azimuth: float,
@@ -472,57 +473,70 @@ def _draw_pose_2d_and_3d(
     )
     ax_pose3d.view_init(elev=camera_elevation, azim=azimuth)
 
-    # Plot 2D image
-    ax_pose2d.imshow(frame)
+    with h5py.File(processed_sim_data_path, "r") as h5_file:
+        # Plot 2D image
+        ax_pose2d.imshow(frame)
 
-    # Overlay keypoints on 2D image (note that coords are in row, col, depth)
-    # Legs
-    for leg in legs:
-        color = kchain_plotting_colors[leg]
-        all_positions = []
-        for kpt in leg_keypoints:
-            segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
-            all_positions.append(df_row[f"keypoint_pos_camera_{leg}{segment_name}"])
-        all_positions = np.array(all_positions)
-        ax_pose2d.plot(
-            all_positions[:, 0], all_positions[:, 1], color=color, linewidth=2
-        )
-    # Antenna
-    for side in "LR":
-        color = kchain_plotting_colors[f"{side}Antenna"]
-        pos = df_row[f"keypoint_pos_camera_{side}Pedicel"]
-        ax_pose2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
+        # Overlay keypoints on 2D image (note that coords are in row, col, depth)
+        # Legs
+        keypoint_pos_cam_ds = h5_file["postprocessed/keypoint_pos/camera_coords"]
+        keypoints = keypoint_pos_cam_ds.attrs["keys"].tolist()
+        for leg in legs:
+            color = kchain_plotting_colors[leg]
+            all_positions = []
+            for kpt in leg_keypoints:
+                segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
+                keypoint_idx = keypoints.index(f"{leg}{segment_name}")
+                pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
+                all_positions.append(pos)
+            all_positions = np.array(all_positions)
+            ax_pose2d.plot(
+                all_positions[:, 0], all_positions[:, 1], color=color, linewidth=2
+            )
+        # Antenna
+        for side in "LR":
+            segment_name = f"{side}Pedicel"
+            keypoint_idx = keypoints.index(segment_name)
+            pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
+            color = kchain_plotting_colors[f"{side}Antenna"]
+            ax_pose2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
 
-    # Plot 3D keypoints
-    for leg in legs:
-        color = kchain_plotting_colors[leg]
-        all_positions = []
-        for kpt in leg_keypoints:
-            segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
-            all_positions.append(df_row[f"keypoint_pos_world_{leg}{segment_name}"])
-        all_positions = np.array(all_positions)
-        ax_pose3d.plot(
-            all_positions[:, 0],
-            all_positions[:, 1],
-            all_positions[:, 2],
-            marker="o",
-            color=color,
-            linewidth=2,
-        )
-    # Antenna
-    for side in "LR":
-        color = kchain_plotting_colors[f"{side}Antenna"]
-        pos = df_row[f"keypoint_pos_world_{side}Pedicel"]
-        ax_pose3d.plot(pos[0], pos[1], pos[2], marker="o", color=color, markersize=5)
+        # Plot 3D keypoints
+        for leg in legs:
+            color = kchain_plotting_colors[leg]
+            all_positions = []
+            for kpt in leg_keypoints:
+                segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
+                keypoint_idx = keypoints.index(f"{leg}{segment_name}")
+                pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
+                all_positions.append(pos)
+            all_positions = np.array(all_positions)
+            ax_pose3d.plot(
+                all_positions[:, 0],
+                all_positions[:, 1],
+                all_positions[:, 2],
+                marker="o",
+                color=color,
+                linewidth=2,
+            )
+        # Antenna
+        for side in "LR":
+            segment_name = f"{side}Pedicel"
+            keypoint_idx = keypoints.index(segment_name)
+            pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
+            color = kchain_plotting_colors[f"{side}Antenna"]
+            ax_pose3d.plot(
+                pos[0], pos[1], pos[2], marker="o", color=color, markersize=5
+            )
 
-    ax_pose2d.set_axis_off()
-    ax_pose3d.set_xlabel("anterior-posterior")
-    ax_pose3d.set_ylabel("lateral")
-    ax_pose3d.set_zlabel("dorsal-ventral")
-    ax_pose3d.set_xlim(-2, 3)
-    ax_pose3d.set_ylim(-2, 2)
-    ax_pose3d.set_zlim(-0.5, 2)
-    ax_pose3d.set_aspect("equal")
+        ax_pose2d.set_axis_off()
+        ax_pose3d.set_xlabel("anterior-posterior")
+        ax_pose3d.set_ylabel("lateral")
+        ax_pose3d.set_zlabel("dorsal-ventral")
+        ax_pose3d.set_xlim(-2, 3)
+        ax_pose3d.set_ylim(-2, 2)
+        ax_pose3d.set_zlim(-0.5, 2)
+        ax_pose3d.set_aspect("equal")
 
 
 def _draw_segmentation_labels_map(
@@ -545,7 +559,7 @@ def _draw_segmentation_labels_map(
 def visualize_single_frame(
     frame_index: int,
     frame: np.ndarray,
-    df_row: pd.Series,
+    processed_sim_data_path: Path,
     seg_labels: np.ndarray,
     temp_dir: Path,
     camera_elevation: float,
@@ -559,7 +573,9 @@ def visualize_single_frame(
     Args:
         frame_index: Index of the frame for proper ordering
         frame: Input image frame
-        kinematic_entry: DataFrame row with kinematic state data
+        processed_sim_data_path: Path to the processed simulation data
+            file (HDF5)
+        seg_labels: Segmentation labels for the frame
         temp_dir: Temporary directory for saving frames
         camera_elevation: 3D plot camera elevation
         azimuth_rotation_period: Period for azimuth rotation
@@ -583,7 +599,7 @@ def visualize_single_frame(
         ax_pose3d,
         frame_index=frame_index,
         frame=frame,
-        df_row=df_row,
+        processed_sim_data_path=processed_sim_data_path,
         camera_elevation=camera_elevation,
         azimuth_rotation_period=azimuth_rotation_period,
         max_abs_azimuth=max_abs_azimuth,
@@ -613,16 +629,8 @@ def visualize_subsegment(
         processed_subsegment_dir / "processed_nmf_sim_render_colorcode_0.mp4"
     )
 
-    # Load kinematic states history
-    kinematic_states_df = pd.read_pickle(
-        processed_subsegment_dir / "processed_kinematic_states.pkl"
-    )
-
-    if len(kinematic_states_df) != len(frames):
-        raise ValueError(
-            f"Number of frames in video ({len(frames)}) does not match "
-            f"number of kinematic states ({len(kinematic_states_df)})."
-        )
+    # Find processed simulation data
+    processed_data_path = processed_subsegment_dir / "processed_simulation_data.h5"
 
     # Load segmentation labels
     seg_labels_data = np.load(
@@ -664,7 +672,7 @@ def visualize_subsegment(
         delayed(visualize_single_frame)(
             i,
             frame,
-            kinematic_states_df.iloc[i],
+            processed_data_path,
             seg_labels_all[i],
             temp_dir,
             camera_elevation,
