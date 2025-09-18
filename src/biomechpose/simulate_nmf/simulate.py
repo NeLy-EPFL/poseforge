@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import dm_control.mujoco
 import imageio
+import h5py
 from collections import defaultdict
 from tqdm import trange
 from pathlib import Path
@@ -336,14 +337,13 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
     # (e.g. 0.1x) for the play speed. This means that instead of deciding the effective
     # data saving/rendering rate based on the desired play speed and FPS, we need to
     # decide the FPS based on the desired play speed and the target data rate.
-    flygym_camera_fps = render_fps * render_play_speed
     camera = CameraForRendering(
         attachment_point=fly.model.worldbody,
         camera_name=f"flytrack_cam",
         camera_parameters=camera_params,
         window_size=render_window_size,
         play_speed=render_play_speed,
-        fps=flygym_camera_fps,
+        fps=render_fps,
         draw_contacts=False,
         play_speed_text=False,
     )
@@ -505,49 +505,193 @@ def run_neuromechfly_simulation(
     return camera, hist_dict
 
 
-def make_kinematic_states_dataframe(hist_dict):
-    columns = {}
-    columns["time"] = hist_dict["values"]["timestamp"]
+def make_simulation_data_h5(hist_dict, h5_path: Path):
+    """
+    Create HDF5 file with simulation data in the same format as
+    convert_pickled_dataframes_to_h5.py
+    """
+    with h5py.File(h5_path, "w") as h5_file:
+        n_timesteps = len(hist_dict["values"]["timestamp"])
+        h5_file.attrs["n_timesteps"] = n_timesteps
 
-    # Joint angles
-    joint_angles_arr = np.array(hist_dict["values"]["joint_angles"], dtype=np.float32)
-    for i, dof_name in enumerate(hist_dict["keys"]["joint_angles"]):
-        kchain_name, link_name = parse_nmf_joint_name(dof_name)
-        columns[f"dof_angle_{kchain_name}{link_name}"] = joint_angles_arr[:, i]
+        # Time
+        time_ds = h5_file.create_dataset(
+            "sim_time",
+            data=np.array(hist_dict["values"]["timestamp"], dtype="float32"),
+            dtype="float32",
+        )
+        time_ds.attrs["units"] = "s"
+        time_ds.attrs["description"] = "Time in the NeuroMechFly simulation"
 
-    # Body segment states
-    for sensor_type, sensor_data in hist_dict["values"]["body_seg_states"].items():
-        # sensor_data_arr has shape shape (nframes, nsegs, 3 for pos or 4 quaternion)
-        sensor_data_arr = np.array(sensor_data, dtype=np.float32)
-        if sensor_data_arr.size == 0:
-            # This sensor has not actually been added (e.g. commented out in
-            # FlyForRendering._add_pos_and_quat_sensors because it is not used)
-            continue
-        for i, seg_name in enumerate(hist_dict["keys"]["body_segments"]):
-            list_of_arrs = list(sensor_data_arr[:, i, :])
-            columns[f"body_seg_{sensor_type}_{seg_name}"] = list_of_arrs
+        # DoF angles
+        joint_angles_arr = np.array(
+            hist_dict["values"]["joint_angles"], dtype="float32"
+        )
+        dof_keys = []
+        for dof_name in hist_dict["keys"]["joint_angles"]:
+            kchain_name, link_name = parse_nmf_joint_name(dof_name)
+            dof_keys.append(f"{kchain_name}{link_name}")
 
-    # Cardinal vectors
-    cardinal_vectors_arr = np.array(
-        hist_dict["values"]["cardinal_vectors"], dtype=np.float32
-    )
-    for i, direction in enumerate(hist_dict["keys"]["cardinal_vectors"]):
-        columns[f"cardinal_vector_{direction}"] = list(cardinal_vectors_arr[:, i, :])
+        dof_angles_ds = h5_file.create_dataset(
+            "joint_angles", data=joint_angles_arr, dtype="float32"
+        )
+        dof_angles_ds.attrs["keys"] = dof_keys
+        dof_angles_ds.attrs["units"] = "radians"
+        dof_angles_ds.attrs["description"] = (
+            "Angles of DoFs tracked in the simulation. "
+            "This dataset has shape (n_timesteps, n_dofs). The order of the DoFs is given "
+            "in the 'order' attribute."
+        )
 
-    # Camera matrix
-    camera_matrix_arr = np.array(
-        hist_dict["values"]["camera_matrix"], dtype=np.float32
-    )  # (nframes, 3, 4)
-    columns["camera_matrix"] = list(camera_matrix_arr)
+        # Body segment states
+        body_seg_group = h5_file.create_group("body_segment_states")
+        segments_order = hist_dict["keys"]["body_segments"]
 
-    # Fly base position
-    fly_base_pos_arr = np.array(hist_dict["values"]["fly_base_pos"], dtype=np.float32)
-    columns["fly_base_pos"] = list(fly_base_pos_arr)
+        # Process each sensor type in the hist_dict
+        for sensor_type, sensor_data_list in hist_dict["values"][
+            "body_seg_states"
+        ].items():
+            if not sensor_data_list:  # Skip empty sensor data
+                continue
 
-    kinematic_states_df = pd.DataFrame(columns)
-    kinematic_states_df.index.name = "frame_id"
+            sensor_data_arr = np.array(sensor_data_list, dtype="float32")
+            if sensor_data_arr.size == 0:
+                continue
 
-    return kinematic_states_df
+            # Determine the reference frame and data type from sensor_type
+            if sensor_type == "pos_atparent":
+                dataset_name = "pos_atparent"
+                n_dim = 3
+                keys = ["x", "y", "z"]
+                units = "mm"
+                description = (
+                    'Position of each body segment in the "atparent" reference '
+                    "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
+                    "order of the segments is given in the 'order' attribute."
+                )
+            elif sensor_type == "quat_atparent":
+                dataset_name = "quat_atparent"
+                n_dim = 4
+                keys = ["w", "x", "y", "z"]
+                units = "quaternion"
+                description = (
+                    "Orientation (as a quaternion) of each body segment in the "
+                    '"atparent" reference frame. This dataset has shape '
+                    "(n_timesteps, n_segments, 4). The order of the segments is given "
+                    "in the 'order' attribute."
+                )
+            elif sensor_type == "pos_com":
+                dataset_name = "pos_com"
+                n_dim = 3
+                keys = ["x", "y", "z"]
+                units = "mm"
+                description = (
+                    'Position of each body segment in the "com" reference '
+                    "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
+                    "order of the segments is given in the 'order' attribute."
+                )
+            elif sensor_type == "quat_com":
+                dataset_name = "quat_com"
+                n_dim = 4
+                keys = ["w", "x", "y", "z"]
+                units = "quaternion"
+                description = (
+                    "Orientation (as a quaternion) of each body segment in the "
+                    '"com" reference frame. This dataset has shape '
+                    "(n_timesteps, n_segments, 4). The order of the segments is given "
+                    "in the 'order' attribute."
+                )
+            elif sensor_type == "pos_global":
+                dataset_name = "pos_global"
+                n_dim = 3
+                keys = ["x", "y", "z"]
+                units = "mm"
+                description = (
+                    'Position of each body segment in the "global" reference '
+                    "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
+                    "order of the segments is given in the 'order' attribute."
+                )
+            elif sensor_type == "quat_global":
+                dataset_name = "quat_global"
+                n_dim = 4
+                keys = ["w", "x", "y", "z"]
+                units = "quaternion"
+                description = (
+                    "Orientation (as a quaternion) of each body segment in the "
+                    '"global" reference frame. This dataset has shape '
+                    "(n_timesteps, n_segments, 4). The order of the segments is given "
+                    "in the 'order' attribute."
+                )
+            else:
+                print(f"Unknown sensor type: {sensor_type}, skipping...")
+                continue
+
+            # Create the dataset
+            this_ds = body_seg_group.create_dataset(
+                dataset_name, data=sensor_data_arr, dtype="float32"
+            )
+            this_ds.attrs["keys"] = keys
+            this_ds.attrs["units"] = units
+            this_ds.attrs["description"] = description
+
+        # Set body segment group attributes
+        body_seg_group.attrs["keys"] = segments_order
+        body_seg_group.attrs["description"] = (
+            "Position (in mm) and orientation (as quaternions) of each body segment "
+            "tracked in the simulation. Values are provided in several reference frames: "
+            "'atparent' corresponds to 'xbody' in MuJoCo: 'the regular frame of the body "
+            "(usually centered at the joint with the parent body)'; `com` corresponds to "
+            "'body' in MuJoCo: 'the inertial frame of the body'; `global` is the position "
+            "and orientation in the global/world reference frame. See "
+            "https://mujoco.readthedocs.io/en/stable/XMLreference.html#sensor-framepos "
+            "for the distinction between these `body` and `xbody`."
+        )
+
+        # Cardinal vectors
+        cardinal_vec_group = h5_file.create_group("cardinal_vectors")
+        cardinal_vec_group.attrs["keys"] = ["forward", "left", "up"]
+        cardinal_vec_group.attrs["description"] = (
+            "Unit vectors pointing in cardinal directions from the perspective of the fly, "
+            "i.e. vector pointing forward, to the left, and up from the fly's body. "
+            "These vectors are in global coordinates and each of them is of shape "
+            "(n_timesteps, 3) where 3 are the x/y/z components."
+        )
+
+        cardinal_vectors_arr = np.array(
+            hist_dict["values"]["cardinal_vectors"], dtype="float32"
+        )
+        for i, vec_direction in enumerate(["forward", "left", "up"]):
+            data_block = cardinal_vectors_arr[:, i, :]  # (n_timesteps, 3)
+            this_ds = cardinal_vec_group.create_dataset(
+                vec_direction, data=data_block, dtype="float32"
+            )
+            this_ds.attrs["keys"] = ["x", "y", "z"]
+
+        # Camera matrix
+        camera_matrix_arr = np.array(
+            hist_dict["values"]["camera_matrix"], dtype="float32"
+        )
+        cam_mat_ds = h5_file.create_dataset(
+            "camera_matrix", data=camera_matrix_arr, dtype="float32"
+        )
+        cam_mat_ds.attrs["description"] = (
+            "3x4 camera matrix (numpy array) for each frame "
+            "(see https://en.wikipedia.org/wiki/Camera_matrix)."
+        )
+
+        # Fly base position
+        fly_base_pos_arr = np.array(
+            hist_dict["values"]["fly_base_pos"], dtype="float32"
+        )
+        fly_base_pos_ds = h5_file.create_dataset(
+            "fly_base_pos", data=fly_base_pos_arr, dtype="float32"
+        )
+        fly_base_pos_ds.attrs["keys"] = ["x", "y", "z"]
+        fly_base_pos_ds.attrs["units"] = "mm"
+        fly_base_pos_ds.attrs["description"] = (
+            "Position of the fly's center of mass in global coordinates. This dataset has "
+            "shape (n_timesteps, 3) where the 3 values are the x/y/z components."
+        )
 
 
 def simulate_one_segment(
@@ -637,8 +781,8 @@ def simulate_one_segment(
         return False
 
     # Save kinematic states as Pandas DataFrame
-    kinematic_states_df = make_kinematic_states_dataframe(hist_dict)
-    kinematic_states_df.to_pickle(output_dir / "kinematic_states_history.pkl")
+    h5_path = output_dir / "simulation_data.h5"
+    make_simulation_data_h5(hist_dict, h5_path)
 
     # Save rendered frames as a video
     camera.save_video(output_dir)
