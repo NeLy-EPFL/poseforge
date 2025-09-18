@@ -171,10 +171,16 @@ def extract_body_segment_positions(
         body_segments = h5_file["body_segment_states"].attrs["keys"].tolist()
 
     # Get positions of each keypoint
-    pos_world = h5_file[f"body_segment_states/{sensor_type}"][frame_idx, :, :].T
+    pos_world = np.ones((3, len(body_segments)), dtype=np.float32)
+    seg_states_ds = h5_file[f"body_segment_states/{sensor_type}"]
+    keys_in_h5_ds = h5_file["body_segment_states"].attrs["keys"].tolist()
+    for i, segment_name in enumerate(body_segments):
+        idx_in_h5_ds = keys_in_h5_ds.index(segment_name)
+        pos_world[:, i] = seg_states_ds[frame_idx, idx_in_h5_ds, :]
+    # pos_world_homogeneous: (4, num_keypoints) (last row is all ones)
     pos_world_homogeneous = np.vstack(
-        [pos_world, np.ones((1, pos_world.shape[1]))]
-    )  # (4, num_keypoints)
+        [pos_world, np.ones((1, len(body_segments)), dtype=np.float32)]
+    )
 
     # Project to camera coordinates using the working approach from the snippet
     camera_matrix = h5_file["camera_matrix"][frame_idx, :, :]  # This is 3x4 from MuJoCo
