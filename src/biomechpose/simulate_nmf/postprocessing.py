@@ -171,12 +171,15 @@ def extract_body_segment_positions(
         body_segments = h5_file["body_segment_states"].attrs["keys"].tolist()
 
     # Get positions of each keypoint
-    pos_world = np.ones((3, len(body_segments)), dtype=np.float32)
+    pos_world = np.full((3, len(body_segments)), np.nan, dtype=np.float32)
     seg_states_ds = h5_file[f"body_segment_states/{sensor_type}"]
     keys_in_h5_ds = h5_file["body_segment_states"].attrs["keys"].tolist()
     for i, segment_name in enumerate(body_segments):
         idx_in_h5_ds = keys_in_h5_ds.index(segment_name)
         pos_world[:, i] = seg_states_ds[frame_idx, idx_in_h5_ds, :]
+    assert not np.any(
+        np.isnan(pos_world)
+    ), "Some body segment positions are not populated correctly."
     # pos_world_homogeneous: (4, num_keypoints) (last row is all ones)
     pos_world_homogeneous = np.vstack(
         [pos_world, np.ones((1, len(body_segments)), dtype=np.float32)]
@@ -639,7 +642,6 @@ def visualize_subsegment(
 
     # Find processed simulation data
     processed_data_path = processed_subsegment_dir / "processed_simulation_data.h5"
-    
     with h5py.File(processed_data_path, "r") as h5_file:
         ds = h5_file["postprocessed/segmentation_labels"]
         seg_labels_all = ds[...]
@@ -759,7 +761,7 @@ def postprocess_segment(
 ):
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
-    
+
     segment_h5_file_path = recording_dir / "simulation_data.h5"
 
     # Load video frames
@@ -768,11 +770,13 @@ def postprocess_segment(
     )
     for i, frames in enumerate(frames_by_color_coding):
         frames_by_color_coding[i] = frames[start_frame:end_frame]
-    
+
     with h5py.File(segment_h5_file_path, "r") as h5_file:
-        upward_cardinal_vectors = h5_file["cardinal_vectors/up"][start_frame:end_frame, :]
+        upward_cardinal_vectors = h5_file["cardinal_vectors/up"][
+            start_frame:end_frame, :
+        ]
         timestep = h5_file["sim_time"][1] - h5_file["sim_time"][0]
-        
+
         subsegments_boundaries = select_subsegments(
             upward_cardinal_vectors,
             max_tilt_angle_deg,

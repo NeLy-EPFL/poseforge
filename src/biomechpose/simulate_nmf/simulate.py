@@ -541,7 +541,7 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
         dof_angles_ds.attrs["description"] = (
             "Angles of DoFs tracked in the simulation. "
             "This dataset has shape (n_timesteps, n_dofs). The order of the DoFs is given "
-            "in the 'order' attribute."
+            "in the 'keys' attribute."
         )
 
         # Body segment states
@@ -560,76 +560,33 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
                 continue
 
             # Determine the reference frame and data type from sensor_type
-            if sensor_type == "pos_atparent":
-                dataset_name = "pos_atparent"
-                n_dim = 3
+            assert sensor_type.count("_") == 1, f"Unexpected sensor type: {sensor_type}"
+            valid_ref_frames = ["atparent", "com", "global"]
+            pos_or_quat, ref_frame = sensor_type.split("_")
+            assert (
+                pos_or_quat in ["pos", "quat"] and ref_frame in valid_ref_frames
+            ), f"Unexpected sensor type: {sensor_type}"
+
+            if pos_or_quat == "pos":
                 keys = ["x", "y", "z"]
                 units = "mm"
-                description = (
-                    'Position of each body segment in the "atparent" reference '
-                    "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
-                    "order of the segments is given in the 'order' attribute."
-                )
-            elif sensor_type == "quat_atparent":
-                dataset_name = "quat_atparent"
-                n_dim = 4
+            else:  # quat
                 keys = ["w", "x", "y", "z"]
                 units = "quaternion"
-                description = (
-                    "Orientation (as a quaternion) of each body segment in the "
-                    '"atparent" reference frame. This dataset has shape '
-                    "(n_timesteps, n_segments, 4). The order of the segments is given "
-                    "in the 'order' attribute."
-                )
-            elif sensor_type == "pos_com":
-                dataset_name = "pos_com"
-                n_dim = 3
-                keys = ["x", "y", "z"]
-                units = "mm"
-                description = (
-                    'Position of each body segment in the "com" reference '
-                    "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
-                    "order of the segments is given in the 'order' attribute."
-                )
-            elif sensor_type == "quat_com":
-                dataset_name = "quat_com"
-                n_dim = 4
-                keys = ["w", "x", "y", "z"]
-                units = "quaternion"
-                description = (
-                    "Orientation (as a quaternion) of each body segment in the "
-                    '"com" reference frame. This dataset has shape '
-                    "(n_timesteps, n_segments, 4). The order of the segments is given "
-                    "in the 'order' attribute."
-                )
-            elif sensor_type == "pos_global":
-                dataset_name = "pos_global"
-                n_dim = 3
-                keys = ["x", "y", "z"]
-                units = "mm"
-                description = (
-                    'Position of each body segment in the "global" reference '
-                    "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
-                    "order of the segments is given in the 'order' attribute."
-                )
-            elif sensor_type == "quat_global":
-                dataset_name = "quat_global"
-                n_dim = 4
-                keys = ["w", "x", "y", "z"]
-                units = "quaternion"
-                description = (
-                    "Orientation (as a quaternion) of each body segment in the "
-                    '"global" reference frame. This dataset has shape '
-                    "(n_timesteps, n_segments, 4). The order of the segments is given "
-                    "in the 'order' attribute."
-                )
-            else:
-                print(f"Unknown sensor type: {sensor_type}, skipping...")
-                continue
+            _pos_or_quat_desc = {
+                "pos": "Position",
+                "quat": "Orientation (as a quaternion)",
+            }
+            description = (
+                f"{_pos_or_quat_desc[pos_or_quat]} of each body segment in the "
+                f'"{ref_frame}" reference frame. This dataset has shape '
+                f"(n_timesteps, n_segments, {len(keys)}). The order of the segments "
+                "is given in the 'keys' attribute."
+            )
 
             # Create the dataset
             this_ds = body_seg_group.create_dataset(
-                dataset_name, data=sensor_data_arr, dtype="float32"
+                sensor_type, data=sensor_data_arr, dtype="float32"
             )
             this_ds.attrs["keys"] = keys
             this_ds.attrs["units"] = units

@@ -57,7 +57,7 @@ def convert_kinematics_dataframe_to_h5(
     dof_angles_ds.attrs["description"] = (
         "Angles of DoFs tracked in the simulation. "
         "This dataset has shape (n_timesteps, n_dofs). The order of the DoFs is given "
-        "in the 'order' attribute."
+        "in the 'keys' attribute."
     )
     _n_processed_columns += len(dof_columns)
 
@@ -98,7 +98,7 @@ def convert_kinematics_dataframe_to_h5(
                 this_ds.attrs["description"] = (
                     f'Position of each body segment in the "{ref_frame}" reference '
                     "frame. This dataset has shape (n_timesteps, n_segments, 3). The "
-                    "order of the segments is given in the 'order' attribute."
+                    "order of the segments is given in the 'keys' attribute."
                 )
             else:
                 this_ds.attrs["keys"] = ["w", "x", "y", "z"]
@@ -107,7 +107,7 @@ def convert_kinematics_dataframe_to_h5(
                     "Orientation (as a quaternion) of each body segment in the "
                     f'"{ref_frame}" reference frame. This dataset has shape '
                     "(n_timesteps, n_segments, 4). The order of the segments is given "
-                    "in the 'order' attribute."
+                    "in the 'keys' attribute."
                 )
             _n_processed_columns += len(columns)
 
