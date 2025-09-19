@@ -411,9 +411,41 @@ def process_subsegment(
             raw_group = subsegment_h5_file.create_group("raw")
             for key in source_h5_file.keys():
                 source_h5_file.copy(key, raw_group)
+            raw_group.attrs["n_timesteps"] = source_h5_file.attrs["n_timesteps"]
+            raw_group.attrs["description"] = (
+                "Data collected during the full NeuroMechFly simulation that this "
+                "subsegment is part of."
+            )
 
             # Create group for postprocessed data
             postprocessed_group = subsegment_h5_file.create_group("postprocessed")
+            postprocessed_group.attrs["n_timesteps"] = num_frames
+            postprocessed_group.attrs["description"] = (
+                "Variables derived from the raw simulation data, including DoF angles, "
+                "3D keypoint positions, body segment positions and orientations, and "
+                "2D segmentation labels from the camera's perspective. The images have "
+                "been transformed to be centered on the fly, cropped to a square, and "
+                "rotated so that the fly faces up. The variables in this data group "
+                "correspond to the processed images after these transformations."
+            )
+            postprocessed_group.attrs["frame_indices_in_full_simulation"] = [
+                frame_idx_start,
+                frame_idx_end,
+            ]
+
+            # Add selected subsets of DoF angles
+            dof_pos_ds = postprocessed_group.create_dataset(
+                "dof_angles",
+                data=source_h5_file["dof_angles"][frame_idx_start:frame_idx_end, :],
+                dtype="float32",
+            )
+            dof_pos_ds.attrs["description"] = (
+                "Joint angles for all DoFs tracked in the simulation. This dataset has "
+                "shape (n_timesteps, n_dofs). The order of the DoFs is given in the "
+                "'keys' attribute."
+            )
+            dof_pos_ds.attrs["keys"] = source_h5_file["dof_angles"].attrs["keys"]
+            dof_pos_ds.attrs["units"] = "radians"
 
             # Add derived variables
             keypoint_pos_group = postprocessed_group.create_group("keypoint_pos")
@@ -848,3 +880,4 @@ def read_videos(recording_dir, num_color_codings):
             ), "number of frames mismatch between videos of different color codings"
 
     return frames_by_color_coding, fps, num_frames
+
