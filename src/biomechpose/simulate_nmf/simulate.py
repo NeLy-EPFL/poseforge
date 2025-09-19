@@ -536,7 +536,7 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
             dof_keys.append(f"{kchain_name}{link_name}")
 
         dof_angles_ds = h5_file.create_dataset(
-            "joint_angles", data=joint_angles_arr, dtype="float32"
+            "dof_angles", data=joint_angles_arr, dtype="float32"
         )
         dof_angles_ds.attrs["keys"] = dof_keys
         dof_angles_ds.attrs["units"] = "radians"
