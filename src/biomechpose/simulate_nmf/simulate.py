@@ -255,7 +255,8 @@ class CameraForRendering(Camera):
        containing `num_color_codings` lists of frames, instead of a single
        `self._frames list`.
     2. The `.render()` method receives an additional `color_coding_idx` that is used to
-       put the rendered frame into the appropriate list in `self._frames_by_color_coding`.
+       put the rendered frame into the appropriate list in
+       `self._frames_by_color_coding`.
     3. The `.save_video()` method saves a separate video for each color coding.
     """
 
@@ -453,7 +454,8 @@ def run_neuromechfly_simulation(
         for sensor_type, sensor_info in body_segment_sensor_lookup.items():
             num_sensors = len(sensor_info["segments_list"])
             bound_sensors = sensor_info["bound_sensors_list"]
-            sensor_readings = bound_sensors.sensordata.copy().reshape((num_sensors, -1))
+            sensor_readings = bound_sensors.sensordata.copy()
+            sensor_readings = sensor_readings.reshape((num_sensors, -1))
             body_segment_state_hists[sensor_type].append(sensor_readings)
 
         # Store global body segment states (from MjData)
@@ -540,8 +542,8 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
         dof_angles_ds.attrs["units"] = "radians"
         dof_angles_ds.attrs["description"] = (
             "Angles of DoFs tracked in the simulation. "
-            "This dataset has shape (n_timesteps, n_dofs). The order of the DoFs is given "
-            "in the 'keys' attribute."
+            "This dataset has shape (n_timesteps, n_dofs). The order of the DoFs is "
+            "given in the 'keys' attribute."
         )
 
         # Body segment states
@@ -596,11 +598,12 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
         body_seg_group.attrs["keys"] = segments_order
         body_seg_group.attrs["description"] = (
             "Position (in mm) and orientation (as quaternions) of each body segment "
-            "tracked in the simulation. Values are provided in several reference frames: "
-            "'atparent' corresponds to 'xbody' in MuJoCo: 'the regular frame of the body "
-            "(usually centered at the joint with the parent body)'; `com` corresponds to "
-            "'body' in MuJoCo: 'the inertial frame of the body'; `global` is the position "
-            "and orientation in the global/world reference frame. See "
+            "tracked in the simulation. Values are provided in several reference "
+            "frames: 'atparent' corresponds to 'xbody' in MuJoCo: 'the regular frame "
+            "of the body (usually centered at the joint with the parent body)'; "
+            "`com` corresponds to 'body' in MuJoCo: 'the inertial frame of the body'; "
+            "`global` is the position and orientation in the global/world reference "
+            "frame. See "
             "https://mujoco.readthedocs.io/en/stable/XMLreference.html#sensor-framepos "
             "for the distinction between these `body` and `xbody`."
         )
@@ -609,10 +612,10 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
         cardinal_vec_group = h5_file.create_group("cardinal_vectors")
         cardinal_vec_group.attrs["keys"] = ["forward", "left", "up"]
         cardinal_vec_group.attrs["description"] = (
-            "Unit vectors pointing in cardinal directions from the perspective of the fly, "
-            "i.e. vector pointing forward, to the left, and up from the fly's body. "
-            "These vectors are in global coordinates and each of them is of shape "
-            "(n_timesteps, 3) where 3 are the x/y/z components."
+            "Unit vectors pointing in cardinal directions from the perspective of the "
+            "fly, i.e. vector pointing forward, to the left, and up from the fly's "
+            "body. These vectors are in global coordinates and each of them is of "
+            "shape (n_timesteps, 3) where 3 are the x/y/z components."
         )
 
         cardinal_vectors_arr = np.array(
@@ -647,8 +650,8 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
         fly_base_pos_ds.attrs["keys"] = ["x", "y", "z"]
         fly_base_pos_ds.attrs["units"] = "mm"
         fly_base_pos_ds.attrs["description"] = (
-            "Position of the fly's center of mass in global coordinates. This dataset has "
-            "shape (n_timesteps, 3) where the 3 values are the x/y/z components."
+            "Position of the fly's center of mass in global coordinates. This dataset "
+            "has shape (n_timesteps, 3) where the 3 values are the x/y/z components."
         )
 
 

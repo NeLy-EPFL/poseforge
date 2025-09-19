@@ -259,7 +259,7 @@ def rotate_keypoint_positions_world(
 
 def process_single_frame(
     rendered_images: np.ndarray,
-    h5_file_path: Path,  # Changed from h5_file to h5_file_path
+    h5_file_path: Path,
     frame_idx: int,
     crop_size: int,
     segment_label_parser: SegmentLabelParser,
@@ -279,8 +279,8 @@ def process_single_frame(
         # Rotate and center-crop image
         rendered_images_transformed = []
         for img in rendered_images:
-            # note: rotate_image calls scipy.ndimage.rotate which expects angle in degrees
-            # and rotates counter-clockwise, hence the negative sign
+            # note: rotate_image calls scipy.ndimage.rotate which expects angle in
+            # degrees and rotates counter-clockwise, hence the negative sign
             rotated_img = rotate_image(img, -rotation_angle)
             img_transformed, start_col, start_row = center_square_crop_image(
                 rotated_img, crop_size
@@ -319,7 +319,7 @@ def process_single_frame(
 
 def process_subsegment(
     frames_by_color_coding: list[list[np.ndarray]],
-    segment_h5_file_path: Path,  # Changed from segment_h5_file to segment_h5_file_path
+    segment_h5_file_path: Path,
     frames_range: tuple[int, int],
     processed_subsegment_dir: Path,
     fps: int,
@@ -351,7 +351,7 @@ def process_subsegment(
         frame_args.append(
             (
                 renderings_per_frame,
-                segment_h5_file_path,  # Pass file path instead of file handle
+                segment_h5_file_path,
                 frame_idx_start + i_frame_within_subsegment,
                 crop_size,
                 segment_label_parser,
@@ -785,7 +785,8 @@ def postprocess_segment(
             timestep=timestep,
         )
         print(
-            f"Found {len(subsegments_boundaries)} subsegments in which the fly is upright."
+            f"Found {len(subsegments_boundaries)} subsegments "
+            "in which the fly is upright."
         )
 
         # Process each subsegment
@@ -798,11 +799,9 @@ def postprocess_segment(
             # Process the subsegment
             output_dir = recording_dir / f"subsegment_{i:03d}"
             output_dir.mkdir(parents=True, exist_ok=True)
-            # processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
-            # processed_video_dir = output_dir  # save videos directly under subsegment dir
             process_subsegment(
                 frames_by_color_coding,
-                segment_h5_file_path,  # Pass file path instead of file handle
+                segment_h5_file_path,
                 (start, end),
                 output_dir,
                 fps,
