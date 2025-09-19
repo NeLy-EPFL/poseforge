@@ -337,13 +337,14 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
     # (e.g. 0.1x) for the play speed. This means that instead of deciding the effective
     # data saving/rendering rate based on the desired play speed and FPS, we need to
     # decide the FPS based on the desired play speed and the target data rate.
+    flygym_camera_fps = render_fps * render_play_speed
     camera = CameraForRendering(
         attachment_point=fly.model.worldbody,
         camera_name=f"flytrack_cam",
         camera_parameters=camera_params,
         window_size=render_window_size,
         play_speed=render_play_speed,
-        fps=render_fps,
+        fps=flygym_camera_fps,
         draw_contacts=False,
         play_speed_text=False,
     )

@@ -639,18 +639,17 @@ def visualize_subsegment(
 
     # Find processed simulation data
     processed_data_path = processed_subsegment_dir / "processed_simulation_data.h5"
-
-    # Load segmentation labels
-    seg_labels_data = np.load(
-        processed_subsegment_dir / "segmentation_labels.npz", allow_pickle=True
-    )
-    seg_labels_all = seg_labels_data["labels"]
+    
+    with h5py.File(processed_data_path, "r") as h5_file:
+        ds = h5_file["postprocessed/segmentation_labels"]
+        seg_labels_all = ds[...]
+        keys = ds.attrs["keys"].tolist()
 
     # Define color palette for segmentation labels visualization
-    max_num_labels = len(seg_labels_data["label_keys"])
-    assert seg_labels_data["label_keys"][0] == "Background"
-    assert seg_labels_data["label_keys"][1] == "OtherSegments"
-    assert seg_labels_data["label_keys"][2] == "Thorax"
+    max_num_labels = len(keys)
+    assert keys[0] == "Background"
+    assert keys[1] == "OtherSegments"
+    assert keys[2] == "Thorax"
     color_palette = [
         np.array([0.0, 0.0, 0.0]),  # Background
         np.array([0.5, 0.5, 0.5]),  # OtherSegments
@@ -760,79 +759,63 @@ def postprocess_segment(
 ):
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
+    
+    segment_h5_file_path = recording_dir / "simulation_data.h5"
 
     # Load video frames
     frames_by_color_coding, fps, num_frames = read_videos(
         recording_dir, num_color_codings
     )
-
-    # Load kinematic states history
-    kinematic_states_path = recording_dir / "kinematic_states_history.pkl"
-    kinematic_states_df = pd.read_pickle(kinematic_states_path)
-    timestep = kinematic_states_df["time"].iloc[1] - kinematic_states_df["time"].iloc[0]
-    print(f"Loaded kinematic states with timestep {timestep:.3f} seconds.")
-
-    # Select partial recording if needed
-    if len(kinematic_states_df) != num_frames:  # Check for consistency
-        raise ValueError(
-            f"Number of frames in video ({num_frames}) does not match "
-            f"number of kinematic states ({len(kinematic_states_df)})."
-        )
-    if end_frame == -1:
-        end_frame = len(kinematic_states_df)
-    kinematic_states_df = kinematic_states_df.iloc[start_frame:end_frame]
     for i, frames in enumerate(frames_by_color_coding):
         frames_by_color_coding[i] = frames[start_frame:end_frame]
-
-    # Detect subsegments by extracting time series of cardinal vector pointing up
-    upward_cardinal_vectors = np.array(
-        kinematic_states_df["cardinal_vector_up"].tolist()
-    )
-    subsegments_boundaries = select_subsegments(
-        upward_cardinal_vectors,
-        max_tilt_angle_deg,
-        mask_morph_closing_size_sec,
-        min_subsegment_duration_sec,
-        timestep=timestep,
-    )
-    print(
-        f"Found {len(subsegments_boundaries)} subsegments in which the fly is upright."
-    )
-
-    segment_h5_file_path = recording_dir / "simulation_data.h5"
-
-    # Process each subsegment
-    for i, (start, end) in enumerate(subsegments_boundaries):
+    
+    with h5py.File(segment_h5_file_path, "r") as h5_file:
+        upward_cardinal_vectors = h5_file["cardinal_vectors/up"][start_frame:end_frame, :]
+        timestep = h5_file["sim_time"][1] - h5_file["sim_time"][0]
+        
+        subsegments_boundaries = select_subsegments(
+            upward_cardinal_vectors,
+            max_tilt_angle_deg,
+            mask_morph_closing_size_sec,
+            min_subsegment_duration_sec,
+            timestep=timestep,
+        )
         print(
-            f"Processing subsegment {i + 1}/{len(subsegments_boundaries)} "
-            f"(frames {start}:{end})"
+            f"Found {len(subsegments_boundaries)} subsegments in which the fly is upright."
         )
 
-        # Process the subsegment
-        output_dir = recording_dir / f"subsegment_{i:03d}"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        # processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
-        # processed_video_dir = output_dir  # save videos directly under subsegment dir
-        process_subsegment(
-            frames_by_color_coding,
-            segment_h5_file_path,  # Pass file path instead of file handle
-            (start, end),
-            output_dir,
-            fps,
-            image_crop_size,
-            n_jobs=n_jobs,
-        )
+        # Process each subsegment
+        for i, (start, end) in enumerate(subsegments_boundaries):
+            print(
+                f"Processing subsegment {i + 1}/{len(subsegments_boundaries)} "
+                f"(frames {start}:{end})"
+            )
 
-        # Visualize the subsegment if requested
-        if visualize:
-            visualize_subsegment(
-                processed_subsegment_dir=output_dir,
-                fps=fps,
-                camera_elevation=camera_elevation,
-                max_abs_azimuth=max_abs_azimuth,
-                azimuth_rotation_period=azimuth_rotation_period,
+            # Process the subsegment
+            output_dir = recording_dir / f"subsegment_{i:03d}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            # processed_kinematic_states_path = output_dir / "processed_kinematic_states.pkl"
+            # processed_video_dir = output_dir  # save videos directly under subsegment dir
+            process_subsegment(
+                frames_by_color_coding,
+                segment_h5_file_path,  # Pass file path instead of file handle
+                (start, end),
+                output_dir,
+                fps,
+                image_crop_size,
                 n_jobs=n_jobs,
             )
+
+            # Visualize the subsegment if requested
+            if visualize:
+                visualize_subsegment(
+                    processed_subsegment_dir=output_dir,
+                    fps=fps,
+                    camera_elevation=camera_elevation,
+                    max_abs_azimuth=max_abs_azimuth,
+                    azimuth_rotation_period=azimuth_rotation_period,
+                    n_jobs=n_jobs,
+                )
 
 
 def read_videos(recording_dir, num_color_codings):
