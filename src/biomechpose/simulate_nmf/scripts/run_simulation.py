@@ -65,7 +65,7 @@ def simulate_using_kinematic_prior(
     input_timestep: float = 0.01,
     sim_timestep: float = 0.0001,
     output_data_freq: int = 300,
-    render_play_speed: float = 1.0,
+    render_play_speed: float = 0.1,
     max_segments_per_trial: int | None = None,
     max_sim_steps_per_segment: int | None = None,
 ) -> None:
