@@ -67,6 +67,7 @@ if __name__ == "__main__":
         ("ngf32_netGstylegan2_batsize4_lambGAN0.5", 141),
         ("ngf32_netGstylegan2_batsize4_lambGAN1.0", 161),
         ("ngf48_netGstylegan2_batsize4_lambGAN0.1", 141),
+        ("ngf48_netGstylegan2_batsize2_lambGAN0.1", 141),
     ]
 
     # Make job scripts
