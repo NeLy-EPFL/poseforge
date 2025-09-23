@@ -527,6 +527,7 @@ def load_atomic_batch_frames(
                 selection = selection[..., None]  # add channel dim
             # Move the channel dimension to the front
             selection = selection.transpose(2, 0, 1)
+            selection = np.ascontiguousarray(selection)
             # Convert to float32 and normalize to [0, 1]
             selection = selection / 255.0
             atomic_batch[variant_idx, frame_idx, :, :, :] = selection
@@ -558,17 +559,26 @@ def save_atomic_batch_sim_data(
                 f.attrs[key] = value
 
 
-def load_atomic_batch_sim_data(input_path: Path) -> dict[str, np.ndarray]:
+def load_atomic_batch_sim_data(input_path: Path, keys: list[str] | None) -> dict[str, np.ndarray]:
     """Load simulation data for an atomic batch from an HDF5 file.
 
     Args:
         input_path (Path): Path to the HDF5 file.
+        keys (list[str] | None): List of keys to load. If None, all keys are loaded.
 
     Returns:
         dict[str, np.ndarray]: Dictionary of simulation data.
     """
     with h5py.File(input_path, "r") as f:
+        if keys is None:
+            keys = list(f.keys())
+        else:
+            for key in keys:
+                if key not in f:
+                    raise KeyError(f"Key {key} not found in file {input_path}")
+            
         sim_data = {
-            key: torch.from_numpy(f[key][:]).to(torch.float32) for key in f.keys()
+            key: torch.from_numpy(f[key][:]).to(torch.float32) for key in keys
         }
+        
         return sim_data
