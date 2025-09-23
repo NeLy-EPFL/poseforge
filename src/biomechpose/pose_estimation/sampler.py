@@ -548,7 +548,6 @@ def save_atomic_batch_sim_data(
         metadata (dict, optional): Additional metadata to save as
             attributes in the HDF5 file. Defaults to None.
     """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(output_path, "w") as f:
         for key, value in sim_data.items():
             compression = "lzf" if key == "body_seg_maps" else None

@@ -98,13 +98,13 @@ def extract_atomic_batches(
     def build_sim_data_seq(sim_path):
         synthetic_video_paths = [sim_path / f"{model}.mp4" for model in models]
         exp_trial, segment, subsegment = synthetic_video_paths[0].parent.parts[-3:]
-        simulated_labels_path = (
-            nmf_sim_rendering_basedir
-            / exp_trial
-            / segment
-            / subsegment
-            / "processed_simulation_data.h5"
-        )
+        simulated_labels_paths_all = {
+            "/".join(path.parent.parts[-3:]): path
+            for path in nmf_sim_rendering_basedir.rglob("processed_simulation_data.h5")
+        }
+        simulated_labels_path = simulated_labels_paths_all[
+            f"{exp_trial}/{segment}/{subsegment}"
+        ]
         return SimulatedDataSequence(
             synthetic_video_paths,
             simulated_labels_path,
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     #     --minimum-time-diff-frames 60 \
     #     --input-basedir bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly1_trial001 \
     #     --nmf-sim-rendering-basedir bulk_data/nmf_rendering \
-    #     --output-dir bulk_data/pose_estimation/atomic_batches
+    #     --output-dir bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001
 
     # # Example usage not via CLI
     # extract_atomic_batches(
