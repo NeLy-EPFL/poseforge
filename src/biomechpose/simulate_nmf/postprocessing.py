@@ -880,3 +880,4 @@ def read_videos(recording_dir, num_color_codings):
             ), "number of frames mismatch between videos of different color codings"
 
     return frames_by_color_coding, fps, num_frames
+
