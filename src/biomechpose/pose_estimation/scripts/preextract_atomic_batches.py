@@ -200,7 +200,7 @@ if __name__ == "__main__":
 
     tyro.cli(extract_atomic_batches)
     # CLI example:
-    # python src/biomechpose/pose_estimation/scripts/preprocess_samples.py \
+    # python src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py \
     #     --atomic-batch-nframes 32 \
     #     --atomic-batch-nvariants-max 4 \
     #     --minimum-time-diff-frames 60 \

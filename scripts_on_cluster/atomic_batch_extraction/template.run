@@ -17,7 +17,7 @@ conda activate biomechpose
 
 # Define paths
 project_root="/home/sibwang/biomechpose"
-extraction_cli_path="src/biomechpose/pose_estimation/scripts/preprocess_samples.py"
+extraction_cli_path="src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py"
 
 # Setup
 cd $project_root
