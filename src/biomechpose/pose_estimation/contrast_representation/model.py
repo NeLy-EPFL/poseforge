@@ -2,57 +2,53 @@ import torch
 import torch.nn as nn
 from collections import OrderedDict
 from torchvision import models
-from torchvision.models import RegNet_Y_800MF_Weights
+from torchvision.models import ResNet18_Weights
 
 
-class RegNetFeatureExtractor(nn.Module):
+class ResNetFeatureExtractor(nn.Module):
     def __init__(self, pretrained=True):
-        super(RegNetFeatureExtractor, self).__init__()
+        super(ResNetFeatureExtractor, self).__init__()
 
-        # Load pretrained RegNet_Y_800MF
+        # Load pretrained ResNet-18
         if pretrained:
-            weights = RegNet_Y_800MF_Weights.IMAGENET1K_V2
-            self.regnet = models.regnet_y_800mf(weights=weights)
+            self.resnet = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         else:
-            self.regnet = models.regnet_y_800mf(weights=None)
+            self.resnet = models.resnet18(weights=None)
 
         # Remove the final classification head (avgpool + fc)
-        # RegNet architecture:  stem -> trunk_output -> avgpool -> fc
-        # Remove the head (fc); keep stem, trunk, and avgpool (adaptive global pooling)
+        # ResNet architecture:
+        #     conv1 -> bn1 -> relu -> maxpool
+        #           -> layer1 -> layer2 -> layer3 -> layer4
+        #           -> avgpool -> fc
+        # Remove the head (fc); keep everything up to avgpool
         model_elements = OrderedDict(
             [
-                ("stem", self.regnet.stem),
-                ("trunk", self.regnet.trunk_output),
-                ("avgpool", self.regnet.avgpool),
+                ("conv1", self.resnet.conv1),
+                ("bn1", self.resnet.bn1),
+                ("relu", self.resnet.relu),
+                ("maxpool", self.resnet.maxpool),
+                ("layer1", self.resnet.layer1),
+                ("layer2", self.resnet.layer2),
+                ("layer3", self.resnet.layer3),
+                ("layer4", self.resnet.layer4),
+                ("avgpool", self.resnet.avgpool),
             ]
         )
-        self.regnet_feature_extractor = nn.Sequential(model_elements)
+        self.resnet_feature_extractor = nn.Sequential(model_elements)
 
-        # Find out the output size of the RegNet feature extractor
-        # For this, we need to know the number of channels of the last conv layer in the
-        # trunk and the output size of the adaptive pooling layer (the final feature
-        # dimension is just (last_n_channel, pooled_H, pooled_W))
-        trunk = self.regnet_feature_extractor.trunk
-        trunk_last_block = trunk[-1]
-        trunk_last_subblock = trunk_last_block[-1]
-        trunk_last_subblock_transform = trunk_last_subblock.f
-        trunk_last_norm_conv_activation_block = trunk_last_subblock_transform.c
-        trunk_last_batch_norm = trunk_last_norm_conv_activation_block[1]
-        assert isinstance(
-            trunk_last_batch_norm, nn.BatchNorm2d
-        ), "Error identifying the batch norm layer of the last conv block in the trunk"
-        # The number of features of the last batch norm layer is the number of output
-        # channels of the last conv layer
-        self.regnet_out_channels = trunk_last_batch_norm.num_features
-        self.global_pool_output_size = self.regnet_feature_extractor.avgpool.output_size
+        # Find out the output size of the ResNet feature extractor
+        # For ResNet-18, layer4 has 512 output channels
+        # The avgpool layer reduces spatial dimensions to 1x1
+        self.resnet_out_channels = 512  # ResNet-18 layer4 output channels
+        self.global_pool_output_size = (1, 1)  # avgpool output size
         self.output_dim = (
-            self.regnet_out_channels
+            self.resnet_out_channels
             * self.global_pool_output_size[0]
             * self.global_pool_output_size[1]
         )
 
     def forward(self, x):
-        features = self.regnet_feature_extractor(x)
+        features = self.resnet_feature_extractor(x)
         return features
 
 

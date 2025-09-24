@@ -1,130 +1,87 @@
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import time
+from tqdm import tqdm
+from datetime import datetime
 from typing import Any
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader
 
-from biomechpose.pose_estimation.sampler import SyntheticFramesSampler
 from biomechpose.pose_estimation.contrast_representation.model import (
-    RegNetFeatureExtractor,
+    ResNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
+from biomechpose.pose_estimation.contrast_representation.loss import info_nce_loss
 
 
 class ContrastivePretrainingPipeline:
     def __init__(
         self,
-        feature_extractor: RegNetFeatureExtractor,
+        feature_extractor: ResNetFeatureExtractor,
         projection_head: ContrastiveProjectionHead,
-        dataset: SyntheticFramesSampler,
-        temperature: float = 0.1,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
-        """Initialize the contrastive pretraining pipeline.
-
-        Args:
-            feature_extractor (nn.Module): Backbone feature extractor.
-            projection_head (nn.Module): Projection head to generate the
-                embedding in which mutual information is evaluated.
-            dataset (SyntheticFramesSampler): Dataset for training.
-            temperature (float, optional): Temperature parameter for
-                contrastive loss (i.e. scale factor before softmax).
-                Defaults to 0.1.
-            device (torch.device | str, optional): Device to run the model
-                on. Defaults to "cuda".
-            use_float16 (bool, optional): Whether to use mixed precision
-                training (float16). Defaults to True.
-        """
         self.feature_extractor = feature_extractor.to(device)
         self.projection_head = projection_head.to(device)
-        self.dataset = dataset
-        self.temperature = temperature
-        self.batch_size = dataset.batch_size
-        self.n_variants = dataset.n_variants
         self.device = device
         self.use_float16 = use_float16
 
-    def info_nce_loss(self, embeddings: torch.Tensor) -> float:
-        """Compute the InfoNCE loss, treating the same frame from different
-        variants as positive pairs and different frames as negative pairs.
+    def _check_float16_status(self, print_results: bool = False) -> dict:
+        """Check if the pipeline is configured for float16 and get current status.
 
         Args:
-            embeddings (torch.Tensor): Feature matrix of shape
-                (batch_size * n_variants, feature_dim) in the embedding
-                space wherein mutual information is evaluated.
+            print_results (bool): Whether to print the status information.
 
-        Returns:
-            float: InfoNCE loss.
-        """
-        # Construct labels for binary classification
-        frame_id = torch.cat(
-            [torch.arange(self.batch_size) for i in range(self.n_variants)], dim=0
-        )
-        labels_matrix = (frame_id[None, :] == frame_id[:, None]).to(self.device)
-        assert labels_matrix.shape == (  # can be commented out after testing
-            self.batch_size * self.n_variants,
-            self.batch_size * self.n_variants,
-        )
-
-        # Compute cosine similarity matrix, which is just X @ X.T after X is normalized
-        # across the feature dimensions (i.e. rows of X)
-        embeddings = nn.functional.normalize(embeddings, dim=1)
-        sim_matrix = embeddings @ embeddings.T
-        assert sim_matrix.shape == (  # can be commented out after testing
-            self.batch_size * self.n_variants,
-            self.batch_size * self.n_variants,
-        )
-
-        # Discard the main diagonal: exclude self comparison (x_anchor vs. x_anchor)
-        n_rows = sim_matrix.shape[0]  # should be batch_size * n_variants
-        mask = torch.eye(n_rows, dtype=torch.bool).to(self.device)
-        # labels_matrix and sim_matrix are now both of shape (n_rows, n_rows-1)
-        labels_matrix = labels_matrix[~mask].view(n_rows, -1)
-        sim_matrix = sim_matrix[~mask].view(n_rows, -1)
-
-        # Select the positive and negative pairs
-        # positives: (n_rows, n_variants-1) where n_rows = batch_size * n_variants
-        positives = sim_matrix[labels_matrix].view(n_rows, -1)
-        # negatives: (n_rows, n_rows-n_variants)
-        negatives = sim_matrix[~labels_matrix].view(n_rows, -1)
-        # Check shapes (can be commented out after testing)
-        assert positives.shape == (n_rows, self.n_variants - 1)
-        assert negatives.shape == (n_rows, n_rows - self.n_variants)
-
-        # Concatenate positives and negatives to form logits matrix of shape
-        # (n_rows, n_rows-1), where logits_matrix[i, j] is the similarity/logit/log-odds
-        # of samples i and j being predicted to be from the same frame.
-        # The positive pair is always in the left-most column, so the correct label for
-        # each row is always 0.
-        logits_matrix = torch.cat([positives, negatives], dim=1) / self.temperature
-        labels_index = torch.zeros(n_rows, dtype=torch.long).to(self.device)
-
-        # Compute cross-entropy loss against the labels
-        loss = F.cross_entropy(logits_matrix, labels_index, reduction="mean")
-        return loss
-
-    def check_float16_status(self) -> dict:
-        """Check if the pipeline is configured for float16 and get current status.
-        
         Returns:
             dict: Status information about float16 usage.
         """
         status = {
             "use_float16_flag": self.use_float16,
             "device": str(self.device),
-            "device_supports_half": torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 7,
+            "device_supports_half": torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] >= 7,
         }
-        
+
         # Check model parameter dtypes
         fe_dtypes = set(p.dtype for p in self.feature_extractor.parameters())
         ph_dtypes = set(p.dtype for p in self.projection_head.parameters())
         status["feature_extractor_param_dtypes"] = [str(dt) for dt in fe_dtypes]
         status["projection_head_param_dtypes"] = [str(dt) for dt in ph_dtypes]
-        
+
+        # Print out results if requested
+        if print_results:
+            print("==================== Float16 Status ====================")
+            for key, value in status.items():
+                print(f"{key}: {value}")
+            print("========================================================")
+
+        return status
+
+    def _check_float16_usage(
+        self,
+        batch,
+        h_features,
+        z_features,
+        loss,
+        amp_scaler,
+        print_results: bool = False,
+    ) -> dict:
+        status = {
+            "batch_dtype": batch.dtype,
+            "h_features_dtype": h_features.dtype,
+            "z_features_dtype": z_features.dtype,
+            "loss_dtype": loss.dtype,
+            "amp_enabled": self.use_float16,
+            "amp_scaler_enabled": amp_scaler.is_enabled(),
+        }
+
+        if print_results:
+            print("==================== Float16 Usage ====================")
+            for key, value in status.items():
+                print(f"{key}: {value}")
+            print("=======================================================")
+
         return status
 
     def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
@@ -134,143 +91,269 @@ class ContrastivePretrainingPipeline:
             **adam_kwargs,
         )
 
-    def _update_logs(
+    def _update_logs_training(
         self,
         writer: SummaryWriter,
         *,
         epoch_idx: int,
         within_epoch_step_idx: int,
+        n_batches_per_epoch: int,
         avg_loss: float,
         learning_rate: float,
     ) -> None:
         print(
-            f"Epoch {epoch_idx}, step {within_epoch_step_idx}/{len(self.dataset)}), "
+            f"Epoch {epoch_idx}, step {within_epoch_step_idx}/{n_batches_per_epoch}), "
             f"avg loss: {avg_loss:.4f}, lr: {learning_rate}"
         )
-        global_step_idx = epoch_idx * len(self.dataset) + within_epoch_step_idx
+        global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
         writer.add_scalar("Loss/Train", avg_loss, global_step_idx)
         writer.add_scalar("Training/Epoch", epoch_idx, global_step_idx)
         writer.add_scalar("Training/LearningRate", learning_rate, global_step_idx)
 
-    def train(
+    def _update_logs_validation(
         self,
-        n_epochs: int,
-        checkpoint_dir: Path,
-        checkpoint_interval_epochs: int,
-        log_dir: Path,
-        log_interval_steps: int = 100,
-        adam_kwargs: dict[str, Any] = {},
-        seed: int = 42,
-    ):
-        """Train the model.
+        writer: SummaryWriter,
+        *,
+        epoch_idx: int,
+        within_epoch_step_idx: int,
+        n_batches_per_epoch: int,
+        avg_loss: float,
+    ) -> None:
+        print(f"Validation avg loss: {avg_loss:.4f}")
+        global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
+        writer.add_scalar("Loss/Validation", avg_loss, global_step_idx)
+
+    def _save_checkpoint(self, checkpoint_path_stem: Path) -> None:
+        torch.save(
+            self.feature_extractor.state_dict(),
+            checkpoint_path_stem.with_suffix(".feature_extractor.pth"),
+        )
+        torch.save(
+            self.projection_head.state_dict(),
+            checkpoint_path_stem.with_suffix(".projection_head.pth"),
+        )
+
+    @staticmethod
+    def _concat_and_collapse_atomic_batches(
+        atomic_batches: torch.Tensor,
+    ) -> tuple[torch.Tensor, int, int]:
+        """Reshape a group of atomic batches into a single batch, and
+        collapse the n_variants and n_samples dimensions.
 
         Args:
-            n_epochs (int): Number of training epochs.
-            checkpoint_dir (Path): Directory to save model checkpoints.
-            checkpoint_interval_epochs (int): Interval (in number of
-                epochs) for saving model checkpoints.
-            log_dir (Path): Directory to save training logs and model
-                checkpoints.
-            logging_interval_steps (int, optional): Interval (in number of
-                steps) for logging training progress.
-            adam_kwargs (dict[str, Any], optional): Additional keyword
-                arguments for the Adam optimizer, which will be used for
-                training.
-            seed (int, optional): Random seed for reproducibility.
+            atomic_batches (torch.Tensor): Tensor of shape
+                (n_atomic_batches, n_variants, n_samples, C, H, W)
+
+        Returns:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, C, H, W)
+            int: Merged batch size (n_atomic_batches * n_samples)
+            int: Number of variants (n_variants)
         """
-        # Set up random number generator
-        rng = np.random.default_rng(seed)
+        # Merge atomic batches into a single batch (same as training)
+        (
+            n_atomic_batches,
+            n_variants,
+            atomic_batch_nsamples,
+            n_channels,
+            height,
+            width,
+        ) = atomic_batches.shape
+        merged_batch_size = n_atomic_batches * atomic_batch_nsamples
 
-        # Setup optimizer
-        self.optimizer = self._create_optimizer(adam_kwargs)
+        # frames_batch: (n_variants, n_atomic_batches * atomic_batch_nsamples, C, H, W)
+        frames_batch = torch.cat(
+            [atomic_batches[i] for i in range(n_atomic_batches)],
+            dim=1,
+        ).to(atomic_batches.device)
 
-        # Setup mixed precision training
-        amp_scaler = torch.amp.GradScaler(self.device, enabled=self.use_float16)
-        
-        # Print float16 status at start of training
-        print("=== Float16 status upon initialization ===")
-        status = self.check_float16_status()
-        for key, value in status.items():
-            print(f"  {key}: {value}")
-        print("==========================================")
+        # frames_batch_collapsed: (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
+        frames_batch_collapsed = frames_batch.view(
+            n_variants * merged_batch_size,
+            n_channels,
+            height,
+            width,
+        )
+        return frames_batch_collapsed, merged_batch_size, n_variants
 
-        # Setup TensorBoard writer
+    def train(
+        self,
+        training_data_loader: DataLoader,
+        validation_data_loader: DataLoader,
+        num_epochs: int,
+        *,
+        temperature: float = 0.1,
+        adam_kwargs: dict[str, Any],
+        log_dir: Path | str,
+        checkpoint_dir: Path | str,
+        log_interval: int = 10,
+        checkpoint_interval: int = 100,
+        validation_interval: int = 100,
+        nbatches_per_validation: int | None = None,
+    ) -> None:
+        # Set up logging and checkpointing
+        log_dir = Path(log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(log_dir=str(log_dir))
+        checkpoint_dir = Path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        n_batches_per_epoch = len(training_data_loader)
 
-        for epoch_idx in range(n_epochs):
-            print(f"Starting epoch {epoch_idx}/{n_epochs}")
-            epoch_start_time = time.time()
+        # Set up optimizer
+        optimizer = self._create_optimizer(adam_kwargs)
 
-            # Randomize order of access
-            indices = list(range(len(self.dataset)))
-            rng.shuffle(indices)
+        # Set up mixed-point training
+        amp_scaler = torch.amp.GradScaler(self.device, enabled=self.use_float16)
+        self._check_float16_status(print_results=True)
+
+        # Training loop
+        for epoch_idx in range(num_epochs):
+            print(
+                f"Starting epoch_idx={epoch_idx} out of {num_epochs} at {datetime.now()}"
+            )
             running_loss = 0.0
-            within_epoch_step_idx = 0
-            for sample_idx in indices:
-                # Get batch of data for this iter. Note that given the special sampling
-                # requirements, there's no DataLoader here. The batch is generated
-                # directly by the dataset object.
-                # batch: (n_variants, batch_size, C, H, W)
-                batch = self.dataset[sample_idx].to(self.device)
-                # collapsed_batch: flatten first 2 dims (batch_size*n_variants, C, H, W)
-                collapsed_batch = batch.view(
-                    self.batch_size * self.n_variants, *batch.shape[2:]
+            start_time = time.time()
+            for step_idx_within_epoch, (atomic_batches, _) in enumerate(
+                training_data_loader
+            ):
+                # Merge atomic batches into a single batch
+                atomic_batches = atomic_batches.to(self.device, non_blocking=True)
+                frames_batch_collapsed, merged_batch_size, n_variants = (
+                    self._concat_and_collapse_atomic_batches(atomic_batches)
                 )
 
                 # Run models
                 with torch.amp.autocast(self.device, enabled=self.use_float16):
-                    # H and Z spaces as defined in the SimCLR paper
-                    h_features = self.feature_extractor(collapsed_batch)
+                    h_features = self.feature_extractor(frames_batch_collapsed)
                     z_features = self.projection_head(h_features)
-                    loss = self.info_nce_loss(z_features)
-                    
-                    # Debug: Check if float16 is actually being used
-                    if within_epoch_step_idx == 0 and epoch_idx == 0:
-                        print("=== Float16 status during first step ===")
-                        print(f"  Input batch dtype: {collapsed_batch.dtype}")
-                        print(f"  h_features dtype: {h_features.dtype}")
-                        print(f"  z_features dtype: {z_features.dtype}")
-                        print(f"  loss dtype: {loss.dtype}")
-                        print(f"  AMP enabled: {self.use_float16}")
-                        print(f"  AMP scaler enabled: {amp_scaler.is_enabled()}")
-                        print("=======================================")
+                    loss = info_nce_loss(
+                        z_features,
+                        temperature,
+                        batch_size=merged_batch_size,
+                        n_variants=n_variants,
+                        device=self.device,
+                    )
 
-                # Backpropagate
-                self.optimizer.zero_grad()
+                    # Check if float16 is actually being used
+                    if epoch_idx == 0 and step_idx_within_epoch == 0:
+                        self._check_float16_usage(
+                            frames_batch_collapsed,
+                            h_features,
+                            z_features,
+                            loss,
+                            amp_scaler,
+                            print_results=True,
+                        )
+
+                # Backpropagate and optimize
+                optimizer.zero_grad()
                 amp_scaler.scale(loss).backward()
-                amp_scaler.step(self.optimizer)
+                amp_scaler.step(optimizer)
                 amp_scaler.update()
 
                 # Logging
                 running_loss += loss.item()
-                if (within_epoch_step_idx + 1) % log_interval_steps == 0:
-                    avg_loss = running_loss / log_interval_steps
-                    learning_rate = self.optimizer.param_groups[0]["lr"]
-                    self._update_logs(
-                        writer,
+                if (step_idx_within_epoch) % log_interval == 0:
+                    avg_loss = running_loss / log_interval
+                    learning_rate = optimizer.param_groups[0]["lr"]
+                    self._update_logs_training(
+                        writer=writer,
                         epoch_idx=epoch_idx,
-                        within_epoch_step_idx=within_epoch_step_idx,
+                        within_epoch_step_idx=step_idx_within_epoch,
+                        n_batches_per_epoch=n_batches_per_epoch,
                         avg_loss=avg_loss,
                         learning_rate=learning_rate,
                     )
                     running_loss = 0.0
-                within_epoch_step_idx += 1
 
-            epoch_walltime = time.time() - epoch_start_time
+                # Save checkpoint
+                if (step_idx_within_epoch) % checkpoint_interval == 0:
+                    checkpoint_path_stem = (
+                        checkpoint_dir
+                        / f"checkpoint_epoch{epoch_idx:03d}_step{step_idx_within_epoch:06d}"
+                    )
+                    self._save_checkpoint(checkpoint_path_stem)
+                    print(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
+
+                # Run validation
+                if (step_idx_within_epoch) % validation_interval == 0:
+                    print(
+                        f"Running validation over the first {nbatches_per_validation} "
+                        "batches in the validation set"
+                    )
+                    avg_val_loss = self.validate(
+                        validation_data_loader,
+                        temperature=temperature,
+                        max_nbatches=nbatches_per_validation,
+                    )
+                    self._update_logs_validation(
+                        writer=writer,
+                        epoch_idx=epoch_idx,
+                        within_epoch_step_idx=step_idx_within_epoch,
+                        n_batches_per_epoch=n_batches_per_epoch,
+                        avg_loss=avg_val_loss,
+                    )
+
+            end = time.time()
+            epoch_walltime = end - start_time
             print(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
 
-            # Save checkpoint
-            if (epoch_idx + 1) % checkpoint_interval_epochs == 0:
-                checkpoint_path = checkpoint_dir / f"ckpt_epoch_{epoch_idx:03d}.pth"
-                torch.save(
-                    {
-                        "feature_extractor": self.feature_extractor.state_dict(),
-                        "projection_head": self.projection_head.state_dict(),
-                        "optimizer": self.optimizer.state_dict(),
-                        "epoch": epoch_idx + 1,
-                    },
-                    checkpoint_path,
-                )
-                print(f"Checkpoint saved at {checkpoint_path}")
+    def validate(
+        self,
+        validation_loader: DataLoader,
+        temperature: float = 0.1,
+        max_nbatches: int | None = None,
+    ) -> float:
+        """Use the model on the validation set and compute the average loss.
 
-        writer.close()
+        Args:
+            validation_loader: DataLoader for validation data
+            temperature: Temperature parameter for InfoNCE loss
+            max_nbatches: Maximum number of batches to use from the
+                validation set. If None, use all batches.
+
+        Returns:
+            Average validation loss
+        """
+        # Set models to evaluation mode
+        self.feature_extractor.eval()
+        self.projection_head.eval()
+
+        total_loss = 0.0
+        if max_nbatches is None:
+            max_nbatches = len(validation_loader)
+        with torch.no_grad():  # Disable gradient computation for validation
+            for batch_idx, (atomic_batches, _) in tqdm(
+                enumerate(validation_loader), total=max_nbatches, disable=None
+            ):
+                if batch_idx == max_nbatches:
+                    break
+
+                # Merge atomic batches into a single batch (same as training)
+                atomic_batches = atomic_batches.to(self.device, non_blocking=True)
+                frames_batch_collapsed, merged_batch_size, n_variants = (
+                    self._concat_and_collapse_atomic_batches(atomic_batches)
+                )
+
+                # Forward pass with mixed precision
+                with torch.amp.autocast(self.device, enabled=self.use_float16):
+                    h_features = self.feature_extractor(frames_batch_collapsed)
+                    z_features = self.projection_head(h_features)
+                    loss = info_nce_loss(
+                        z_features,
+                        temperature,
+                        batch_size=merged_batch_size,
+                        n_variants=n_variants,
+                        device=self.device,
+                    )
+
+                total_loss += loss.item()
+
+        # Compute average validation loss
+        avg_validation_loss = total_loss / max_nbatches
+
+        # Set models back to training mode
+        self.feature_extractor.train()
+        self.projection_head.train()
+
+        return avg_validation_loss

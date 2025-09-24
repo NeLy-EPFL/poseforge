@@ -1,121 +1,132 @@
 import torch
+from torch.utils.data import DataLoader
 from pathlib import Path
-from torchvision.transforms import Compose, Grayscale
 
-from biomechpose.pose_estimation.sampler import SyntheticFramesSampler
+from biomechpose.pose_estimation import AtomicBatchDataset
 from biomechpose.pose_estimation.contrast_representation import (
     ContrastivePretrainingPipeline,
-    RegNetFeatureExtractor,
+    ResNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
-from biomechpose.util import set_random_seed, print_hardware_availability
+from biomechpose.util import set_random_seed, get_hardware_availability
 
 
 if __name__ == "__main__":
-    # Model hyperparameters
+    ########################### CONFIGURATIONS ############################
+    # Sampling configs:
+    # Numbers of samples (frames) and variants (synthetic images made by different
+    # style transfer models) in each pre-extracted atomic batch
+    atomic_batch_nsamples = 32
+    atomic_batch_nvariants = 4
     # Number of different frames to include in each batch. Note that n_variants variants
-    # of each frame will be included, so effective batch size = batch_size * n_vari
+    # of each frame will be included, so effective batch size = batch_size * n_variants.
+    # This must be a multiple of `atomic_epoch_nsamples` in `AtomicBatchDataset`.
     batch_size = 64  # ~8.5GB GPU memory with n_variants=3
+    num_workers = 4
+
+    # Model configs:
     # Whether to use pretrained weights for the feature extractor, or just use the
     # architecture with random initialization
     use_pretrained_backbone = True
-    # Each two frames are at least 30 frames * (1 / 300 Hz) = 0.1s apart
-    minimum_time_diff_frames = 30
-    # Make frame grayscale, but preserve 3 channels to match pretrained RegNet input
-    transform = Compose([Grayscale(num_output_channels=3)])
-    # Layer sizes for the projection head
+    # Size of projection head
     projection_head_hidden_dim = 512
     projection_head_output_dim = 256
-    # Training hyperparameters
-    n_epochs = 10
-    adam_kwargs = {"lr": 3e-4, "weight_decay": 1e-4}
-    checkpoint_dir = Path("contrastive_pretraining/checkpoints")
-    log_dir = Path("contrastive_pretraining/logs")
-    checkpoint_interval_epochs = 1
-    log_interval_steps = 1
-    # Set random seed for reproducibility
-    random_seed = 42
-    # Limit size of dataset for rapid testing (None = use all available data)
-    max_n_simulations: int | None = None  # 10
-    max_n_models: int | None = 3
 
-    # Set up IO, etc.
-    checkpoint_dir.mkdir(exist_ok=True, parents=True)
-    log_dir.mkdir(exist_ok=True, parents=True)
-    set_random_seed(random_seed)
-    print_hardware_availability()
+    # Data configs:
+    # Image size and number of channels in input images (style transfer outputs)
+    image_size = (256, 256)
+    n_channels = 3
+    # Paths to training and validation data
+    data_base_dir = Path("bulk_data/pose_estimation/atomic_batches")
+    train_data_dirs = [
+        data_base_dir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+        for fly in range(1, 5)  # flies 1-4
+        for trial in range(1, 6)  # trials 1-5
+    ]
+    val_data_dirs = [data_base_dir / f"BO_Gal4_fly1_trial001"]
 
-    # Define all training inputs
-    input_basedir = Path("bulk_data/style_transfer/production/translated_videos")
-    assert input_basedir.is_dir(), f"`input_basedir` {input_basedir} is not a directory"
-    input_simulation_paths = sorted(list(input_basedir.rglob("subsegment_*")))
-    if max_n_simulations is not None:
-        input_simulation_paths = input_simulation_paths[:max_n_simulations]
-    print(f"Found {len(input_simulation_paths)} simulations to use for pretraining")
+    # Training configs:
+    seed = 42  # random seed for reproducibility
+    num_epochs = 10  # total number of epochs to train for
+    adam_lr = 3e-4  # learning rate for Adam optimizer
+    adam_weight_decay = 1e-4  # weight decay for Adam optimizer
 
-    # Define image variants (i.e. style transfer output by different models)
-    models = sorted(
-        [path.stem for path in input_simulation_paths[0].glob("translated_*.mp4")]
+    # Output configs:
+    output_basedir = Path("pose_estimation/contrastive_pretraining/training_test")
+    log_dir = output_basedir / "logs"
+    checkpoint_dir = output_basedir / "checkpoints"
+    logging_interval = 10  # log training metrics every N steps
+    checkpoint_interval = 100  # save model checkpoint every N steps (NOT EPOCHS!)
+    validation_interval = 100  # run validation every N steps (NOT EPOCHS!)
+    nbatches_per_validation = 100  # number of batches to use for each validation
+    ######################## END OF CONFIGURATIONS ########################
+    
+    # System setup
+    set_random_seed(seed)
+    get_hardware_availability(check_gpu=True, print_results=True)
+
+    # Initialize datasets and dataloaders
+    train_ds = AtomicBatchDataset(
+        data_dirs=[Path(path) for path in train_data_dirs],
+        n_variants=atomic_batch_nvariants,
+        image_size=image_size,
+        n_channels=n_channels,
     )
-    if max_n_models is not None:
-        models = models[:max_n_models]
-    n_variants = len(models)
-    print(f"Using {n_variants} input variants")
-
-    # Index all video paths
-    video_paths_by_sim_names = {}
-    for sim_path in input_simulation_paths:
-        sim_name = "/".join(sim_path.parts[-3:])
-        video_paths_by_sim_names[sim_name] = [
-            sim_path / f"{model}.mp4" for model in models
-        ]
-
-    # Create dataset
-    dataset = SyntheticFramesSampler(
-        video_paths_by_sim_names,
-        batch_size=batch_size,
-        sampling_stride=minimum_time_diff_frames,
-        transform=transform,
-        n_channels=3,
+    val_ds = AtomicBatchDataset(
+        data_dirs=[Path(path) for path in val_data_dirs],
+        n_variants=atomic_batch_nvariants,
+        image_size=image_size,
+        n_channels=n_channels,
     )
-    print(
-        f"Dataset initialized with {len(dataset)} batches of samples from "
-        f"{len(dataset.all_sim_names)} simulations. Total number of "
-        f"usable frames: {dataset.total_n_frames} "
-        f"({dataset.total_n_frames / 300:.2f} seconds at 300 FPS)."
+    n_atomic_batches_per_batch = batch_size // atomic_batch_nsamples
+    assert (
+        batch_size % atomic_batch_nsamples == 0
+    ), "`batch_size` must be a multiple of `atomic_batch_nsamples`"
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=n_atomic_batches_per_batch,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=n_atomic_batches_per_batch,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
     )
 
-    # Create models
-    feature_extractor = RegNetFeatureExtractor(pretrained=use_pretrained_backbone)
+    # Initialize models
+    feature_extractor = ResNetFeatureExtractor(pretrained=use_pretrained_backbone)
     print(f"Created feature extractor with output dim {feature_extractor.output_dim}")
     projection_head = ContrastiveProjectionHead(
         input_dim=feature_extractor.output_dim,
         hidden_dim=projection_head_hidden_dim,
         output_dim=projection_head_output_dim,
     )
-    print(
-        f"Created projection head with input dim {feature_extractor.output_dim}, "
-        f"hidden dim {projection_head_hidden_dim}, "
-        f"output dim {projection_head_output_dim}"
-    )
+    print("Created projection head")
 
-    # Create training pipeline
+    # Initialize contrastive learning pipeline
     pipeline = ContrastivePretrainingPipeline(
         feature_extractor=feature_extractor,
         projection_head=projection_head,
-        dataset=dataset,
-        temperature=0.1,
         device="cuda",
         use_float16=True,
     )
 
-    # Train the model
+    # Train models
     pipeline.train(
-        n_epochs=n_epochs,
-        adam_kwargs=adam_kwargs,
-        checkpoint_dir=checkpoint_dir,
+        training_data_loader=train_loader,
+        validation_data_loader=val_loader,
+        num_epochs=num_epochs,
+        adam_kwargs={"lr": adam_lr, "weight_decay": adam_weight_decay},
         log_dir=log_dir,
-        checkpoint_interval_epochs=checkpoint_interval_epochs,
-        log_interval_steps=log_interval_steps,
-        seed=random_seed,
+        log_interval=logging_interval,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_interval=checkpoint_interval,
+        validation_interval=validation_interval,
+        nbatches_per_validation=nbatches_per_validation,
     )
