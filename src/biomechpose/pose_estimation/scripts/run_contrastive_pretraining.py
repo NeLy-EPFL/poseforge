@@ -1,4 +1,3 @@
-import torch
 from torch.utils.data import DataLoader
 from pathlib import Path
 
@@ -21,7 +20,7 @@ if __name__ == "__main__":
     # Number of different frames to include in each batch. Note that n_variants variants
     # of each frame will be included, so effective batch size = batch_size * n_variants.
     # This must be a multiple of `atomic_epoch_nsamples` in `AtomicBatchDataset`.
-    batch_size = 64  # ~8.5GB GPU memory with n_variants=3
+    batch_size = 96  # ~8.25GB GPU memory with batch_size=96, n_variants=4
     num_workers = 4
 
     # Model configs:
@@ -52,12 +51,12 @@ if __name__ == "__main__":
     adam_weight_decay = 1e-4  # weight decay for Adam optimizer
 
     # Output configs:
-    output_basedir = Path("pose_estimation/contrastive_pretraining/training_test")
+    output_basedir = Path("bulk_data/pose_estimation/contrastive_pretraining/trial0")
     log_dir = output_basedir / "logs"
     checkpoint_dir = output_basedir / "checkpoints"
     logging_interval = 10  # log training metrics every N steps
-    checkpoint_interval = 100  # save model checkpoint every N steps (NOT EPOCHS!)
-    validation_interval = 100  # run validation every N steps (NOT EPOCHS!)
+    checkpoint_interval = 500  # save model checkpoint every N steps (NOT EPOCHS!)
+    validation_interval = 500  # run validation every N steps (NOT EPOCHS!)
     nbatches_per_validation = 100  # number of batches to use for each validation
     ######################## END OF CONFIGURATIONS ########################
     

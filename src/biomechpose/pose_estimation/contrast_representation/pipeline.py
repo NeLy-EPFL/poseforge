@@ -100,15 +100,18 @@ class ContrastivePretrainingPipeline:
         n_batches_per_epoch: int,
         avg_loss: float,
         learning_rate: float,
+        throughput: float,
     ) -> None:
         print(
             f"Epoch {epoch_idx}, step {within_epoch_step_idx}/{n_batches_per_epoch}), "
-            f"avg loss: {avg_loss:.4f}, lr: {learning_rate}"
+            f"avg loss: {avg_loss:.4f}, lr: {learning_rate}, "
+            f"throughput: {throughput:.2f} batches/second"
         )
         global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
         writer.add_scalar("Loss/Train", avg_loss, global_step_idx)
         writer.add_scalar("Training/Epoch", epoch_idx, global_step_idx)
         writer.add_scalar("Training/LearningRate", learning_rate, global_step_idx)
+        writer.add_scalar("Training/Throughput", throughput, global_step_idx)
 
     def _update_logs_validation(
         self,
@@ -212,10 +215,9 @@ class ContrastivePretrainingPipeline:
                 f"Starting epoch_idx={epoch_idx} out of {num_epochs} at {datetime.now()}"
             )
             running_loss = 0.0
-            start_time = time.time()
-            for step_idx_within_epoch, (atomic_batches, _) in enumerate(
-                training_data_loader
-            ):
+            epoch_start_time = time.time()
+            running_start_time = time.time()
+            for step_idx, (atomic_batches, _) in enumerate(training_data_loader):
                 # Merge atomic batches into a single batch
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
                 frames_batch_collapsed, merged_batch_size, n_variants = (
@@ -235,7 +237,7 @@ class ContrastivePretrainingPipeline:
                     )
 
                     # Check if float16 is actually being used
-                    if epoch_idx == 0 and step_idx_within_epoch == 0:
+                    if epoch_idx == 0 and step_idx == 0:
                         self._check_float16_usage(
                             frames_batch_collapsed,
                             h_features,
@@ -253,30 +255,33 @@ class ContrastivePretrainingPipeline:
 
                 # Logging
                 running_loss += loss.item()
-                if (step_idx_within_epoch) % log_interval == 0:
+                if step_idx % log_interval == 0:
                     avg_loss = running_loss / log_interval
                     learning_rate = optimizer.param_groups[0]["lr"]
+                    throughput = log_interval / (time.time() - running_start_time)
                     self._update_logs_training(
                         writer=writer,
                         epoch_idx=epoch_idx,
-                        within_epoch_step_idx=step_idx_within_epoch,
+                        within_epoch_step_idx=step_idx,
                         n_batches_per_epoch=n_batches_per_epoch,
                         avg_loss=avg_loss,
                         learning_rate=learning_rate,
+                        throughput=torch.nan if step_idx == 0 else throughput,
                     )
                     running_loss = 0.0
+                    running_start_time = time.time()
 
                 # Save checkpoint
-                if (step_idx_within_epoch) % checkpoint_interval == 0:
+                if (step_idx) % checkpoint_interval == 0:
                     checkpoint_path_stem = (
                         checkpoint_dir
-                        / f"checkpoint_epoch{epoch_idx:03d}_step{step_idx_within_epoch:06d}"
+                        / f"checkpoint_epoch{epoch_idx:03d}_step{step_idx:06d}"
                     )
                     self._save_checkpoint(checkpoint_path_stem)
                     print(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
 
                 # Run validation
-                if (step_idx_within_epoch) % validation_interval == 0:
+                if (step_idx) % validation_interval == 0 and step_idx > 0:
                     print(
                         f"Running validation over the first {nbatches_per_validation} "
                         "batches in the validation set"
@@ -289,13 +294,13 @@ class ContrastivePretrainingPipeline:
                     self._update_logs_validation(
                         writer=writer,
                         epoch_idx=epoch_idx,
-                        within_epoch_step_idx=step_idx_within_epoch,
+                        within_epoch_step_idx=step_idx,
                         n_batches_per_epoch=n_batches_per_epoch,
                         avg_loss=avg_val_loss,
                     )
 
             end = time.time()
-            epoch_walltime = end - start_time
+            epoch_walltime = end - epoch_start_time
             print(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
 
     def validate(
