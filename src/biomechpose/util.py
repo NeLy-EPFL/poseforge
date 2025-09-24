@@ -8,6 +8,7 @@ import gc
 import logging
 import imageio.v2 as imageio
 from pathlib import Path
+from typing import Any
 from matplotlib import pyplot as plt
 
 
@@ -50,7 +51,9 @@ def configure_matplotlib_style():
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
-def print_hardware_availability(check_gpu: bool = False):
+def get_hardware_availability(
+    check_gpu: bool = False, print_results: bool = False
+) -> dict[str, Any]:
     """Print available CPU and GPU cores"""
     res = {}
 
