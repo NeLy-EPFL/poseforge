@@ -1,5 +1,6 @@
 import torch
 import time
+import logging
 from tqdm import tqdm
 from datetime import datetime
 from typing import Any
@@ -102,7 +103,7 @@ class ContrastivePretrainingPipeline:
         learning_rate: float,
         throughput: float,
     ) -> None:
-        print(
+        logging.info(
             f"Epoch {epoch_idx}, step {within_epoch_step_idx}/{n_batches_per_epoch}), "
             f"avg loss: {avg_loss:.4f}, lr: {learning_rate}, "
             f"throughput: {throughput:.2f} batches/second"
@@ -122,7 +123,7 @@ class ContrastivePretrainingPipeline:
         n_batches_per_epoch: int,
         avg_loss: float,
     ) -> None:
-        print(f"Validation avg loss: {avg_loss:.4f}")
+        logging.info(f"Validation avg loss: {avg_loss:.4f}")
         global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
         writer.add_scalar("Loss/Validation", avg_loss, global_step_idx)
 
@@ -198,7 +199,7 @@ class ContrastivePretrainingPipeline:
 
         # Training loop
         for epoch_idx in range(num_epochs):
-            print(
+            logging.info(
                 f"Starting epoch {epoch_idx} out of {num_epochs} at {datetime.now()}"
             )
             running_loss = 0.0
@@ -265,11 +266,11 @@ class ContrastivePretrainingPipeline:
                         / f"checkpoint_epoch{epoch_idx:03d}_step{step_idx:06d}"
                     )
                     self._save_checkpoint(checkpoint_path_stem)
-                    print(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
+                    logging.info(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
 
                 # Run validation
                 if (step_idx) % validation_interval == 0 and step_idx > 0:
-                    print(
+                    logging.info(
                         f"Running validation over the first {nbatches_per_validation} "
                         "batches in the validation set"
                     )
@@ -288,7 +289,7 @@ class ContrastivePretrainingPipeline:
 
             end = time.time()
             epoch_walltime = end - epoch_start_time
-            print(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
+            logging.info(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
 
     def validate(
         self,

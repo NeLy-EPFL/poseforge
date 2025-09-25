@@ -1,3 +1,4 @@
+import logging
 from torch.utils.data import DataLoader
 from pathlib import Path
 
@@ -57,12 +58,16 @@ if __name__ == "__main__":
     logging_interval = 10  # log training metrics every N steps
     checkpoint_interval = 500  # save model checkpoint every N steps (NOT EPOCHS!)
     validation_interval = 500  # run validation every N steps (NOT EPOCHS!)
-    nbatches_per_validation = 100  # number of batches to use for each validation
+    nbatches_per_validation = 300  # number of batches to use for each validation
+    logging_level = logging.INFO
     ######################## END OF CONFIGURATIONS ########################
-    
+
     # System setup
     set_random_seed(seed)
     get_hardware_availability(check_gpu=True, print_results=True)
+    logging.basicConfig(
+        level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
     # Initialize datasets and dataloaders
     train_ds = AtomicBatchDataset(
@@ -100,13 +105,15 @@ if __name__ == "__main__":
 
     # Initialize models
     feature_extractor = ResNetFeatureExtractor(pretrained=use_pretrained_backbone)
-    print(f"Created feature extractor with output dim {feature_extractor.output_dim}")
+    logging.info(
+        f"Created feature extractor with output dim {feature_extractor.output_dim}"
+    )
     projection_head = ContrastiveProjectionHead(
         input_dim=feature_extractor.output_dim,
         hidden_dim=projection_head_hidden_dim,
         output_dim=projection_head_output_dim,
     )
-    print("Created projection head")
+    logging.info("Created projection head")
 
     # Initialize contrastive learning pipeline
     pipeline = ContrastivePretrainingPipeline(
