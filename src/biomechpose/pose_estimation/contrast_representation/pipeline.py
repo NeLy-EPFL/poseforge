@@ -199,7 +199,7 @@ class ContrastivePretrainingPipeline:
         # Training loop
         for epoch_idx in range(num_epochs):
             print(
-                f"Starting epoch_idx={epoch_idx} out of {num_epochs} at {datetime.now()}"
+                f"Starting epoch {epoch_idx} out of {num_epochs} at {datetime.now()}"
             )
             running_loss = 0.0
             epoch_start_time = time.time()
@@ -212,7 +212,7 @@ class ContrastivePretrainingPipeline:
                 collapsed_batch = self._collapse_batch(concatenated_batch)
 
                 # Run models
-                with torch.amp.autocast(self.device, enabled=self.use_float16):
+                with torch.amp.autocast(str(self.device), enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
                     z_features = self.projection_head(h_features)
                     loss = info_nce_loss(
@@ -314,7 +314,7 @@ class ContrastivePretrainingPipeline:
         total_loss = 0.0
         if max_nbatches is None:
             max_nbatches = len(validation_loader)
-        with torch.no_grad():  # Disable gradient computation for validation
+        with torch.no_grad():
             for batch_idx, (atomic_batches, _) in tqdm(
                 enumerate(validation_loader), total=max_nbatches, disable=None
             ):
@@ -328,7 +328,7 @@ class ContrastivePretrainingPipeline:
                 collapsed_batch = self._collapse_batch(concatenated_batch)
 
                 # Forward pass with mixed precision
-                with torch.amp.autocast(self.device, enabled=self.use_float16):
+                with torch.amp.autocast(str(self.device), enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
                     z_features = self.projection_head(h_features)
                     loss = info_nce_loss(
@@ -349,3 +349,33 @@ class ContrastivePretrainingPipeline:
         self.projection_head.train()
 
         return avg_validation_loss
+
+    def inference(self, batch: torch.Tensor) -> torch.Tensor:
+        """Run the feature extractor and projection head on a batch of
+        images, agnostic to which simulated frames they come from and which
+        style transfer model is used.
+
+        Args:
+            batch (torch.Tensor): Batch of shape (batch_size, C, H, W)
+
+        Returns:
+            h_features (torch.Tensor): Features from the feature extractor
+            z_features (torch.Tensor): Features from the projection head
+        """
+        # batch: (batch_size, C, H, W)
+        input_device = batch.device
+        if input_device != self.device:
+            batch = batch.to(self.device, non_blocking=True)
+
+        # Set models to evaluation mode
+        self.feature_extractor.eval()
+        self.projection_head.eval()
+
+        # Run models
+        with torch.no_grad():
+            batch = batch.to(self.device, non_blocking=True)
+            with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+                h_features = self.feature_extractor(batch)
+                z_features = self.projection_head(h_features)
+
+        return h_features.to(input_device), z_features.to(input_device)

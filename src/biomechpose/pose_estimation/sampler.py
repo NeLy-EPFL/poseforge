@@ -6,8 +6,7 @@ import imageio.v2 as imageio
 import json
 from collections import defaultdict
 from pathlib import Path
-from tqdm import tqdm
-from typing import Callable
+from typing import Callable, Generator
 
 from biomechpose.util import (
     check_num_frames,
@@ -178,6 +177,37 @@ class SimulatedDataSequence:
                 labels["body_seg_maps"] = resized_body_seg_maps
 
         return labels
+    
+    def generate_batches(self, batch_size: int) -> Generator[torch.Tensor, None, None]:
+        """Generator that yields batches of synthetic images as PyTorch tensors.
+        
+        Args:
+            batch_size (int): Total batch size (will be divided by n_variants)
+            
+        Yields:
+            torch.Tensor: Batch tensor of shape (batch_size, 3, height, width)
+                with values normalized to [0, 1]
+        """
+        n_samples_per_batch = batch_size // self.n_variants
+        n_batches = (self.n_frames + n_samples_per_batch - 1) // n_samples_per_batch
+
+        for i in range(n_batches):
+            start_idx = i * n_samples_per_batch
+            end_idx = min((i + 1) * n_samples_per_batch, self.n_frames)
+            frame_ids = list(range(start_idx, end_idx))
+            frames: np.ndarray = self.read_synthetic_frames(frame_ids)  # not tensor!
+
+            # Change to torch tensor convention:
+            # 1. n_channels before H and W, a single collapsed batch dimension in front
+            #    (n_variants * n_frames, n_channels=3, n_rows, n_cols)
+            # 2. Convert uint8 numpy array to float32 torch tensor normalized to [0, 1]
+            n_variants, n_frames, n_rows, n_cols = frames.shape
+            batch = torch.from_numpy(frames)
+            batch = batch.to(dtype=torch.float32) / 255.0
+            batch = batch.view(n_variants * n_frames, 1, n_rows, n_cols)
+            batch = batch.repeat(1, 3, 1, 1)
+
+            yield batch
 
 
 class SyntheticFramesSampler:
