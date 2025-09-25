@@ -137,47 +137,34 @@ class ContrastivePretrainingPipeline:
         )
 
     @staticmethod
-    def _concat_and_collapse_atomic_batches(
-        atomic_batches: torch.Tensor,
-    ) -> tuple[torch.Tensor, int, int]:
+    def _concat_atomic_batches(atomic_batches: torch.Tensor) -> torch.Tensor:
+        n_atomic_batches = atomic_batches.shape[0]
+        concatenated_batch = torch.cat(
+            [atomic_batches[i] for i in range(n_atomic_batches)],
+            dim=1,
+        ).to(atomic_batches.device)
+        return concatenated_batch
+
+    @staticmethod
+    def _collapse_batch(batch: torch.Tensor) -> tuple[torch.Tensor, int, int]:
         """Reshape a group of atomic batches into a single batch, and
         collapse the n_variants and n_samples dimensions.
 
         Args:
-            atomic_batches (torch.Tensor): Tensor of shape
-                (n_atomic_batches, n_variants, n_samples, C, H, W)
+            batch (torch.Tensor): Tensor of shape
+                (n_variants, n_atomic_batches * n_samples, C, H, W)
 
         Returns:
             torch.Tensor: Collapsed batch of shape
                 (n_variants * n_atomic_batches * n_samples, C, H, W)
-            int: Merged batch size (n_atomic_batches * n_samples)
-            int: Number of variants (n_variants)
         """
-        # Merge atomic batches into a single batch (same as training)
-        (
-            n_atomic_batches,
-            n_variants,
-            atomic_batch_nsamples,
-            n_channels,
-            height,
-            width,
-        ) = atomic_batches.shape
-        merged_batch_size = n_atomic_batches * atomic_batch_nsamples
-
-        # frames_batch: (n_variants, n_atomic_batches * atomic_batch_nsamples, C, H, W)
-        frames_batch = torch.cat(
-            [atomic_batches[i] for i in range(n_atomic_batches)],
-            dim=1,
-        ).to(atomic_batches.device)
-
-        # frames_batch_collapsed: (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
-        frames_batch_collapsed = frames_batch.view(
-            n_variants * merged_batch_size,
-            n_channels,
-            height,
-            width,
+        n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = batch.shape
+        # collapsed_batch:
+        #     (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
+        collapsed_batch = batch.view(
+            n_variants * n_samples_all_atomic_batches, n_channels, nrows, ncols
         )
-        return frames_batch_collapsed, merged_batch_size, n_variants
+        return collapsed_batch
 
     def train(
         self,
@@ -220,18 +207,18 @@ class ContrastivePretrainingPipeline:
             for step_idx, (atomic_batches, _) in enumerate(training_data_loader):
                 # Merge atomic batches into a single batch
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
-                frames_batch_collapsed, merged_batch_size, n_variants = (
-                    self._concat_and_collapse_atomic_batches(atomic_batches)
-                )
+                concatenated_batch = self._concat_atomic_batches(atomic_batches)
+                n_variants, n_samples, _, _, _ = concatenated_batch.shape
+                collapsed_batch = self._collapse_batch(concatenated_batch)
 
                 # Run models
                 with torch.amp.autocast(self.device, enabled=self.use_float16):
-                    h_features = self.feature_extractor(frames_batch_collapsed)
+                    h_features = self.feature_extractor(collapsed_batch)
                     z_features = self.projection_head(h_features)
                     loss = info_nce_loss(
                         z_features,
                         temperature,
-                        batch_size=merged_batch_size,
+                        n_samples=n_samples,
                         n_variants=n_variants,
                         device=self.device,
                     )
@@ -239,7 +226,7 @@ class ContrastivePretrainingPipeline:
                     # Check if float16 is actually being used
                     if epoch_idx == 0 and step_idx == 0:
                         self._check_float16_usage(
-                            frames_batch_collapsed,
+                            collapsed_batch,
                             h_features,
                             z_features,
                             loss,
@@ -336,18 +323,18 @@ class ContrastivePretrainingPipeline:
 
                 # Merge atomic batches into a single batch (same as training)
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
-                frames_batch_collapsed, merged_batch_size, n_variants = (
-                    self._concat_and_collapse_atomic_batches(atomic_batches)
-                )
+                concatenated_batch = self._concat_atomic_batches(atomic_batches)
+                n_variants, n_samples, _, _, _ = concatenated_batch.shape
+                collapsed_batch = self._collapse_batch(concatenated_batch)
 
                 # Forward pass with mixed precision
                 with torch.amp.autocast(self.device, enabled=self.use_float16):
-                    h_features = self.feature_extractor(frames_batch_collapsed)
+                    h_features = self.feature_extractor(collapsed_batch)
                     z_features = self.projection_head(h_features)
                     loss = info_nce_loss(
                         z_features,
                         temperature,
-                        batch_size=merged_batch_size,
+                        n_samples=n_samples,
                         n_variants=n_variants,
                         device=self.device,
                     )

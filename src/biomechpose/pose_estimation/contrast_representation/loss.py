@@ -6,7 +6,7 @@ import torch.nn.functional as F
 def info_nce_loss(
     embeddings: torch.Tensor,
     temperature: float,
-    batch_size: int,
+    n_samples: int,
     n_variants: int,
     device: torch.device | str,
 ) -> float:
@@ -28,21 +28,17 @@ def info_nce_loss(
         torch.Tensor: InfoNCE loss as a single float value.
     """
     # Construct labels for binary classification
-    frame_id = torch.cat([torch.arange(batch_size) for i in range(n_variants)], dim=0)
+    frame_id = torch.cat([torch.arange(n_samples) for i in range(n_variants)], dim=0)
     labels_matrix = (frame_id[None, :] == frame_id[:, None]).to(device)
-    assert labels_matrix.shape == (  # can be commented out after testing
-        batch_size * n_variants,
-        batch_size * n_variants,
-    )
+    # can be commented out after testing
+    assert labels_matrix.shape == (n_samples * n_variants, n_samples * n_variants)
 
     # Compute cosine similarity matrix, which is just X @ X.T after X is normalized
     # across the feature dimensions (i.e. rows of X)
     embeddings = nn.functional.normalize(embeddings, dim=1)
     sim_matrix = embeddings @ embeddings.T
-    assert sim_matrix.shape == (  # can be commented out after testing
-        batch_size * n_variants,
-        batch_size * n_variants,
-    )
+    # can be commented out after testing
+    assert sim_matrix.shape == (n_samples * n_variants, n_samples * n_variants)
 
     # Discard the main diagonal: exclude self comparison (x_anchor vs. x_anchor)
     n_rows = sim_matrix.shape[0]  # should be batch_size * n_variants
