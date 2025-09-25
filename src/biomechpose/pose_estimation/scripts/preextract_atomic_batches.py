@@ -4,7 +4,7 @@ from pathlib import Path
 from tqdm import trange
 from time import time
 
-from biomechpose.pose_estimation.sampler import (
+from biomechpose.pose_estimation import (
     SimulatedDataSequence,
     SyntheticFramesSampler,
     save_atomic_batch_frames,

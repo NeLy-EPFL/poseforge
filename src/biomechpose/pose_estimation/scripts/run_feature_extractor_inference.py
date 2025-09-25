@@ -1,8 +1,14 @@
+import logging
+
+logging_level = logging.INFO
+logging.basicConfig(
+    level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 import numpy as np
 import torch
 import torch.nn as nn
 import h5py
-import logging
 from time import time
 from pathlib import Path
 
@@ -138,14 +144,10 @@ if __name__ == "__main__":
 
     # Output configs:
     inference_output_dir = model_data_dir / "inference"
-    logging_level = logging.INFO
     ######################## END OF CONFIGURATIONS ########################
 
     # System setup
     get_hardware_availability(check_gpu=True, print_results=True)
-    logging.basicConfig(
-        level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
 
     # Initialize datasets
     simulations_to_use = [
