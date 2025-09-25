@@ -69,6 +69,15 @@ def predict_for_dataset(
     return torch.cat(h_features_all, dim=1), torch.cat(z_features_all, dim=1)
 
 
+def initialize_output_hdf_file(output_path: Path, n_variants: int, n_frames: int):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(output_path, "w") as f:
+        f.create_group("h_features")
+        f.create_group("z_features")
+        f.attrs["n_variants"] = n_variants
+        f.attrs["n_frames"] = n_frames
+
+
 if __name__ == "__main__":
     ########################### CONFIGURATIONS ############################
     # Sampling configs:
@@ -177,12 +186,7 @@ if __name__ == "__main__":
     # Initialize h5 files to save extracted features
     for dataset in datasets:
         output_path = inference_output_dir / dataset.sim_name / "contrastive_latents.h5"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with h5py.File(output_path, "w") as f:
-            h_features_group = f.create_group("h_features")
-            z_features_group = f.create_group("z_features")
-            f.attrs["n_variants"] = dataset.n_variants
-            f.attrs["n_frames"] = dataset.n_frames
+        initialize_output_hdf_file(output_path, dataset.n_variants, dataset.n_frames)
 
     # Run inference on test data and save outputs
     for i_checkpoint, (epoch, step) in enumerate(checkpoints_to_evaluate):
