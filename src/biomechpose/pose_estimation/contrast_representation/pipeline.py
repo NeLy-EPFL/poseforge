@@ -1,6 +1,7 @@
 import torch
 import time
 import logging
+import gc
 from tqdm import tqdm
 from datetime import datetime
 from typing import Any
@@ -13,6 +14,7 @@ from biomechpose.pose_estimation.contrast_representation.model import (
     ContrastiveProjectionHead,
 )
 from biomechpose.pose_estimation.contrast_representation.loss import info_nce_loss
+from biomechpose.util import clear_memory_cache
 
 
 class ContrastivePretrainingPipeline:
@@ -274,11 +276,25 @@ class ContrastivePretrainingPipeline:
                         f"Running validation over the first {nbatches_per_validation} "
                         "batches in the validation set"
                     )
+
+                    # Free GPU memory before validation
+                    # Delete training batch tensors
+                    del (
+                        atomic_batches,
+                        concatenated_batch,
+                        collapsed_batch,
+                        h_features,
+                        z_features,
+                        loss,
+                    )
+                    clear_memory_cache()
+
                     avg_val_loss = self.validate(
                         validation_data_loader,
                         temperature=temperature,
                         max_nbatches=nbatches_per_validation,
                     )
+
                     self._update_logs_validation(
                         writer=writer,
                         epoch_idx=epoch_idx,
@@ -345,6 +361,17 @@ class ContrastivePretrainingPipeline:
         # Compute average validation loss
         avg_validation_loss = total_loss / max_nbatches
 
+        # Clean up all validation tensors at the end
+        del (
+            atomic_batches,
+            concatenated_batch,
+            collapsed_batch,
+            h_features,
+            z_features,
+            loss,
+        )
+        clear_memory_cache()
+
         # Set models back to training mode
         self.feature_extractor.train()
         self.projection_head.train()
@@ -380,3 +407,4 @@ class ContrastivePretrainingPipeline:
                 z_features = self.projection_head(h_features)
 
         return h_features.to(input_device), z_features.to(input_device)
+

@@ -25,9 +25,12 @@ class SamplingConfig:
     # Number of variants (synthetic images made by different style transfer models)
     atomic_batch_nvariants: int
     # Number of different frames to include in each batch. Note that n_variants variants
-    # of each frame will be included, so effective batch size = batch_size * n_variants.
+    # of each frame will be included, so effective batch size = train_batch_size * n_variants.
     # This must be a multiple of `atomic_epoch_nsamples` in `AtomicBatchDataset`.
-    batch_size: int
+    train_batch_size: int
+    # Validation batch size. Can be much smaller than train_batch_size. Must be
+    # a multiple of `atomic_epoch_nsamples` in `AtomicBatchDataset`
+    val_batch_size: int = 128
     # Number of workers for data loading. Use number of CPU cores if None.
     num_workers: int | None = None
 
@@ -118,10 +121,14 @@ def pretrain_contrastive_model(
         n_channels=data.num_channels,
     )
     # Check if batch size is valid
-    n_atomic_batches_per_batch = sampling.batch_size // sampling.atomic_batch_nsamples
+    train_n_atomic_batches_per_batch = sampling.train_batch_size // sampling.atomic_batch_nsamples
+    val_n_atomic_batches_per_batch = sampling.val_batch_size // sampling.atomic_batch_nsamples
     assert (
-        sampling.batch_size % sampling.atomic_batch_nsamples == 0
-    ), "`batch_size` must be a multiple of `atomic_batch_nsamples`"
+        sampling.train_batch_size % sampling.atomic_batch_nsamples == 0
+    ), "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
+    assert (
+        sampling.val_batch_size % sampling.atomic_batch_nsamples == 0
+    ), "`val_batch_size` must be a multiple of `atomic_batch_nsamples`"
     # Create parallel dataloaders
     num_workers = sampling.num_workers
     if num_workers is None:
@@ -129,7 +136,7 @@ def pretrain_contrastive_model(
         logging.info(f"Using {num_workers} data loading workers")
     train_loader = DataLoader(
         train_ds,
-        batch_size=n_atomic_batches_per_batch,
+        batch_size=train_n_atomic_batches_per_batch,
         shuffle=True,
         num_workers=sampling.num_workers,
         pin_memory=True,
@@ -137,7 +144,7 @@ def pretrain_contrastive_model(
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=n_atomic_batches_per_batch,
+        batch_size=val_n_atomic_batches_per_batch,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
@@ -194,7 +201,8 @@ if __name__ == "__main__":
     # python -u src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py \
     #     --sampling.atomic-batch-nsamples 32 \
     #     --sampling.atomic-batch-nvariants 4 \
-    #     --sampling.batch-size 96 \
+    #     --sampling.train-batch-size 96 \
+    #     --sampling.val-batch-size 96 \
     #     --sampling.num-workers 4 \
     #     --model.use-pretrained-backbone \
     #     --model.projection-head-hidden-dim 512 \
@@ -239,7 +247,8 @@ if __name__ == "__main__":
     # sampling_config = SamplingConfig(
     #     atomic_batch_nsamples=32,
     #     atomic_batch_nvariants=4,
-    #     batch_size=96,  # ~8.25 GB GPU memory with batch_size=96, n_variants=4
+    #     train_batch_size=96,  # ~8.25 GB GPU memory with train_batch_size=96, n_variants=4,
+    #     val_batch_size=96
     #     num_workers=4,
     # )
     # model_config = ModelConfig(
