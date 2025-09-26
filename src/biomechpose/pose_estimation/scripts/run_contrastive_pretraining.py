@@ -25,7 +25,8 @@ class SamplingConfig:
     # Number of variants (synthetic images made by different style transfer models)
     atomic_batch_nvariants: int
     # Number of different frames to include in each batch. Note that n_variants variants
-    # of each frame will be included, so effective batch size = train_batch_size * n_variants.
+    # of each frame will be included, so effective batch size =
+    # train_batch_size * n_variants.
     # This must be a multiple of `atomic_epoch_nsamples` in `AtomicBatchDataset`.
     train_batch_size: int
     # Validation batch size. Can be much smaller than train_batch_size. Must be
@@ -121,8 +122,12 @@ def pretrain_contrastive_model(
         n_channels=data.num_channels,
     )
     # Check if batch size is valid
-    train_n_atomic_batches_per_batch = sampling.train_batch_size // sampling.atomic_batch_nsamples
-    val_n_atomic_batches_per_batch = sampling.val_batch_size // sampling.atomic_batch_nsamples
+    train_n_atomic_batches_per_batch = (
+        sampling.train_batch_size // sampling.atomic_batch_nsamples
+    )
+    val_n_atomic_batches_per_batch = (
+        sampling.val_batch_size // sampling.atomic_batch_nsamples
+    )
     assert (
         sampling.train_batch_size % sampling.atomic_batch_nsamples == 0
     ), "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
@@ -247,8 +252,8 @@ if __name__ == "__main__":
     # sampling_config = SamplingConfig(
     #     atomic_batch_nsamples=32,
     #     atomic_batch_nvariants=4,
-    #     train_batch_size=96,  # ~8.25 GB GPU memory with train_batch_size=96, n_variants=4,
-    #     val_batch_size=96
+    #     train_batch_size=96,  # batch_size 96 -> ~8.25 GB GPU memory with n_variants=4
+    #     val_batch_size=96,
     #     num_workers=4,
     # )
     # model_config = ModelConfig(

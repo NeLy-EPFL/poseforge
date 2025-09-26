@@ -1,7 +1,6 @@
 import torch
 import time
 import logging
-import gc
 from tqdm import tqdm
 from datetime import datetime
 from typing import Any
@@ -407,4 +406,3 @@ class ContrastivePretrainingPipeline:
                 z_features = self.projection_head(h_features)
 
         return h_features.to(input_device), z_features.to(input_device)
-
