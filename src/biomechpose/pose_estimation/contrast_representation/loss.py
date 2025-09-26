@@ -9,7 +9,7 @@ def info_nce_loss(
     n_samples: int,
     n_variants: int,
     device: torch.device | str,
-) -> float:
+) -> torch.Tensor:
     """Compute the InfoNCE loss, treating the same frame from different
     variants as positive pairs and different frames as negative pairs.
 
