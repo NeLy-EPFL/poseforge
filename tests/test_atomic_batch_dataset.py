@@ -1,7 +1,7 @@
 import torch
 from pathlib import Path
 
-from biomechpose.pose_estimation.atomic_batch_dataset import AtomicBatchDataset
+from biomechpose.pose_estimation import AtomicBatchDataset
 
 
 def test_atomic_batch_dataset_loading():

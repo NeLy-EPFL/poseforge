@@ -439,7 +439,7 @@ class SyntheticFramesSampler:
 
         # Combine data from all simulations into single arrays and convert to tensor
         frames = np.concatenate(frames_by_sim, axis=1)
-        frames = torch.from_numpy(frames / 255.0).to(torch.float32)
+        frames = torch.from_numpy(frames).to(torch.float32) / 255.0
         frames = frames[:, :, None, :, :]  # add channel dim
         if self.load_labels:
             labels = {

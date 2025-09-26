@@ -75,8 +75,8 @@ def test_sampling_contrastive_pretraining_dataset_sampling():
     assert (sim_ids == (global_frame_ids >= sim_lengths[0]).astype(int)).all()
 
     # Check local frame ids
-    (local_frame_ids[sim_ids == 0] == global_frame_ids[sim_ids == 0]).all()
-    (
+    assert (local_frame_ids[sim_ids == 0] == global_frame_ids[sim_ids == 0]).all()
+    assert (
         local_frame_ids[sim_ids == 1] == global_frame_ids[sim_ids == 1] - sim_lengths[0]
     ).all()
 

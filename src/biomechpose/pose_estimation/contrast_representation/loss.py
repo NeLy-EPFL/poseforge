@@ -19,7 +19,7 @@ def info_nce_loss(
             space wherein mutual information is evaluated.
         temperature (float): Temperature parameter for scaling the
             logits.
-        batch_size (int): Number of unique frames in the batch.
+        n_samples (int): Number of unique frames in the batch.
         n_variants (int): Number of variants (e.g., different
             augmentations) per unique frame.
         device (torch.device | str): Device to perform computations on.
