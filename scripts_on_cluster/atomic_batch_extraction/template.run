@@ -1,0 +1,36 @@
+#!/bin/bash -l
+
+#SBATCH --job-name <<<JOB_NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 200GB
+#SBATCH --time 01:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output <<<LOG_OUTPUT_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+conda activate biomechpose
+
+# Define paths
+project_root="/home/sibwang/biomechpose"
+extraction_cli_path="src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py"
+
+# Setup
+cd $project_root
+
+# Training
+echo "Extraction starting at $(date)"
+
+python -u $extraction_cli_path \
+    --atomic-batch-nframes 32 \
+    --atomic-batch-nvariants-max 4 \
+    --minimum-time-diff-frames 60 \
+    --input-basedir <<<INPUT_BASEDIR>>> \
+    --nmf-sim-rendering-basedir bulk_data/nmf_rendering \
+    --output-dir <<<OUTPUT_DIR>>>
+
+echo "Extraction ends at $(date)"

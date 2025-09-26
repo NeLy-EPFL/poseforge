@@ -1,12 +1,14 @@
 import random
 import torch
 import numpy as np
+import pandas as pd
 import os
 import psutil
 import gc
 import logging
 import imageio.v2 as imageio
 from pathlib import Path
+from typing import Any
 from matplotlib import pyplot as plt
 
 
@@ -30,7 +32,10 @@ def set_random_seed(seed: int = 42) -> None:
     # Set environment variable for additional determinism
     os.environ["PYTHONHASHSEED"] = str(seed)
 
-    # Generator for DataLoader workers
+    # Make torch deterministic
+    # The following env var must be set for CUDA >= 10.2). See
+    # https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     torch.use_deterministic_algorithms(True, warn_only=True)
 
     logging.info(f"Random seed set to {seed} for reproducible results")
@@ -46,7 +51,9 @@ def configure_matplotlib_style():
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
-def print_hardware_availability(check_gpu: bool = False):
+def get_hardware_availability(
+    check_gpu: bool = False, print_results: bool = False
+) -> dict[str, Any]:
     """Print available CPU and GPU cores"""
     res = {}
 
@@ -129,3 +136,17 @@ def clear_memory_cache(logging_level=logging.DEBUG):
             logging_level,
             f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached",
         )
+
+
+def check_num_frames(video_path: Path) -> int:
+    """Check number of frames in a video file using imageio.v2"""
+    try:
+        with imageio.get_reader(video_path) as reader:
+            num_frames = reader.count_frames()
+    except Exception as e:
+        raise RuntimeError(f"Failed to open video file: {video_path}") from e
+    return num_frames
+
+
+def round_up_to_multiple(x: int, multiple_of: int) -> int:
+    return ((x + multiple_of - 1) // multiple_of) * multiple_of

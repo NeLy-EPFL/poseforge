@@ -55,7 +55,7 @@ from pathlib import Path
 from biomechpose.simulate_nmf.data import load_kinematic_recording
 from biomechpose.simulate_nmf.simulate import simulate_one_segment
 from biomechpose.simulate_nmf.postprocessing import postprocess_segment
-from biomechpose.util import print_hardware_availability
+from biomechpose.util import get_hardware_availability
 
 
 def simulate_using_kinematic_prior(
@@ -65,7 +65,7 @@ def simulate_using_kinematic_prior(
     input_timestep: float = 0.01,
     sim_timestep: float = 0.0001,
     output_data_freq: int = 300,
-    render_play_speed: float = 1.0,
+    render_play_speed: float = 0.1,
     max_segments_per_trial: int | None = None,
     max_sim_steps_per_segment: int | None = None,
 ) -> None:
@@ -184,7 +184,7 @@ def run_sequentially_for_testing():
 if __name__ == "__main__":
     import tyro
 
-    print_hardware_availability(check_gpu=False)
+    get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
     tyro.cli(simulate_using_kinematic_prior)

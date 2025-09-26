@@ -413,3 +413,4 @@ wandb/
 temp/
 batch_scripts/
 outputs/
+notebooks/

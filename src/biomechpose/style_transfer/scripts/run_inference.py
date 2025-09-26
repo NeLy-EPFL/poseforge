@@ -22,7 +22,7 @@ def find_all_simulation_paths(nmf_renderings_basedir: Path) -> list[Path]:
     base root directory."""
     all_simulation_paths = [
         file.parent
-        for file in nmf_renderings_basedir.rglob("processed_kinematic_states.pkl")
+        for file in nmf_renderings_basedir.rglob("processed_kinematic_states.h5")
     ]
     return sorted(list(all_simulation_paths))
 
