@@ -1,0 +1,69 @@
+#!/bin/bash -l
+
+#SBATCH --job-name contrastive-repr-inference-fly<<<FLY>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 8
+#SBATCH --mem 32GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=l40s
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output <<<STDOUT_STDERR_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+conda activate biomechpose
+
+# Define paths
+project_root="/home/sibwang/biomechpose"
+contrastive_pretraining_trial="trial_20250926a"
+
+# Setup
+cd $project_root
+
+# Training
+echo "Start running inference at $(date)"
+
+python -u src/biomechpose/pose_estimation/scripts/run_feature_extractor_inference.py \
+    --sampling.batch-size 4096 \
+    --model.training-stages \
+        "epoch000_step000000" \
+        "epoch000_step003000" \
+        "epoch001_step003000" \
+        "epoch002_step003000" \
+        "epoch003_step003000" \
+        "epoch004_step003000" \
+        "epoch005_step003000" \
+        "epoch006_step003000" \
+        "epoch007_step003000" \
+        "epoch008_step003000" \
+        "epoch009_step003000" \
+    --model.checkpoint-dir \
+        "bulk_data/pose_estimation/contrastive_pretraining/$contrastive_pretraining_trial/checkpoints" \
+    --model.projection_head_hidden_dim 512 \
+    --model.projection_head_output_dim 256 \
+    --data.synthetic-videos-basedir \
+        "bulk_data/style_transfer/production/translated_videos" \
+    --data.synthetic-videos-subdirs \
+        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly<<<FLY>>>_trial001" \
+        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly<<<FLY>>>_trial002" \
+        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly<<<FLY>>>_trial003" \
+        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly<<<FLY>>>_trial004" \
+        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly<<<FLY>>>_trial005" \
+    --data.style-transfer-models \
+        "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121" \
+        "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200" \
+        "ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1_epoch161" \
+        "ngf32_netGstylegan2_batsize4_lambGAN0.1_epoch161" \
+        "ngf32_netGstylegan2_batsize4_lambGAN0.5_epoch141" \
+        "ngf32_netGstylegan2_batsize4_lambGAN1.0_epoch161" \
+        "ngf48_netGstylegan2_batsize2_lambGAN0.1_epoch141" \
+        "ngf48_netGstylegan2_batsize4_lambGAN0.1_epoch141" \
+    --data.image-size 256 256 \
+    --data.num-channels 3 \
+    --output.inference-output-dir \
+        "bulk_data/pose_estimation/contrastive_pretraining/$contrastive_pretraining_trial/inference"
+
+echo "Inference ends at $(date)"
