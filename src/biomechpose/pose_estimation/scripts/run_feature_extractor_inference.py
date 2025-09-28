@@ -166,7 +166,7 @@ def run_feature_extractor_inference(
 
     # Initialize models (feature extractor & projection head) and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    feature_extractor = ResNetFeatureExtractor(pretrained=False).to(device)
+    feature_extractor = ResNetFeatureExtractor(weights=None).to(device)
     projection_head = ContrastiveProjectionHead(
         input_dim=feature_extractor.output_dim,
         hidden_dim=model.projection_head_hidden_dim,

@@ -1,18 +1,41 @@
+import torch
 import torch.nn as nn
 from collections import OrderedDict
+from pathlib import Path
 from torchvision import models
 from torchvision.models import ResNet18_Weights
 
 
 class ResNetFeatureExtractor(nn.Module):
-    def __init__(self, pretrained=True):
+    def __init__(self, weights: str | Path | ResNet18_Weights = "IMAGENET1K_V1"):
         super(ResNetFeatureExtractor, self).__init__()
 
-        # Load pretrained ResNet-18
-        if pretrained:
-            self.resnet = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        # Figure out which weights to use
+        if weights == "IMAGENET1K_V1":  # only option as of 2025-09
+            weights = ResNet18_Weights.IMAGENET1K_V1
+
+        if isinstance(weights, ResNet18_Weights):
+            # Use an off-the-shelf pretrained ResNet backbone from torchvision.models
+            backbone_weights = weights  # used to initialize models.resnet18
+            my_module_weights = None  # load weights for this very nn.Module
+        elif isinstance(weights, (str, Path)):
+            # Instead of using off-the-shelf weights for the ResNet backbone, this very
+            # nn.Module has been pretrained or partially trained (though possibly from
+            # off-the-shelf ResNet weights as a starting point). Load those weights once
+            # the architecture of this nn.Module is defined.
+            backbone_weights = None
+            if not Path(weights).is_file():
+                raise ValueError(f"Provided weights path {weights} is not a file")
+            my_module_weights = torch.load(weights, map_location="cpu")
+        elif weights is None:
+            # Start from scratch
+            backbone_weights = None
+            my_module_weights = None
         else:
-            self.resnet = models.resnet18(weights=None)
+            raise ValueError(f"Invalid weights argument: {weights}")
+
+        # Initialize ResNet-18 backbone
+        self.resnet = models.resnet18(weights=backbone_weights)
 
         # Remove the final classification head (avgpool + fc)
         # ResNet architecture:
@@ -45,6 +68,10 @@ class ResNetFeatureExtractor(nn.Module):
             * self.global_pool_output_size[0]
             * self.global_pool_output_size[1]
         )
+
+        # Load weights for this very nn.Module if provided
+        if my_module_weights is not None:
+            self.load_state_dict(my_module_weights)
 
     def forward(self, x):
         features = self.resnet_feature_extractor(x)

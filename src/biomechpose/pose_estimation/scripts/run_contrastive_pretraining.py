@@ -156,7 +156,9 @@ def pretrain_contrastive_model(
     )
 
     # Initialize models
-    feature_extractor = ResNetFeatureExtractor(pretrained=model.use_pretrained_backbone)
+    feature_extractor = ResNetFeatureExtractor(
+        weights="IMAGENET1K_V1" if model.use_pretrained_backbone else None
+    )
     logging.info(
         f"Created feature extractor with output dim {feature_extractor.output_dim}"
     )
