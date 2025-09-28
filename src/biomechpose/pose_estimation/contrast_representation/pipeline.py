@@ -8,8 +8,8 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from biomechpose.pose_estimation.contrast_representation.model import (
-    ResNetFeatureExtractor,
+from biomechpose.pose_estimation import ResNetFeatureExtractor
+from biomechpose.pose_estimation.contrast_representation.projection_head import (
     ContrastiveProjectionHead,
 )
 from biomechpose.pose_estimation.contrast_representation.loss import info_nce_loss

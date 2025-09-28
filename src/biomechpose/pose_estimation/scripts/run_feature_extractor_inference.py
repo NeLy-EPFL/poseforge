@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from time import time
 from pathlib import Path
 
-from biomechpose.pose_estimation import SimulatedDataSequence
+from biomechpose.pose_estimation import SimulatedDataSequence, ResNetFeatureExtractor
 from biomechpose.pose_estimation.contrast_representation import (
     ContrastivePretrainingPipeline,
-    ResNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
 from biomechpose.util import get_hardware_availability

@@ -9,10 +9,9 @@ from dataclasses import dataclass
 from torch.utils.data import DataLoader
 from pathlib import Path
 
-from biomechpose.pose_estimation import AtomicBatchDataset
+from biomechpose.pose_estimation import AtomicBatchDataset, ResNetFeatureExtractor
 from biomechpose.pose_estimation.contrast_representation import (
     ContrastivePretrainingPipeline,
-    ResNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
 from biomechpose.util import set_random_seed, get_hardware_availability
