@@ -7,3 +7,7 @@ from .data import (
     load_atomic_batch_sim_data,
     AtomicBatchDataset,
 )
+from .latents_visualizer import (
+    LatentSpaceTrajectoryVisualizer,
+    visualize_latent_trajectory,
+)
