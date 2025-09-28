@@ -8,20 +8,28 @@ from pathlib import Path
 
 
 class LatentSpaceTrajectoryVisualizer:
-    def __init__(self, trajectories: np.ndarray, trail_length: int = 50, fps: int = 30):
+    def __init__(
+        self,
+        trajectories: np.ndarray,
+        trail_length: int = 50,
+        fps: int = 30,
+        headless: bool = False,
+    ):
         """
-        Initialize animator for multiple trajectories
+        Initialize animator for multiple trajectories.
+        
         Args:
-            trajectories (np.ndarray): np.array of shape
-                (n_traj, n_timesteps, 3)
+            trajectories (np.ndarray): np.array of shape (n_traj, n_timesteps, 3)
             trail_length (int): Number of past positions to show in trail
             fps (int): Frames per second for animation (default: 30)
+            headless (bool): Whether to run in offscreen mode (no display)
         """
         self.trajectories = trajectories
         self.n_traj, self.n_timesteps, _ = trajectories.shape
         self.trail_length = trail_length
         self.fps = fps
         self._delay = 1.0 / fps  # Calculate delay from FPS
+        self.headless = headless
 
         # Calculate data bounds for automatic scaling
         self.data_bounds = self._calculate_data_bounds()
@@ -31,8 +39,8 @@ class LatentSpaceTrajectoryVisualizer:
         # Allow empty meshes
         pv.global_theme.allow_empty_mesh = True
 
-        # Create plotter
-        self.plotter = pv.Plotter()
+        # Create plotter with offscreen mode if needed
+        self.plotter = pv.Plotter(off_screen=headless)
         self.plotter.set_background("black")
 
         # Set camera position based on data scale
@@ -169,19 +177,17 @@ class LatentSpaceTrajectoryVisualizer:
                 if len(current_point) > 0:
                     point_mesh.verts = np.array([1, 0])
 
-    def animate(self, video_path: Path | None = None, display: bool = False):
+    def animate(self, video_path: Path | None = None):
         """Run the animation
 
         Args:
             video_path (Path | None): Path to save video file. If None, no
                 video is saved.
-            display (bool): Whether to show interactive window. If False,
-                runs headlessly.
         """
         save_video = video_path is not None
 
         # Early exit if nothing to do
-        if not save_video and not display:
+        if not save_video and not self.headless:
             print("Warning: No video output or interactive display - nothing to do")
             return
 
@@ -190,10 +196,8 @@ class LatentSpaceTrajectoryVisualizer:
             self.plotter.open_movie(str(video_path))
 
         # Setup display mode
-        if display:
+        if self.headless:
             self.plotter.show(interactive_update=True, auto_close=False)
-        else:
-            self.plotter.off_screen = True
 
         # Animation loop
         for frame in range(self.n_timesteps):
@@ -202,12 +206,12 @@ class LatentSpaceTrajectoryVisualizer:
             if save_video:
                 self.plotter.write_frame()
 
-            if display:
+            if self.headless:
                 self.plotter.update()
                 time.sleep(self._delay)  # Only delay for interactive mode
 
                 # Break if window is closed
-                if not self.plotter.render_window:
+                if self.headless and not self.plotter.render_window:
                     break
 
         self.plotter.close()
@@ -220,8 +224,25 @@ def visualize_latent_trajectory(
     trail_duration_sec: float = 1.0,
     output_fps: int = 30,
     video_path: Path | None = None,
-    display: bool = True,
+    headless: bool = True,
 ):
+    """
+    Visualize trajectories of a set of variables in a latent space.
+    
+    Args:
+        latent_space_data (np.ndarray): np.array of shape
+            (n_trajectories, n_timesteps, latent_dim).
+        source_data_freq (int): Frequency (Hz) of the original source data
+            (i.e. along the n_timesteps axis).
+        play_speed (float): Fraction of real time to play the animation.
+        trail_duration_sec (float): Duration (seconds) of the trail behind
+            the current point, counted in output display time (i.e. a 1
+            second trail at 0.1x play speed will show 0.1 seconds of data).
+        output_fps (int): Frames per second of the output animation.
+        video_path (Path | None): Path to save the output video. If None,
+            no video is saved.
+        headless (bool): Whether to run in offscreen mode (no display).
+    """
     # Resample data
     sampling_freq_from_source_data = output_fps / play_speed
     t_source = np.arange(latent_space_data.shape[1]) / source_data_freq
@@ -247,5 +268,6 @@ def visualize_latent_trajectory(
         latent_space_data_pca,
         trail_length=int(trail_duration_sec * output_fps),
         fps=output_fps,
+        headless=headless,
     )
-    visualzier.animate(display=display, video_path=video_path)
+    visualzier.animate(video_path=video_path)
