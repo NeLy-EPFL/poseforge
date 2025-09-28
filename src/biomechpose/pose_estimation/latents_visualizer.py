@@ -17,7 +17,7 @@ class LatentSpaceTrajectoryVisualizer:
     ):
         """
         Initialize animator for multiple trajectories.
-        
+
         Args:
             trajectories (np.ndarray): np.array of shape (n_traj, n_timesteps, 3)
             trail_length (int): Number of past positions to show in trail
@@ -187,7 +187,7 @@ class LatentSpaceTrajectoryVisualizer:
         save_video = video_path is not None
 
         # Early exit if nothing to do
-        if not save_video and not self.headless:
+        if not save_video and self.headless:
             print("Warning: No video output or interactive display - nothing to do")
             return
 
@@ -196,7 +196,7 @@ class LatentSpaceTrajectoryVisualizer:
             self.plotter.open_movie(str(video_path))
 
         # Setup display mode
-        if self.headless:
+        if not self.headless:
             self.plotter.show(interactive_update=True, auto_close=False)
 
         # Animation loop
@@ -206,12 +206,12 @@ class LatentSpaceTrajectoryVisualizer:
             if save_video:
                 self.plotter.write_frame()
 
-            if self.headless:
+            if not self.headless:
                 self.plotter.update()
                 time.sleep(self._delay)  # Only delay for interactive mode
 
                 # Break if window is closed
-                if self.headless and not self.plotter.render_window:
+                if not self.headless and not self.plotter.render_window:
                     break
 
         self.plotter.close()
@@ -228,7 +228,7 @@ def visualize_latent_trajectory(
 ):
     """
     Visualize trajectories of a set of variables in a latent space.
-    
+
     Args:
         latent_space_data (np.ndarray): np.array of shape
             (n_trajectories, n_timesteps, latent_dim).
@@ -264,10 +264,10 @@ def visualize_latent_trajectory(
     latent_space_data_pca = pca.transform(pca_x_mat).reshape(n_variants, n_samples, 3)
 
     # Visualize
-    visualzier = LatentSpaceTrajectoryVisualizer(
+    visualizer = LatentSpaceTrajectoryVisualizer(
         latent_space_data_pca,
         trail_length=int(trail_duration_sec * output_fps),
         fps=output_fps,
         headless=headless,
     )
-    visualzier.animate(video_path=video_path)
+    visualizer.animate(video_path=video_path)

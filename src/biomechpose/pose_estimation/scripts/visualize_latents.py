@@ -26,6 +26,7 @@ def visualize_simulation(
                     trail_duration_sec=trail_duration_sec,
                     output_fps=output_fps,
                     video_path=output_dir / f"{feature}_{stage}.mp4",
+                    headless=True,
                 )
 
 
