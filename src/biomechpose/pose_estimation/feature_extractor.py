@@ -61,12 +61,12 @@ class ResNetFeatureExtractor(nn.Module):
         # Find out the output size of the ResNet feature extractor
         # For ResNet-18, layer4 has 512 output channels
         # The avgpool layer reduces spatial dimensions to 1x1
-        self.resnet_out_channels = 512  # ResNet-18 layer4 output channels
-        self.global_pool_output_size = (1, 1)  # avgpool output size
+        self.out_channels = 512  # ResNet-18 layer4 output channels
+        self.out_global_pool_size = (1, 1)  # avgpool output size
         self.output_dim = (
-            self.resnet_out_channels
-            * self.global_pool_output_size[0]
-            * self.global_pool_output_size[1]
+            self.out_channels
+            * self.out_global_pool_size[0]
+            * self.out_global_pool_size[1]
         )
 
         # Load weights for this very nn.Module if provided
