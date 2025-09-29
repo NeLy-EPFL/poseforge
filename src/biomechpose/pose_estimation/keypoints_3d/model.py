@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
 
-class PoseModel2p5D(nn.Module):
+class Pose2p5DModel(nn.Module):
     """2.5D Pose estimation model (for each keypoint, camera col-row coords
     are predicted via a 2D dense heatmap; depth is predicted separately via
     another 1D heatmap)."""
@@ -46,7 +46,7 @@ class PoseModel2p5D(nn.Module):
                 "entropy" (1 - normalized entropy in predicted
                 distribution, default) or "peak" (max probability).
         """
-        super(PoseModel2p5D, self).__init__()
+        super().__init__()
         self.n_keypoints = n_keypoints
         self.backbone = backbone
         self.depth_n_bins = depth_n_bins
@@ -58,6 +58,12 @@ class PoseModel2p5D(nn.Module):
         self.upsample_n_hidden_channels = upsample_n_hidden_channels
         self.depth_n_hidden_channels = depth_n_hidden_channels
         self.confidence_method = confidence_method
+
+        if confidence_method not in ["entropy", "peak"]:
+            raise ValueError(
+                f"Invalid confidence_method: {confidence_method}. "
+                'Must be "entropy" or "peak".'
+            )
 
         # Build upsampling core. This is the first level of processing after the ResNet
         # feature extractor, shared by both the heatmap head and the depth head.
@@ -147,13 +153,13 @@ class PoseModel2p5D(nn.Module):
         Returns:
             xy (torch.Tensor): X-Y coordinates of peaks in probability heat
                 map for each keypoint. Shape: (batch_size, n_keypoints, 2).
-            conf (torch.Tensor): Confidence scores for each keypoint. Shape:
-                (batch_size, n_keypoints).
+            conf (torch.Tensor): Confidence scores for each keypoint.
+                Shape: (batch_size, n_keypoints).
         """
         batch_size, n_keypoints, n_rows, n_cols = heatmaps.shape
         # Flat logits, shape: (batch_size, n_keypoints, n_rows*n_cols), then apply
         # softmax along the flattened spatial dimension (n_rows*n_cols)
-        probs_flat = PoseModel2p5D._softmax_with_temp(
+        probs_flat = Pose2p5DModel._softmax_with_temp(
             heatmaps.view(batch_size, n_keypoints, -1), dim=-1, temperature=temperature
         )
         probs = probs_flat.view(batch_size, n_keypoints, n_rows, n_cols)
@@ -208,7 +214,7 @@ class PoseModel2p5D(nn.Module):
                 Shape: (batch_size, n_keypoints).
         """
         # probs: shape (batch_size, n_keypoints, depth_n_bins), same as logits
-        probs = PoseModel2p5D._softmax_with_temp(
+        probs = Pose2p5DModel._softmax_with_temp(
             logits, dim=-1, temperature=temperature
         )
         # Compute expected depth (one scalar per keypoint per image)
@@ -229,9 +235,26 @@ class PoseModel2p5D(nn.Module):
         Args:
             x (torch.Tensor): Input tensor of shape (n_batches, n_channels,
                 n_rows, n_cols).
-        
+
         Returns:
-            TODO
+            dict with keys:
+                "heatmaps": (torch.Tensor) Predicted heatmaps of shape
+                    (n_batches, n_keypoints, n_rows_out, n_cols_out).
+                "depth_logits": (torch.Tensor) Predicted depth logits of
+                    shape (n_batches, n_keypoints, depth_n_bins).
+                "pred_xy": (torch.Tensor) Predicted x-y coordinates in
+                    input image pixel space of shape
+                    (n_batches, n_keypoints, 2).
+                "pred_depth": (torch.Tensor) Predicted depth values of
+                    shape (n_batches, n_keypoints).
+                "conf_xy": (torch.Tensor) Confidence scores for x-y
+                    predictions of shape (n_batches, n_keypoints).
+                "conf_z": (torch.Tensor) Confidence scores for depth
+                    predictions of shape (n_batches, n_keypoints).
+                "heatmap_stride_h": (float) Stride of heatmap in height
+                    dimension relative to input image.
+                "heatmap_stride_w": (float) Stride of heatmap in width
+                    dimension relative to input image.
         """
         batch_size, _, nrows_in, ncols_in = x.shape
 
@@ -272,4 +295,139 @@ class PoseModel2p5D(nn.Module):
             confidence_method=self.confidence_method,
         )
 
-        # TODO: calculate loss
+        return {
+            "heatmaps": heatmaps,
+            "depth_logits": depth_logits,
+            "pred_xy": xy_input_coords,
+            "pred_depth": depth_pos,
+            "conf_xy": xy_conf,
+            "conf_z": depth_conf,
+            "heatmap_stride_rows": stride_rows,
+            "heatmap_stride_cols": stride_cols,
+        }
+
+
+class Pose2p5DLoss(nn.Module):
+    def __init__(
+        self,
+        heatmap_sigma: float = 2.0,
+        heatmap_loss: str = "mse",  # "mse" or "kl"
+        depth_loss_ce_weight: float = 1.0,
+        depth_loss_l1_weight: float = 0.0,
+        use_root_relative_z: bool = True,
+        root_joint_idx: int = 0,
+    ):
+        super().__init__()
+        self.heatmap_sigma = heatmap_sigma
+        self.heatmap_loss = heatmap_loss
+        self.depth_loss_ce_weight = depth_loss_ce_weight
+        self.depth_loss_l1_weight = depth_loss_l1_weight
+        self.use_root_relative_z = use_root_relative_z
+        self.root_joint_idx = root_joint_idx
+
+        if heatmap_loss not in ["mse", "kl"]:
+            raise ValueError(
+                f"Invalid heatmap_loss: {heatmap_loss}. Must be 'mse' or 'kl'."
+            )
+
+    @staticmethod
+    def _make_gaussian_heatmaps(
+        xy_labels: torch.Tensor, out_dim: tuple[int, int], sigma: float
+    ) -> torch.Tensor:
+        """Make ground truth Gaussian heatmaps from x-y labels.
+
+        Args:
+            xy_labels (torch.Tensor): X-Y coordinates of shape
+                (batch_size, n_keypoints, 2) in heatmap pixel space (NOT
+                input image pixel space!).
+            out_dim (tuple[int, int]): Output dimensions (n_rows, n_cols).
+            sigma (float): Standard deviation of Gaussian.
+
+        Returns:
+            torch.Tensor: Ground truth heatmaps of shape
+                (batch_size, n_keypoints, *out_dim).
+        """
+        batch_size, n_keypoints, _ = xy_labels.shape
+        n_rows_heatmap, n_cols_heatmap = out_dim
+        device = xy_labels.device
+
+        # Create meshgrid for heatmap coordinates
+        rows_grid = torch.arange(n_rows_heatmap, device=device).view(
+            1, 1, n_rows_heatmap, 1
+        )
+        cols_grid = torch.arange(n_cols_heatmap, device=device).view(
+            1, 1, 1, n_cols_heatmap
+        )
+
+        # Expand xy_labels to match heatmap dimensions
+        mu_col = xy_labels[..., 0].view(batch_size, n_keypoints, 1, 1)
+        mu_row = xy_labels[..., 1].view(batch_size, n_keypoints, 1, 1)
+
+        # Compute Gaussian heatmaps
+        heatmaps = torch.exp(
+            -(((cols_grid - mu_col) ** 2) + ((rows_grid - mu_row) ** 2))
+            / (2 * sigma**2)
+        )
+
+        # Normalize each joint map to integrate to 1
+        heatmaps = heatmaps / torch.max(heatmaps.sum(dim=(-2, -1), keepdim=True), 1e-6)
+
+        return heatmaps
+
+    def forward(
+        self,
+        preds: dict[str, torch.Tensor],
+        xy_labels: torch.Tensor,  # (B,K,2) in input image coords
+        depth_labels: torch.Tensor,  # (B,K) in same units as bin values (or normalized)
+        bin_values: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        heatmaps = preds["heatmaps"]
+        depth_logits = preds["depth_logits"]
+        heatmap_stride_rows = preds["heatmap_stride_rows"]
+        heatmap_stride_cols = preds["heatmap_stride_cols"]
+        batch_size, n_keypoints, n_rows_out, n_cols_out = heatmaps.shape
+        device = heatmaps.device
+
+        # Convert xy labels (image coords) -> heatmap coords
+        xy_labels_heatmap = xy_labels.clone()
+        xy_labels_heatmap[..., 0] = xy_labels[..., 0] / heatmap_stride_cols
+        xy_labels_heatmap[..., 1] = xy_labels[..., 1] / heatmap_stride_rows
+
+        # Expand xy labels to heatmap labels
+        heatmap_labels = self._make_gaussian_heatmaps(
+            xy_labels_heatmap, (n_rows_out, n_cols_out), sigma=self.heatmap_sigma
+        )
+
+        # Compute XY heatmap loss
+        if self.heatmap_loss == "mse":
+            xy_heatmap_loss = F.mse_loss(heatmaps, heatmap_labels)
+        elif self.heatmap_loss == "kl":
+            # KL(target || pred); compute log-softmax over pixels
+            logp = F.log_softmax(
+                heatmaps.view(batch_size, n_keypoints, -1), dim=-1
+            ).view(batch_size, n_keypoints, n_rows_out, n_cols_out)
+            kl = (
+                heatmap_labels * (torch.log(heatmap_labels.clamp_min(1e-6)) - logp)
+            ).sum(dim=(2, 3))
+            xy_heatmap_loss = kl.mean()
+
+        # Depth cross-entropy loss
+        if self.depth_loss_ce_weight > 0.0:
+            depth_ce_loss = ...  # TODO
+        else:
+            depth_ce_loss = torch.tensor(0.0, device=device)
+
+        # Depth L1 loss
+        if self.depth_loss_l1_weight > 0.0:
+            depth_l1_loss = ...  # TODO
+        else:
+            depth_l1_loss = torch.tensor(0.0, device=device)
+
+        # Compute final loss
+        total_loss = xy_heatmap_loss + depth_ce_loss + depth_l1_loss
+        return {
+            "total_loss": total_loss,
+            "xy_heatmap_loss": xy_heatmap_loss,
+            "depth_ce_loss": depth_ce_loss,
+            "depth_l1_loss": depth_l1_loss,
+        }
