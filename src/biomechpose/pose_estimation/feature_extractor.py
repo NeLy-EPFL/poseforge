@@ -7,8 +7,40 @@ from torchvision.models import ResNet18_Weights
 
 
 class ResNetFeatureExtractor(nn.Module):
-    def __init__(self, weights: str | Path | ResNet18_Weights = "IMAGENET1K_V1"):
+    """Feature extractor using a ResNet-18 backbone.
+
+    Note:
+        It's probably better to remove the final avgpool layer from this
+        module entirely and do the global adaptive pooling in the caller
+        using `torch.nn.functional.adaptive_avg_pool2d`. However, I have
+        already pretrained models with this architecture, so for
+        compatibility I'm using a `global_pool` boolean flag upon init.
+        The avgpool layer is simply skipped in `.forward(x)` if
+        `global_pool` is False.
+    """
+
+    def __init__(
+        self,
+        weights: str | Path | ResNet18_Weights = "IMAGENET1K_V1",
+        global_pool: bool = True,
+    ):
+        """
+        Args:
+            weights (str | Path | ResNet18_Weights): Weights to use for the
+                backbone. In practice, use "IMAGENET1K_V1" for
+                off-the-shelf ImageNet weights from torchvision, or a path
+                to a .pth file with weights for this nn.Module (e.g. from
+                pretraining). If None, start from scratch.
+            global_pool (bool): Whether to use the last global adaptive
+                average pooling layer. Keeping this layer is handy for
+                obtaining a fixed-size output regardless of input image
+                size. However, it gets rid of spatial information needed
+                for things like pose estimation via heatmaps.
+        """
         super(ResNetFeatureExtractor, self).__init__()
+
+        self.global_pool = global_pool
+        self._out_feature_map_size_cache = None  # to be determined based on input data
 
         # Figure out which weights to use
         if weights == "IMAGENET1K_V1":  # only option as of 2025-09
@@ -60,13 +92,18 @@ class ResNetFeatureExtractor(nn.Module):
 
         # Find out the output size of the ResNet feature extractor
         # For ResNet-18, layer4 has 512 output channels
-        # The avgpool layer reduces spatial dimensions to 1x1
         self.out_channels = 512  # ResNet-18 layer4 output channels
-        self.out_global_pool_size = (1, 1)  # avgpool output size
+        if global_pool:
+            # The avgpool layer reduces spatial dimensions to 1x1
+            self.out_feature_map_size = (1, 1)
+        else:
+            # This needs to be determined based on input data size. Call
+            # `data_dependent_init(x)` with a sample input to set this.
+            self.out_feature_map_size = (None, None)
         self.output_dim = (
             self.out_channels
-            * self.out_global_pool_size[0]
-            * self.out_global_pool_size[1]
+            * self.out_feature_map_size[0]
+            * self.out_feature_map_size[1]
         )
 
         # Load weights for this very nn.Module if provided
@@ -74,5 +111,43 @@ class ResNetFeatureExtractor(nn.Module):
             self.load_state_dict(my_module_weights)
 
     def forward(self, x):
-        features = self.resnet_feature_extractor(x)
+        """
+        Args:
+            x (torch.Tensor): Input image tensor of shape (batch_size, 3,
+                height, width), with pixel values in [0, 1].
+
+        Returns:
+            features (torch.Tensor): Extracted features. If `global_pool`
+                is True, shape is (batch_size, output_dim). Otherwise,
+                shape is (batch_size, out_channels, h', w'), where h' and
+                w' depend on the input image size.
+        """
+        if self.global_pool:
+            features = self.resnet_feature_extractor(x)
+        else:
+            features = self.resnet_feature_extractor[:-1](x)  # skip avgpool
         return features
+
+    def data_dependent_init(self, x: torch.Tensor):
+        """Initialize data-dependent parameters based on a sample input.
+        Specifically, determine the feature map size in the last layer
+        right before global adaptive pooling. When `global_pool` is False,
+        this is useful to determine the spatial dimensions of the output.
+        
+        This method only needs to be called once and only if `global_pool`
+        is False.
+
+        Args:
+            x (torch.Tensor): Input image tensor of shape (batch_size, 3,
+                height, width), with pixel values in [0, 1].
+        """
+        if self.global_pool:
+            pass  # no need for data-dependent init
+        else:
+            with torch.no_grad():
+                _, _, n_rows_in, n_cols_in = x.shape
+                dummy_batch_size = 1
+                dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
+                feature_map = self.resnet_feature_extractor[:-1](dummy_input)
+                _, _, n_rows_out, n_cols_out = feature_map.shape
+            self._ (n_rows_out, n_cols_out)

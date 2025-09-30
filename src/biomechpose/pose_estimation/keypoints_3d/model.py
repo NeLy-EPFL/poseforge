@@ -13,7 +13,7 @@ class Pose2p5DModel(nn.Module):
     def __init__(
         self,
         n_keypoints: int,
-        backbone: ResNetFeatureExtractor,
+        feature_extractor: ResNetFeatureExtractor,
         depth_n_bins: int,
         depth_min: float,
         depth_max: float,
@@ -27,7 +27,8 @@ class Pose2p5DModel(nn.Module):
         """
         Args:
             n_keypoints (int): Number of keypoints to predict.
-            backbone (ResNetFeatureExtractor): Backbone feature extractor.
+            feature_extractor (ResNetFeatureExtractor): (Pretrained)
+                feature extractor.
             depth_n_bins (int): Number of discrete bins for depth
                 prediction.
             depth_min (float): Minimum depth value (closest to camera).
@@ -48,7 +49,7 @@ class Pose2p5DModel(nn.Module):
         """
         super().__init__()
         self.n_keypoints = n_keypoints
-        self.backbone = backbone
+        self.feature_extractor = feature_extractor
         self.depth_n_bins = depth_n_bins
         self.depth_min = depth_min
         self.depth_max = depth_max
@@ -62,18 +63,25 @@ class Pose2p5DModel(nn.Module):
             f"Invalid confidence_method: {confidence_method}. "
             'Must be "entropy" or "peak".'
         )
-
+        
+        # Ensure that we skip the last pooling layer in the feature extractor. This
+        # helps preserve spatial resolution.
+        assert self.feature_extractor.global_pool == False, (
+            "Pose2p5Model must be supplied with a feature_extractor that has "
+            "global_pool=False in order to preserve spatial information."
+        )
+        
         # Build upsampling core. This is the first level of processing after the ResNet
         # feature extractor, shared by both the heatmap head and the depth head.
         self.upsampling_core = self._build_upsampling_core(
             n_layers=upsample_n_layers,
             n_hidden_channels=upsample_n_hidden_channels,
-            n_channels_in=self.backbone.out_channels,
+            n_channels_in=self.feature_extractor.out_channels,
         )
 
         # Heatmap head for (x, y) keypoint locations
         self.heatmap_head = self._build_heatmap_head(
-            n_channels_in=self.backbone.out_channels, n_keypoints=n_keypoints
+            n_channels_in=self.feature_extractor.out_channels, n_keypoints=n_keypoints
         )
 
         # Depth head for distance from camera
@@ -81,7 +89,7 @@ class Pose2p5DModel(nn.Module):
             n_keypoints=n_keypoints,
             n_bins=depth_n_bins,
             n_hidden_channels=depth_n_hidden_channels,
-            n_channels_in=self.backbone.out_channels,
+            n_channels_in=self.feature_extractor.out_channels,
         )
         # Precompute depth bin centers
         self.register_buffer(
@@ -266,7 +274,7 @@ class Pose2p5DModel(nn.Module):
         batch_size, _, nrows_in, ncols_in = x.shape
 
         # Extract features using backbone
-        features = self.backbone(x)
+        features = self.feature_extractor(x)
 
         # Run upsampling core (deconv layers)
         up = self.upsampling_core(features)
@@ -297,7 +305,7 @@ class Pose2p5DModel(nn.Module):
         # depth_pos and depth_conf both of shape (N, n_keypoints)
         depth_pos, depth_conf = self._soft_argmax_1d(
             depth_logits,
-            bin_values=getattr(self, "depth_bin_centers"),  # pre-registered buffer
+            bin_values=self.depth_bin_centers,  # pre-registered buffer
             temperature=self.depth_temperature,
             confidence_method=self.confidence_method,
         )
