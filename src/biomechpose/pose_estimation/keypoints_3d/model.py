@@ -81,15 +81,15 @@ class Pose2p5DModel(nn.Module):
 
         # Heatmap head for (x, y) keypoint locations
         self.heatmap_head = self._build_heatmap_head(
-            n_channels_in=self.feature_extractor.out_channels, n_keypoints=n_keypoints
+            n_channels_in=upsample_n_hidden_channels, n_keypoints=n_keypoints
         )
 
         # Depth head for distance from camera
         self.depth_head = self._build_depth_head(
             n_keypoints=n_keypoints,
             n_bins=depth_n_bins,
+            n_channels_in=upsample_n_hidden_channels,
             n_hidden_channels=depth_n_hidden_channels,
-            n_channels_in=self.feature_extractor.out_channels,
         )
         # Precompute depth bin centers
         self.register_buffer(
@@ -126,7 +126,7 @@ class Pose2p5DModel(nn.Module):
 
     @staticmethod
     def _build_depth_head(
-        n_keypoints: int, n_bins: int, n_hidden_channels: int, n_channels_in: int
+        n_keypoints: int, n_bins: int, n_channels_in: int, n_hidden_channels: int
     ) -> nn.Sequential:
         adaptive_pool = nn.AdaptiveAvgPool2d(1)
         conv = nn.Conv2d(n_channels_in, n_hidden_channels, kernel_size=1, bias=False)
@@ -273,7 +273,7 @@ class Pose2p5DModel(nn.Module):
         """
         batch_size, _, nrows_in, ncols_in = x.shape
 
-        # Extract features using backbone
+        # Run (pretrained) feature extractor (e.g. ResNet-18)
         features = self.feature_extractor(x)
 
         # Run upsampling core (deconv layers)
