@@ -63,14 +63,14 @@ class Pose2p5DModel(nn.Module):
             f"Invalid confidence_method: {confidence_method}. "
             'Must be "entropy" or "peak".'
         )
-        
+
         # Ensure that we skip the last pooling layer in the feature extractor. This
         # helps preserve spatial resolution.
         assert self.feature_extractor.global_pool == False, (
             "Pose2p5Model must be supplied with a feature_extractor that has "
             "global_pool=False in order to preserve spatial information."
         )
-        
+
         # Build upsampling core. This is the first level of processing after the ResNet
         # feature extractor, shared by both the heatmap head and the depth head.
         self.upsampling_core = self._build_upsampling_core(
@@ -198,7 +198,9 @@ class Pose2p5DModel(nn.Module):
             # entropy = $- \sum_i p_i \log p_i$, shape (batch_size, n_keypoints)
             entropy = -(probs_flat * torch.log(probs_flat + 1e-6)).sum(dim=-1)
             # Normalize by the maximum possible entropy (uniform distribution)
-            entropy_norm = entropy / torch.log(n_rows * n_cols)
+            entropy_norm = entropy / torch.log(
+                n_rows * n_cols, device=entropy.device, dtype=entropy.dtype
+            )
             confidence = 1.0 - entropy_norm  # (batch_size, n_keypoints)
         else:
             raise ValueError(f"Invalid confidence_method: {confidence_method}.")
@@ -242,7 +244,9 @@ class Pose2p5DModel(nn.Module):
         elif confidence_method == "entropy":
             # See same operation in _soft_argmax_2d
             entropy = -(probs * torch.log(probs + 1e-6)).sum(dim=-1)
-            entropy_norm = entropy / torch.log(len(bin_values))
+            entropy_norm = entropy / torch.log(
+                len(bin_values), device=entropy.device, dtype=entropy.dtype
+            )
             confidence = 1.0 - entropy_norm  # (batch_size, n_keypoints)
         else:
             raise ValueError(f"Invalid confidence_method: {confidence_method}.")
