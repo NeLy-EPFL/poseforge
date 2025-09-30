@@ -196,7 +196,7 @@ class Pose2p5DModel(nn.Module):
         elif confidence_method == "entropy":
             # Option 2: use the 1 - normalized entropy as a confidence score
             # entropy = $- \sum_i p_i \log p_i$, shape (batch_size, n_keypoints)
-            entropy = -(probs_flat * torch.log(probs_flat + 1e-6)).sum(dim=-1)
+            entropy = -(probs_flat * torch.log(probs_flat.clamp_min(1e-6))).sum(dim=-1)
             # Normalize by the maximum possible entropy (uniform distribution)
             entropy_norm = entropy / torch.log(
                 n_rows * n_cols, device=entropy.device, dtype=entropy.dtype
@@ -243,7 +243,7 @@ class Pose2p5DModel(nn.Module):
             confidence = probs.max(dim=-1).values  # (batch_size, n_keypoints)
         elif confidence_method == "entropy":
             # See same operation in _soft_argmax_2d
-            entropy = -(probs * torch.log(probs + 1e-6)).sum(dim=-1)
+            entropy = -(probs * torch.log(probs.clamp_min(1e-6))).sum(dim=-1)
             entropy_norm = entropy / torch.log(
                 len(bin_values), device=entropy.device, dtype=entropy.dtype
             )
@@ -397,7 +397,7 @@ class Pose2p5DLoss(nn.Module):
         )
 
         # Normalize each joint map to integrate to 1
-        heatmaps = heatmaps / torch.max(heatmaps.sum(dim=(-2, -1), keepdim=True), 1e-6)
+        heatmaps = heatmaps / heatmaps.sum(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
 
         return heatmaps
 
