@@ -96,15 +96,12 @@ class ResNetFeatureExtractor(nn.Module):
         if global_pool:
             # The avgpool layer reduces spatial dimensions to 1x1
             self.out_feature_map_size = (1, 1)
+            self.output_dim = self.out_channels * 1 * 1
         else:
-            # This needs to be determined based on input data size. Call
-            # `data_dependent_init(x)` with a sample input to set this.
+            # These need to be determined based on input data size. Call
+            # `data_dependent_init(x)` with a sample input to set them.
             self.out_feature_map_size = (None, None)
-        self.output_dim = (
-            self.out_channels
-            * self.out_feature_map_size[0]
-            * self.out_feature_map_size[1]
-        )
+            self.output_dim = None
 
         # Load weights for this very nn.Module if provided
         if my_module_weights is not None:
@@ -133,7 +130,7 @@ class ResNetFeatureExtractor(nn.Module):
         Specifically, determine the feature map size in the last layer
         right before global adaptive pooling. When `global_pool` is False,
         this is useful to determine the spatial dimensions of the output.
-        
+
         This method only needs to be called once and only if `global_pool`
         is False.
 
@@ -151,3 +148,4 @@ class ResNetFeatureExtractor(nn.Module):
                 feature_map = self.resnet_feature_extractor[:-1](dummy_input)
                 _, _, n_rows_out, n_cols_out = feature_map.shape
             self.out_feature_map_size = (n_rows_out, n_cols_out)
+            self.output_dim = self.out_channels * n_rows_out * n_cols_out
