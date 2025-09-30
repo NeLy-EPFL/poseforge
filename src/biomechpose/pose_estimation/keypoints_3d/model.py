@@ -94,7 +94,7 @@ class Pose2p5DModel(nn.Module):
         # Precompute depth bin centers
         self.register_buffer(
             "depth_bin_centers",
-            torch.linspace(depth_min, depth_max, depth_n_bins, dtype=torch.float16),
+            torch.linspace(depth_min, depth_max, depth_n_bins, dtype=torch.float32),
         )
 
     @staticmethod
@@ -253,7 +253,7 @@ class Pose2p5DModel(nn.Module):
 
         return depth_expected, confidence
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
             x (torch.Tensor): Input tensor of shape (n_batches, n_channels,
