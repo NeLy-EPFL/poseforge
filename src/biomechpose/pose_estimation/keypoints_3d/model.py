@@ -66,7 +66,7 @@ class Pose2p5DModel(nn.Module):
 
         # Ensure that we skip the last pooling layer in the feature extractor. This
         # helps preserve spatial resolution.
-        assert self.feature_extractor.global_pool == False, (
+        assert not self.feature_extractor.global_pool, (
             "Pose2p5Model must be supplied with a feature_extractor that has "
             "global_pool=False in order to preserve spatial information."
         )
