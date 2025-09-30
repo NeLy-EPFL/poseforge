@@ -198,9 +198,10 @@ class Pose2p5DModel(nn.Module):
             # entropy = $- \sum_i p_i \log p_i$, shape (batch_size, n_keypoints)
             entropy = -(probs_flat * torch.log(probs_flat.clamp_min(1e-6))).sum(dim=-1)
             # Normalize by the maximum possible entropy (uniform distribution)
-            entropy_norm = entropy / torch.log(
+            n_cells = torch.tensor(
                 n_rows * n_cols, device=entropy.device, dtype=entropy.dtype
             )
+            entropy_norm = entropy / torch.log(n_cells)
             confidence = 1.0 - entropy_norm  # (batch_size, n_keypoints)
         else:
             raise ValueError(f"Invalid confidence_method: {confidence_method}.")
@@ -244,9 +245,10 @@ class Pose2p5DModel(nn.Module):
         elif confidence_method == "entropy":
             # See same operation in _soft_argmax_2d
             entropy = -(probs * torch.log(probs.clamp_min(1e-6))).sum(dim=-1)
-            entropy_norm = entropy / torch.log(
+            n_bins = torch.tensor(
                 len(bin_values), device=entropy.device, dtype=entropy.dtype
             )
+            entropy_norm = entropy / torch.log(n_bins)
             confidence = 1.0 - entropy_norm  # (batch_size, n_keypoints)
         else:
             raise ValueError(f"Invalid confidence_method: {confidence_method}.")
