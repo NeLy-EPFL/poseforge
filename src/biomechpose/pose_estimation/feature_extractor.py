@@ -150,4 +150,4 @@ class ResNetFeatureExtractor(nn.Module):
                 dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
                 feature_map = self.resnet_feature_extractor[:-1](dummy_input)
                 _, _, n_rows_out, n_cols_out = feature_map.shape
-            self._ (n_rows_out, n_cols_out)
+            self.out_feature_map_size = (n_rows_out, n_cols_out)
