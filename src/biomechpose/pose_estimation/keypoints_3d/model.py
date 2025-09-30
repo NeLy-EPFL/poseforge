@@ -300,9 +300,9 @@ class Pose2p5DModel(nn.Module):
         _, _, nrows_out, ncols_out = heatmaps.shape
         stride_rows = nrows_in / nrows_out
         stride_cols = ncols_in / ncols_out
-        x = xy_output_coords[..., 0] * stride_cols
-        y = xy_output_coords[..., 1] * stride_rows
-        xy_input_coords = torch.stack([x, y], dim=-1)  # (N, n_keypoints, 2)
+        x_px_in = xy_output_coords[..., 0] * stride_cols
+        y_px_in = xy_output_coords[..., 1] * stride_rows
+        xy_input_coords = torch.stack([x_px_in, y_px_in], dim=-1)  # (N, n_keypoints, 2)
 
         # Compute depth distributions (logits)
         depth_logits = self.depth_head(up).view(
