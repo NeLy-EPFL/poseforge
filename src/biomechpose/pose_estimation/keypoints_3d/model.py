@@ -24,6 +24,7 @@ class Pose2p5DModel(nn.Module):
         upsample_n_hidden_channels: int = 256,
         depth_n_hidden_channels: int = 256,
         confidence_method: str = "entropy",
+        groupnorm_n_groups: int = 32,
     ):
         """
         Args:
@@ -47,6 +48,10 @@ class Pose2p5DModel(nn.Module):
                 soft argmax of x-y heatmaps and depth logits. Options:
                 "entropy" (1 - normalized entropy in predicted
                 distribution, default) or "peak" (max probability).
+            groupnorm_n_groups (int): Number of groups for GroupNorm layers
+                (BatchNorm is not suitable if batch size is small, so we
+                use GroupNorm instead). Must be a divisor of numbers of
+                channels in various layers that precede GroupNorm.
         """
         super().__init__()
         self.n_keypoints = n_keypoints
@@ -60,10 +65,25 @@ class Pose2p5DModel(nn.Module):
         self.upsample_n_hidden_channels = upsample_n_hidden_channels
         self.depth_n_hidden_channels = depth_n_hidden_channels
         self.confidence_method = confidence_method
-        assert confidence_method in ["entropy", "peak"], (
-            f"Invalid confidence_method: {confidence_method}. "
-            'Must be "entropy" or "peak".'
-        )
+        self.groupnorm_n_groups = groupnorm_n_groups
+
+        # Check input validity
+        if confidence_method not in ["entropy", "peak"]:
+            raise ValueError(
+                f"Invalid confidence_method: {confidence_method}. "
+                'Must be "entropy" or "peak".'
+            )
+        if (
+            (upsample_n_hidden_channels % groupnorm_n_groups) != 0
+            or (depth_n_hidden_channels % groupnorm_n_groups) != 0
+            or groupnorm_n_groups > upsample_n_hidden_channels
+            or groupnorm_n_groups > depth_n_hidden_channels
+        ):
+            raise ValueError(
+                "groupnorm_n_groups must be a divisor of "
+                "upsample_n_hidden_channels and depth_n_hidden_channels, "
+                "and it cannot be greater than either of them."
+            )
 
         # Build upsampling core. This is the first level of processing after the ResNet
         # feature extractor, shared by both the heatmap head and the depth head.
@@ -91,38 +111,38 @@ class Pose2p5DModel(nn.Module):
             torch.linspace(depth_min, depth_max, depth_n_bins, dtype=torch.float32),
         )
 
-    @staticmethod
-    def _build_upsampling_core(
-        n_layers: int, n_hidden_channels: int, n_channels_in: int
-    ) -> nn.Sequential:
+    def _build_upsampling_core(self) -> nn.Sequential:
         layers = []
-        for i in range(n_layers):
+        for i in range(self.upsample_n_layers):
             if i == 0:
-                in_channels = n_channels_in
+                in_channels = self.feature_extractor.output_channels
             else:
-                in_channels = n_hidden_channels
+                in_channels = self.upsample_n_hidden_channels
             deconv = nn.ConvTranspose2d(
                 in_channels=in_channels,
-                out_channels=n_hidden_channels,
+                out_channels=self.upsample_n_hidden_channels,
                 kernel_size=4,
                 stride=2,
                 padding=1,
-                bias=False,  # no bias because batchnorm already normalizes it
+                bias=False,  # no bias because groupnorm already normalizes it
             )
-            batchnorm = nn.BatchNorm2d(n_hidden_channels)
+            groupnorm = nn.GroupNorm(
+                self.groupnorm_n_groups, self.upsample_n_hidden_channels
+            )
             relu = nn.ReLU(inplace=True)
 
             # Initialize layers weights using Kaiming normal initialization
             nn.init.kaiming_normal_(deconv.weight, mode="fan_out", nonlinearity="relu")
-            nn.init.constant_(batchnorm.weight, 1)
-            nn.init.constant_(batchnorm.bias, 0)
+            nn.init.constant_(groupnorm.weight, 1)
+            nn.init.constant_(groupnorm.bias, 0)
 
-            layers.extend([deconv, batchnorm, relu])
+            layers.extend([deconv, groupnorm, relu])
         return nn.Sequential(*layers)
 
-    @staticmethod
-    def _build_heatmap_head(n_channels_in: int, n_keypoints: int) -> nn.Sequential:
-        conv = nn.Conv2d(n_channels_in, n_keypoints, kernel_size=1, bias=True)
+    def _build_heatmap_head(self) -> nn.Sequential:
+        conv = nn.Conv2d(
+            self.upsample_n_hidden_channels, self.n_keypoints, kernel_size=1, bias=True
+        )
 
         # Initialize conv layer weights using Kaiming normal initialization
         nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
@@ -130,25 +150,29 @@ class Pose2p5DModel(nn.Module):
 
         return conv
 
-    @staticmethod
-    def _build_depth_head(
-        n_keypoints: int, n_bins: int, n_channels_in: int, n_hidden_channels: int
-    ) -> nn.Sequential:
+    def _build_depth_head(self) -> nn.Sequential:
         adaptive_pool = nn.AdaptiveAvgPool2d(1)
-        conv = nn.Conv2d(n_channels_in, n_hidden_channels, kernel_size=1, bias=False)
-        batchnorm = nn.BatchNorm2d(n_hidden_channels)
+        conv = nn.Conv2d(
+            self.upsample_n_hidden_channels,
+            self.depth_n_hidden_channels,
+            kernel_size=1,
+            bias=False,
+        )
+        groupnorm = nn.GroupNorm(self.groupnorm_n_groups, self.depth_n_hidden_channels)
         relu = nn.ReLU(inplace=True)
         flatten = nn.Flatten()
-        fc = nn.Linear(n_hidden_channels, n_keypoints * n_bins)
+        fc = nn.Linear(
+            self.depth_n_hidden_channels, self.n_keypoints * self.depth_n_bins
+        )
 
         # Initialize layers weights using Kaiming normal initialization
         nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
-        nn.init.constant_(batchnorm.weight, 1)
-        nn.init.constant_(batchnorm.bias, 0)
+        nn.init.constant_(groupnorm.weight, 1)
+        nn.init.constant_(groupnorm.bias, 0)
         nn.init.kaiming_normal_(fc.weight, mode="fan_out", nonlinearity="relu")
         nn.init.zeros_(fc.bias)
 
-        return nn.Sequential(adaptive_pool, conv, batchnorm, relu, flatten, fc)
+        return nn.Sequential(adaptive_pool, conv, groupnorm, relu, flatten, fc)
 
     @staticmethod
     def _softmax_with_temp(
