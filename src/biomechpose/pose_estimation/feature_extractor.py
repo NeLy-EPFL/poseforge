@@ -93,7 +93,10 @@ class ResNetFeatureExtractor(nn.Module):
             x (torch.Tensor): Input image tensor of shape (batch_size, 3,
                 height, width), with pixel values in [0, 1].
                 `SimulatedDataLoader` and `SyntheticFramesSampler`, and
-                `AtomDataset` already do this normalization.
+                `AtomDataset` already do this normalization. Note that
+                even after the data is converted to the range [0, 1], they
+                still need to be normalized using the ImageNet mean and
+                std. This is handled by this method.
             mean (list): Per-channel mean for normalization.
             std (list): Per-channel standard deviation for normalization.
 

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import logging
 
 from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
@@ -110,12 +111,24 @@ class Pose2p5DModel(nn.Module):
             )
             batchnorm = nn.BatchNorm2d(n_hidden_channels)
             relu = nn.ReLU(inplace=True)
+
+            # Initialize layers weights using Kaiming normal initialization
+            nn.init.kaiming_normal_(deconv.weight, mode="fan_out", nonlinearity="relu")
+            nn.init.constant_(batchnorm.weight, 1)
+            nn.init.constant_(batchnorm.bias, 0)
+
             layers.extend([deconv, batchnorm, relu])
         return nn.Sequential(*layers)
 
     @staticmethod
     def _build_heatmap_head(n_channels_in: int, n_keypoints: int) -> nn.Sequential:
-        return nn.Conv2d(n_channels_in, n_keypoints, kernel_size=1, bias=True)
+        conv = nn.Conv2d(n_channels_in, n_keypoints, kernel_size=1, bias=True)
+
+        # Initialize conv layer weights using Kaiming normal initialization
+        nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(conv.bias)
+
+        return conv
 
     @staticmethod
     def _build_depth_head(
@@ -127,6 +140,14 @@ class Pose2p5DModel(nn.Module):
         relu = nn.ReLU(inplace=True)
         flatten = nn.Flatten()
         fc = nn.Linear(n_hidden_channels, n_keypoints * n_bins)
+
+        # Initialize layers weights using Kaiming normal initialization
+        nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.constant_(batchnorm.weight, 1)
+        nn.init.constant_(batchnorm.bias, 0)
+        nn.init.kaiming_normal_(fc.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(fc.bias)
+
         return nn.Sequential(adaptive_pool, conv, batchnorm, relu, flatten, fc)
 
     @staticmethod
@@ -493,6 +514,44 @@ class Pose2p5DLoss(nn.Module):
         l1_loss = F.l1_loss(depth_expected, z_labels, reduction="mean")
         return l1_loss
 
+    def _check_xy_labels(
+        self, xy_labels_heatmap: torch.Tensor, heatmap_shape: tuple[int, int]
+    ) -> bool:
+        """Check if x-y labels are within the heatmap dimensions. Return
+        True if all labels are valid, False otherwise (and log a warning).
+        """
+        if not hasattr(self, "_max_valid_xy_labels_heatmap"):
+            self.register_buffer(
+                "_heatmap_shape",
+                torch.tensor(list(heatmap_shape), device=xy_labels_heatmap.device),
+            )
+        too_small = (xy_labels_heatmap < 0).any()
+        too_large = (xy_labels_heatmap >= self._heatmap_shape).any()
+        if too_small or too_large:
+            logging.warning(
+                "Some x-y labels are outside the heatmap dimensions. "
+                "This may cause bad values in the loss."
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _check_depth_labels(
+        depth_labels: torch.Tensor, bin_values: torch.Tensor
+    ) -> bool:
+        """Check if depth labels are within the range of depth bins. Return
+        True if all labels are valid, False otherwise (and log a warning).
+        """
+        too_small = (depth_labels < bin_values[0]).any()
+        too_large = (depth_labels > bin_values[-1]).any()
+        if too_small or too_large:
+            logging.warning(
+                "Some depth labels are outside the range of depth bins. "
+                "This may cause bad values in the loss."
+            )
+            return False
+        return True
+
     def forward(
         self,
         preds: dict[str, torch.Tensor],
@@ -531,6 +590,7 @@ class Pose2p5DLoss(nn.Module):
         xy_labels_heatmap = xy_labels.clone()
         xy_labels_heatmap[..., 0] = xy_labels[..., 0] / heatmap_stride_cols
         xy_labels_heatmap[..., 1] = xy_labels[..., 1] / heatmap_stride_rows
+        self._check_xy_labels(xy_labels_heatmap, (n_rows_out, n_cols_out))
 
         # Expand xy labels to heatmap labels
         heatmap_labels = self._expand_xy_labels_to_gaussian_heatmaps(
@@ -543,6 +603,7 @@ class Pose2p5DLoss(nn.Module):
         )
 
         # Compute depth losses
+        self._check_depth_labels(depth_labels, bin_values)
         depth_ce_loss = self._compute_depth_ce_loss(
             depth_logits, depth_labels, bin_values
         )
