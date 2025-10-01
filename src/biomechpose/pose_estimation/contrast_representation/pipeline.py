@@ -14,7 +14,7 @@ from biomechpose.pose_estimation.contrast_representation.projection_head import 
     ContrastiveProjectionHead,
 )
 from biomechpose.pose_estimation.contrast_representation.loss import info_nce_loss
-from biomechpose.util import clear_memory_cache
+from biomechpose.util import clear_memory_cache, check_mixed_precision_status
 
 
 class ContrastivePretrainingPipeline:
@@ -29,65 +29,6 @@ class ContrastivePretrainingPipeline:
         self.projection_head = projection_head.to(device)
         self.device = device
         self.use_float16 = use_float16
-
-    def _check_float16_status(self, print_results: bool = False) -> dict:
-        """Check if the pipeline is configured for float16 and get current status.
-
-        Args:
-            print_results (bool): Whether to print the status information.
-
-        Returns:
-            dict: Status information about float16 usage.
-        """
-        status = {
-            "use_float16_flag": self.use_float16,
-            "device": str(self.device),
-            "device_supports_half": torch.cuda.is_available()
-            and torch.cuda.get_device_capability()[0] >= 7,
-        }
-
-        # Check model parameter dtypes
-        fe_dtypes = set(p.dtype for p in self.feature_extractor.parameters())
-        ph_dtypes = set(p.dtype for p in self.projection_head.parameters())
-        status["feature_extractor_param_dtypes"] = [str(dt) for dt in fe_dtypes]
-        status["projection_head_param_dtypes"] = [str(dt) for dt in ph_dtypes]
-
-        # Print out results if requested
-        if print_results:
-            print("==================== Float16 Status ====================")
-            for key, value in status.items():
-                print(f"{key}: {value}")
-            print("========================================================")
-
-        return status
-
-    def _check_float16_usage(
-        self,
-        batch,
-        h_features,
-        h_features_pooled,
-        z_features,
-        loss,
-        amp_scaler,
-        print_results: bool = False,
-    ) -> dict:
-        status = {
-            "batch_dtype": batch.dtype,
-            "h_features_dtype": h_features.dtype,
-            "h_features_pooled_dtype": h_features_pooled.dtype,
-            "z_features_dtype": z_features.dtype,
-            "loss_dtype": loss.dtype,
-            "amp_enabled": self.use_float16,
-            "amp_scaler_enabled": amp_scaler.is_enabled(),
-        }
-
-        if print_results:
-            print("==================== Float16 Usage ====================")
-            for key, value in status.items():
-                print(f"{key}: {value}")
-            print("=======================================================")
-
-        return status
 
     def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
         return torch.optim.Adam(
@@ -199,7 +140,17 @@ class ContrastivePretrainingPipeline:
 
         # Set up mixed-point training
         amp_scaler = torch.amp.GradScaler(self.device, enabled=self.use_float16)
-        self._check_float16_status(print_results=True)
+        check_mixed_precision_status(
+            self.use_float16,
+            self.device,
+            print_results=True,
+            tensors={
+                "feature_extractor_params": self.feature_extractor.parameters(),
+                "projection_head_params": self.projection_head.parameters(),
+            },
+            grad_scaler=amp_scaler,
+            subtitle="Initial model parameter dtypes",
+        )
 
         # Training loop
         for epoch_idx in range(num_epochs):
@@ -233,14 +184,19 @@ class ContrastivePretrainingPipeline:
 
                     # Check if float16 is actually being used
                     if epoch_idx == 0 and step_idx == 0:
-                        self._check_float16_usage(
-                            collapsed_batch,
-                            h_features,
-                            h_features_pooled,
-                            z_features,
-                            loss,
-                            amp_scaler,
+                        check_mixed_precision_status(
+                            self.use_float16,
+                            self.device,
+                            tensors={
+                                "collapsed_batch": collapsed_batch,
+                                "h_features": h_features,
+                                "h_features_pooled": h_features_pooled,
+                                "z_features": z_features,
+                                "loss": loss,
+                            },
+                            grad_scaler=amp_scaler,
                             print_results=True,
+                            subtitle="First training step",
                         )
 
                 # Backpropagate and optimize

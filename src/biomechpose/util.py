@@ -8,7 +8,7 @@ import gc
 import logging
 import imageio.v2 as imageio
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from matplotlib import pyplot as plt
 
 
@@ -150,3 +150,57 @@ def check_num_frames(video_path: Path) -> int:
 
 def round_up_to_multiple(x: int, multiple_of: int) -> int:
     return ((x + multiple_of - 1) // multiple_of) * multiple_of
+
+
+def check_mixed_precision_status(
+    use_float16: bool,
+    device: torch.device,
+    tensors: dict[str, torch.Tensor | Iterator[torch.Tensor]] | None = None,
+    amp_scaler: torch.amp.GradScaler | None = None,
+    print_results: bool = False,
+    subtitle: str | None = None,
+) -> dict:
+    """Check if the pipeline is configured for mixed precision and get
+    current status on given tensors.
+
+    Args:
+        use_float16 (bool): Whether mixed precision is intended to be used.
+        device (torch.device): Device where tensors are located.F
+        tensors (dict[str, torch.Tensor | Iterator[torch.Tensor]] | None):
+            Optional dictionary of tensors or iterables of tensors to check dtypes
+            for. Note that these can also be model parameters.
+        amp_scaler (torch.amp.GradScaler | None): Optional GradScaler to
+            check status for (enabled vs disabled).
+        print_results (bool): If True, print results to console.
+        subtitle (str | None): Optional subtitle to print in the header.
+
+    Returns:
+        dict: Status information about mixed precision status.
+    """
+    status = {
+        "use_float16_flag": use_float16,
+        "device": str(device),
+        "device_supports_half": torch.cuda.is_available()
+        and torch.cuda.get_device_capability()[0] >= 7,
+    }
+    if amp_scaler is not None:
+        status["amp_scaler_enabled"] = amp_scaler.is_enabled()
+
+    # Check model parameter dtypes
+    if tensors is not None:
+        for name, thing in tensors.items():
+            if isinstance(thing, torch.Tensor):
+                thing = [thing]
+            dtypes = set(p.dtype for p in thing)
+            status[f"{name}_param_dtypes"] = [str(dt) for dt in sorted(dtypes)]
+
+    # Print out results if requested
+    if print_results:
+        print("==================== Mixed Precision Status ====================")
+        if subtitle is not None:
+            print(f"({subtitle})")
+        for key, value in status.items():
+            print(f"{key}: {value}")
+        print("================================================================")
+
+    return status
