@@ -18,6 +18,8 @@ conda activate biomechpose
 cd /home/sibwang/biomechpose
 echo "Training starting at $(date)"
 
+trial_name="trial_20251001a"
+
 python -u src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py \
     --sampling.atomic-batch-nsamples 32 \
     --sampling.atomic-batch-nvariants 4 \
@@ -57,7 +59,7 @@ python -u src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py
     --training.adam-lr 3e-4 \
     --training.adam-weight-decay 1e-4 \
     --output.output-basedir \
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20250926a" \
+        "bulk_data/pose_estimation/contrastive_pretraining/$trial_name" \
     --output.logging-interval 10 \
     --output.checkpoint-interval 200 \
     --output.validation-interval 200 \
