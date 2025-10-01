@@ -25,6 +25,7 @@ class Pose2p5DModel(nn.Module):
         depth_n_hidden_channels: int = 256,
         confidence_method: str = "entropy",
         groupnorm_n_groups: int = 32,
+        pose_head_init_std: float = 1e-3,
     ):
         """
         Args:
@@ -52,6 +53,8 @@ class Pose2p5DModel(nn.Module):
                 (BatchNorm is not suitable if batch size is small, so we
                 use GroupNorm instead). Must be a divisor of numbers of
                 channels in various layers that precede GroupNorm.
+            pose_head_init_std (float): Standard deviation for initializing
+                heatmap/depth head layers that are not followed by ReLU.
         """
         super().__init__()
         self.n_keypoints = n_keypoints
@@ -66,6 +69,7 @@ class Pose2p5DModel(nn.Module):
         self.depth_n_hidden_channels = depth_n_hidden_channels
         self.confidence_method = confidence_method
         self.groupnorm_n_groups = groupnorm_n_groups
+        self.pose_head_init_std = pose_head_init_std
 
         # Check input validity
         if confidence_method not in ["entropy", "peak"]:
@@ -87,28 +91,18 @@ class Pose2p5DModel(nn.Module):
 
         # Build upsampling core. This is the first level of processing after the ResNet
         # feature extractor, shared by both the heatmap head and the depth head.
-        self.upsampling_core = self._build_upsampling_core(
-            n_layers=upsample_n_layers,
-            n_hidden_channels=upsample_n_hidden_channels,
-            n_channels_in=self.feature_extractor.output_channels,
-        )
+        self.upsampling_core = self._build_upsampling_core()
 
         # Heatmap head for (x, y) keypoint locations
-        self.heatmap_head = self._build_heatmap_head(
-            n_channels_in=upsample_n_hidden_channels, n_keypoints=n_keypoints
-        )
+        self.heatmap_head = self._build_heatmap_head()
 
         # Depth head for distance from camera
-        self.depth_head = self._build_depth_head(
-            n_keypoints=n_keypoints,
-            n_bins=depth_n_bins,
-            n_channels_in=upsample_n_hidden_channels,
-            n_hidden_channels=depth_n_hidden_channels,
-        )
+        self.depth_head = self._build_depth_head()
         # Precompute depth bin centers
         self.register_buffer(
             "depth_bin_centers",
             torch.linspace(depth_min, depth_max, depth_n_bins, dtype=torch.float32),
+            persistent=False,
         )
 
     def _build_upsampling_core(self) -> nn.Sequential:
@@ -144,8 +138,9 @@ class Pose2p5DModel(nn.Module):
             self.upsample_n_hidden_channels, self.n_keypoints, kernel_size=1, bias=True
         )
 
-        # Initialize conv layer weights using Kaiming normal initialization
-        nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
+        # Initialize conv layer weights using normal initialization with small std
+        # (this is not followed by ReLU, so Kaiming init is not appropriate here)
+        nn.init.normal_(conv.weight, std=self.pose_head_init_std)
         nn.init.zeros_(conv.bias)
 
         return conv
@@ -169,7 +164,8 @@ class Pose2p5DModel(nn.Module):
         nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
         nn.init.constant_(groupnorm.weight, 1)
         nn.init.constant_(groupnorm.bias, 0)
-        nn.init.kaiming_normal_(fc.weight, mode="fan_out", nonlinearity="relu")
+        # For the fc layer, don't use Kaiming init because it's not followed by ReLU
+        nn.init.normal_(fc.weight, std=self.pose_head_init_std)
         nn.init.zeros_(fc.bias)
 
         return nn.Sequential(adaptive_pool, conv, groupnorm, relu, flatten, fc)
@@ -183,21 +179,34 @@ class Pose2p5DModel(nn.Module):
         distribution peakier around the most likely value."""
         return F.softmax(logits / max(1e-6, temperature), dim=dim)
 
-    @staticmethod
+    def _get_heatmap_xy_grid(self, heatmap: torch.Tensor) -> torch.Tensor:
+        _, _, n_rows, n_cols = heatmap.shape
+
+        if (
+            not hasattr(self, "heatmap_grid_x")
+            or not hasattr(self, "heatmap_grid_y")
+            or self.heatmap_grid_x.shape[-1] != n_cols
+            or self.heatmap_grid_y.shape[-2] != n_rows
+        ):
+            # Create grid of (x, y) coordinates corresponding to the heatmap
+            x_grid = torch.linspace(0, n_cols - 1, n_cols, device=heatmap.device).view(
+                1, 1, 1, n_cols
+            )
+            y_grid = torch.linspace(0, n_rows - 1, n_rows, device=heatmap.device).view(
+                1, 1, n_rows, 1
+            )
+            self.register_buffer("heatmap_grid_x", x_grid, persistent=False)
+            self.register_buffer("heatmap_grid_y", y_grid, persistent=False)
+
+        return self.heatmap_grid_x, self.heatmap_grid_y
+
     def _soft_argmax_2d(
-        heatmaps: torch.Tensor,
-        temperature: float = 1.0,
-        confidence_method: str = "entropy",
+        self, heatmaps: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             heatmaps (torch.Tensor): Logits of shape
                 (batch_size, n_keypoints, n_rows, n_cols).
-            temperature (float): Temperature for softmax. Higher
-                temperature makes the distribution softer; lower
-                temperature makes it sharper.
-            confidence_method (str): Method to compute confidence scores in
-                soft argmax.
 
         Returns:
             xy (torch.Tensor): X-Y coordinates of peaks in probability heat
@@ -209,29 +218,26 @@ class Pose2p5DModel(nn.Module):
         # Flat logits, shape: (batch_size, n_keypoints, n_rows*n_cols), then apply
         # softmax along the flattened spatial dimension (n_rows*n_cols)
         probs_flat = Pose2p5DModel._softmax_with_temp(
-            heatmaps.view(batch_size, n_keypoints, -1), dim=-1, temperature=temperature
+            heatmaps.view(batch_size, n_keypoints, -1),
+            dim=-1,
+            temperature=self.xy_temperature,
         )
         probs = probs_flat.view(batch_size, n_keypoints, n_rows, n_cols)
 
         # Extract the X-Y coordinates from the heatmaps. We do this by computing the
         # expected values of the X and Y coordinates, i.e. summing over all possible
         # coordinates weighted by their probabilities.
-        y_grid = torch.linspace(0, n_rows - 1, n_rows, device=heatmaps.device).view(
-            1, 1, n_rows, 1
-        )
-        x_grid = torch.linspace(0, n_cols - 1, n_cols, device=heatmaps.device).view(
-            1, 1, 1, n_cols
-        )
+        x_grid, y_grid = self._get_heatmap_xy_grid(heatmaps)
         # Dimensions 2 and 3 are rows and cols
         x_expected = (probs * x_grid).sum(dim=(2, 3))  # (batch_size, n_keypoints)
         y_expected = (probs * y_grid).sum(dim=(2, 3))  # (batch_size, n_keypoints)
         xy_expected = torch.stack([x_expected, y_expected], dim=-1)
 
         # Compute the confidence of the prediction (one scalar per keypoint per image)
-        if confidence_method == "peak":
+        if self.confidence_method == "peak":
             # Option 1: use the max probability as a confidence score
             confidence = probs_flat.max(dim=-1).values  # (batch_size, n_keypoints)
-        elif confidence_method == "entropy":
+        elif self.confidence_method == "entropy":
             # Option 2: use the 1 - normalized entropy as a confidence score
             # entropy = $- \sum_i p_i \log p_i$, shape (batch_size, n_keypoints)
             entropy = -(probs_flat * torch.log(probs_flat.clamp_min(1e-6))).sum(dim=-1)
@@ -242,28 +248,18 @@ class Pose2p5DModel(nn.Module):
             entropy_norm = entropy / torch.log(n_cells)
             confidence = 1.0 - entropy_norm  # (batch_size, n_keypoints)
         else:
-            raise ValueError(f"Invalid confidence_method: {confidence_method}.")
+            raise ValueError(f"Invalid confidence_method: {self.confidence_method}.")
 
         return xy_expected, confidence
 
-    @staticmethod
     def _soft_argmax_1d(
-        logits: torch.Tensor,  # (batch_size, n_keypoints, depth_n_bins)
-        bin_values: torch.Tensor,  # (depth_n_bins,)
-        temperature: float = 1.0,
-        confidence_method: str = "entropy",
+        self, logits: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             logits (torch.Tensor): Logits of shape
                 (batch_size, n_keypoints, depth_n_bins).
-            bin_values (torch.Tensor): Values of each discrete bin. Shape:
-                (depth_n_bins,).
-            temperature (float): Temperature for softmax. Higher
-                temperature makes the distribution softer; lower
-                temperature makes it sharper.
-            confidence_method (str): Method to compute confidence scores in
-                soft argmax.
+
         Returns:
             depth (torch.Tensor): Expected depth for each keypoint. Shape:
                 (batch_size, n_keypoints).
@@ -272,24 +268,24 @@ class Pose2p5DModel(nn.Module):
         """
         # probs: shape (batch_size, n_keypoints, depth_n_bins), same as logits
         probs = Pose2p5DModel._softmax_with_temp(
-            logits, dim=-1, temperature=temperature
+            logits, dim=-1, temperature=self.depth_temperature
         )
         # Compute expected depth (one scalar per keypoint per image)
-        depth_expected = (probs * bin_values.view(1, 1, -1)).sum(dim=-1)
+        depth_expected = (probs * self.depth_bin_centers.view(1, 1, -1)).sum(dim=-1)
 
         # Compute confidence of prediction (one scalar per keypoint per image)
-        if confidence_method == "peak":
+        if self.confidence_method == "peak":
             confidence = probs.max(dim=-1).values  # (batch_size, n_keypoints)
-        elif confidence_method == "entropy":
+        elif self.confidence_method == "entropy":
             # See same operation in _soft_argmax_2d
             entropy = -(probs * torch.log(probs.clamp_min(1e-6))).sum(dim=-1)
             n_bins = torch.tensor(
-                len(bin_values), device=entropy.device, dtype=entropy.dtype
+                len(self.depth_bin_centers), device=entropy.device, dtype=entropy.dtype
             )
             entropy_norm = entropy / torch.log(n_bins)
             confidence = 1.0 - entropy_norm  # (batch_size, n_keypoints)
         else:
-            raise ValueError(f"Invalid confidence_method: {confidence_method}.")
+            raise ValueError(f"Invalid confidence_method: {self.confidence_method}.")
 
         return depth_expected, confidence
 
@@ -328,11 +324,7 @@ class Pose2p5DModel(nn.Module):
         heatmaps = self.heatmap_head(up)  # (N, n_keypoints, nrows_out, ncols_out)
         # Decode x-y coordinates from heatmaps using soft-argmax
         # xy_output_coords: shape (N, n_keypoints, 2); xy_conf: shape (N, n_keypoints)
-        xy_output_coords, xy_conf = self._soft_argmax_2d(
-            heatmaps,
-            temperature=self.xy_temperature,
-            confidence_method=self.confidence_method,
-        )
+        xy_output_coords, xy_conf = self._soft_argmax_2d(heatmaps)
 
         # Map to input image pixel coordinates (account for output stride)
         _, _, nrows_out, ncols_out = heatmaps.shape
@@ -347,12 +339,7 @@ class Pose2p5DModel(nn.Module):
             batch_size, self.n_keypoints, self.depth_n_bins
         )
         # depth_pos and depth_conf both of shape (N, n_keypoints)
-        depth_pos, depth_conf = self._soft_argmax_1d(
-            depth_logits,
-            bin_values=self.depth_bin_centers,  # pre-registered buffer
-            temperature=self.depth_temperature,
-            confidence_method=self.confidence_method,
-        )
+        depth_pos, depth_conf = self._soft_argmax_1d(depth_logits)
 
         return {
             "heatmaps": heatmaps,
@@ -558,13 +545,10 @@ class Pose2p5DLoss(nn.Module):
         """Check if x-y labels are within the heatmap dimensions. Return
         True if all labels are valid, False otherwise (and log a warning).
         """
-        if not hasattr(self, "_max_valid_xy_labels_heatmap"):
-            self.register_buffer(
-                "_heatmap_shape",
-                torch.tensor(list(heatmap_shape), device=xy_labels_heatmap.device),
-            )
+        n_rows, n_cols = heatmap_shape
+        max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=xy_labels_heatmap.device)
         too_small = (xy_labels_heatmap < 0).any()
-        too_large = (xy_labels_heatmap >= self._heatmap_shape).any()
+        too_large = (xy_labels_heatmap > max_xy).any()
         if too_small or too_large:
             logging.warning(
                 "Some x-y labels are outside the heatmap dimensions. "
