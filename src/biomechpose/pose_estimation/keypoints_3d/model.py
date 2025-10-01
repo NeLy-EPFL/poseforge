@@ -334,30 +334,33 @@ class Pose2p5DLoss(nn.Module):
 
     def __init__(
         self,
-        heatmap_loss: str,
+        heatmap_loss_func: str,
         heatmap_sigma: float = 2.0,
-        depth_loss_ce_weight: float = 1.0,
-        depth_loss_l1_weight: float = 0.0,
+        xy_loss_weight: float = 4.0,
+        depth_ce_loss_weight: float = 1.0,
+        depth_l1_loss_weight: float = 0.25,
     ):
         """
         Args:
+            heatmap_loss_func (str): Loss function to use for heatmaps.
+                Options: "mse" or "kl".
             heatmap_sigma (float): Standard deviation of Gaussian used to
                 create ground truth heatmaps from x-y labels.
-            heatmap_loss (str): Loss function to use for heatmaps. Options:
-                "mse" (mean squared error) or "kl" (KL divergence).
-            depth_loss_ce_weight (float): Weight for cross-entropy term in
+            xy_loss_weight (float): Weight for x-y loss.
+            depth_ce_loss_weight (float): Weight for cross-entropy term in
                 depth loss.
-            depth_loss_l1_weight (float): Weight for L1 term in depth loss.
+            depth_l1_loss_weight (float): Weight for L1 term in depth loss.
         """
         super().__init__()
         self.heatmap_sigma = heatmap_sigma
-        self.heatmap_loss = heatmap_loss
-        self.depth_loss_ce_weight = depth_loss_ce_weight
-        self.depth_loss_l1_weight = depth_loss_l1_weight
-        assert heatmap_loss in [
+        self.heatmap_loss_func = heatmap_loss_func
+        self.xy_loss_weight = xy_loss_weight
+        self.depth_ce_loss_weight = depth_ce_loss_weight
+        self.depth_l1_loss_weight = depth_l1_loss_weight
+        assert heatmap_loss_func in [
             "mse",
             "kl",
-        ], f'Invalid heatmap_loss: {heatmap_loss}. Must be "mse" or "kl".'
+        ], f'Invalid heatmap_loss: {heatmap_loss_func}. Must be "mse" or "kl".'
 
     @staticmethod
     def _expand_xy_labels_to_gaussian_heatmaps(
@@ -437,16 +440,11 @@ class Pose2p5DLoss(nn.Module):
             raise ValueError(f"Invalid loss_function: {loss_function}.")
 
     @staticmethod
-    def _compute_depth_loss(
-        depth_logits: torch.Tensor,
-        z_labels: torch.Tensor,
-        bin_values: torch.Tensor,
-        ce_weight: float,
-        l1_weight: float,
+    def _compute_depth_ce_loss(
+        depth_logits: torch.Tensor, z_labels: torch.Tensor, bin_values: torch.Tensor
     ) -> torch.Tensor:
-        """Loss on the depth prediction: combination of cross-entropy loss
-        (logits for discrete bins) and L1 loss (regression on expected
-        depth computed based on logits).
+        """Cross-entropy loss on the depth prediction (logits for discrete
+        bins).
 
         Args:
             depth_logits (torch.Tensor): Predicted depth logits of shape
@@ -455,48 +453,52 @@ class Pose2p5DLoss(nn.Module):
                 (batch_size, n_keypoints).
             bin_values (torch.Tensor): Center values (i.e. depths) of each
                 discrete bin. Shape: (depth_n_bins,).
-            ce_weight (float): Weight for cross-entropy loss term.
-            l1_weight (float): Weight for L1 loss term.
 
         Returns:
-            torch.Tensor: Computed loss (scalar).
-            torch.Tensor: Cross-entropy loss term (scalar).
-            torch.Tensor: L1 loss term (scalar).
+            torch.Tensor: Computed cross-entropy loss (scalar).
         """
         batch_size, n_keypoints = z_labels.shape
-        loss_total = torch.tensor(0.0, device=depth_logits.device)
+        # z_labels unsqueezed to (batch_size, n_keypoints, 1)
+        # bin_values viewed as (1, 1, depth_n_bins)
+        diffs_from_each_bin_center = (
+            z_labels.unsqueeze(-1) - bin_values.view(1, 1, -1)
+        ).abs()
+        # Convert labels from depth values to bin indices
+        # bin_idx_label: (batch_size, n_keypoints)
+        bin_idx_label = diffs_from_each_bin_center.argmin(dim=-1)
+        # Collapse depth logits to shape (batch_size*n_keypoints, depth_n_bins) for
+        # cross-entropy calculation
+        depth_logits_collapsed = depth_logits.view(batch_size * n_keypoints, -1)
+        # Flatten target index to shape (batch_size*n_keypoints,) to match logits
+        bin_idx_label_collapsed = bin_idx_label.flatten()
+        ce_loss = F.cross_entropy(
+            depth_logits_collapsed, bin_idx_label_collapsed, reduction="mean"
+        )
+        return ce_loss
 
-        if ce_weight > 0.0:
-            # z_labels unsqueezed to (batch_size, n_keypoints, 1)
-            # bin_values viewed as (1, 1, depth_n_bins)
-            diffs_from_each_bin_center = (
-                z_labels.unsqueeze(-1) - bin_values.view(1, 1, -1)
-            ).abs()
-            # Convert labels from depth values to bin indices
-            # bin_idx_label: (batch_size, n_keypoints)
-            bin_idx_label = diffs_from_each_bin_center.argmin(dim=-1)
-            # Collapse depth logits to shape (batch_size*n_keypoints, depth_n_bins) for
-            # cross-entropy calculation
-            depth_logits_collapsed = depth_logits.view(batch_size * n_keypoints, -1)
-            # Flatten target index to shape (batch_size*n_keypoints,) to match logits
-            bin_idx_label_collapsed = bin_idx_label.flatten()
-            ce_loss = F.cross_entropy(
-                depth_logits_collapsed, bin_idx_label_collapsed, reduction="mean"
-            )
-        else:
-            ce_loss = torch.tensor(0.0, device=depth_logits.device)
+    @staticmethod
+    def _compute_depth_l1_loss(
+        depth_logits: torch.Tensor, z_labels: torch.Tensor, bin_values: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute the L1 loss on the depth prediction (regression on
+        expected depth computed based on logits).
 
-        if l1_weight > 0.0:
-            # Compute probs, shape still (batch_size, n_keypoints, depth_n_bins)
-            bin_probs = F.softmax(depth_logits, dim=-1)
-            # Compute expected depth, shape is now (batch_size, n_keypoints)
-            depth_expected = (bin_probs * bin_values.view(1, 1, -1)).sum(dim=-1)
-            l1_loss = F.l1_loss(depth_expected, z_labels, reduction="mean")
-        else:
-            l1_loss = torch.tensor(0.0, device=depth_logits.device)
-
-        loss_total = ce_weight * ce_loss + l1_weight * l1_loss
-        return loss_total, ce_loss, l1_loss
+        Args:
+            depth_logits (torch.Tensor): Predicted depth logits of shape
+                (batch_size, n_keypoints, depth_n_bins).
+            z_labels (torch.Tensor): Ground truth depth values of shape
+                (batch_size, n_keypoints).
+            bin_values (torch.Tensor): Center values (i.e. depths) of each
+                discrete bin. Shape: (depth_n_bins,).
+        Returns:
+            torch.Tensor: Computed L1 loss (scalar).
+        """
+        # Compute probs, shape still (batch_size, n_keypoints, depth_n_bins)
+        bin_probs = F.softmax(depth_logits, dim=-1)
+        # Compute expected depth, shape is now (batch_size, n_keypoints)
+        depth_expected = (bin_probs * bin_values.view(1, 1, -1)).sum(dim=-1)
+        l1_loss = F.l1_loss(depth_expected, z_labels, reduction="mean")
+        return l1_loss
 
     def forward(
         self,
@@ -521,12 +523,10 @@ class Pose2p5DLoss(nn.Module):
                 "total_loss": (torch.Tensor) Total loss (scalar).
                 "xy_heatmap_loss": (torch.Tensor) Loss on X-Y prediction
                     (scalar).
-                "depth_loss": (torch.Tensor) Loss on depth prediction
+                "depth_ce_loss": (torch.Tensor) Cross-entropy loss on depth
+                    prediction (scalar).
+                "depth_l1_loss": (torch.Tensor) L1 loss on depth prediction
                     (scalar).
-                "depth_loss_ce_term": (torch.Tensor) The cross entropy term
-                    of the depth loss (scalar).
-                "depth_loss_l1_term": (torch.Tensor) The L1 term of the
-                    depth loss (scalar).
         """
         heatmaps = preds["heatmaps"]
         depth_logits = preds["depth_logits"]
@@ -546,24 +546,26 @@ class Pose2p5DLoss(nn.Module):
 
         # Compute x-y prediction loss on heatmaps
         xy_heatmap_loss = self._compute_xy_heatmap_loss(
-            self.heatmap_loss, heatmaps, heatmap_labels
+            self.heatmap_loss_func, heatmaps, heatmap_labels
         )
 
         # Compute depth losses
-        depth_loss_total, depth_loss_ce, depth_loss_l1 = self._compute_depth_loss(
-            depth_logits=depth_logits,
-            z_labels=depth_labels,
-            bin_values=bin_values,
-            ce_weight=self.depth_loss_ce_weight,
-            l1_weight=self.depth_loss_l1_weight,
+        depth_ce_loss = self._compute_depth_ce_loss(
+            depth_logits, depth_labels, bin_values
+        )
+        depth_l1_loss = self._compute_depth_l1_loss(
+            depth_logits, depth_labels, bin_values
         )
 
         # Compute final loss
-        total_loss = xy_heatmap_loss + depth_loss_total
+        total_loss = (
+            self.xy_loss_weight * xy_heatmap_loss
+            + self.depth_ce_loss_weight * depth_ce_loss
+            + self.depth_l1_loss_weight * depth_l1_loss
+        )
         return {
             "total_loss": total_loss,
             "xy_heatmap_loss": xy_heatmap_loss,
-            "depth_loss": depth_loss_total,
-            "depth_loss_ce_term": depth_loss_ce,
-            "depth_loss_l1_term": depth_loss_l1,
+            "depth_ce_loss": depth_ce_loss,
+            "depth_l1_loss": depth_l1_loss,
         }
