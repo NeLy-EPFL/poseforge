@@ -377,6 +377,7 @@ class Pose2p5DLoss(nn.Module):
         xy_loss_weight: float = 4.0,
         depth_ce_loss_weight: float = 1.0,
         depth_l1_loss_weight: float = 0.25,
+        depth_sigma_bins: float = 1.0,
     ):
         """
         Args:
@@ -388,6 +389,9 @@ class Pose2p5DLoss(nn.Module):
             depth_ce_loss_weight (float): Weight for cross-entropy term in
                 depth loss.
             depth_l1_loss_weight (float): Weight for L1 term in depth loss.
+            depth_sigma_bins (float): Standard deviation of Gaussian used
+                to soften one-hot labels in depth cross-entropy loss (in
+                number of bins). Higher values make the labels softer.
         """
         super().__init__()
         self.heatmap_sigma = heatmap_sigma
@@ -395,10 +399,13 @@ class Pose2p5DLoss(nn.Module):
         self.xy_loss_weight = xy_loss_weight
         self.depth_ce_loss_weight = depth_ce_loss_weight
         self.depth_l1_loss_weight = depth_l1_loss_weight
-        assert heatmap_loss_func in [
-            "mse",
-            "kl",
-        ], f'Invalid heatmap_loss: {heatmap_loss_func}. Must be "mse" or "kl".'
+        self.depth_sigma_bins = depth_sigma_bins
+
+        # Check input validity
+        if heatmap_loss_func not in ["mse", "kl"]:
+            raise ValueError(
+                f'Invalid heatmap_loss: {heatmap_loss_func}. Must be "mse" or "kl".'
+            )
 
     @staticmethod
     def _expand_xy_labels_to_gaussian_heatmaps(
@@ -479,10 +486,16 @@ class Pose2p5DLoss(nn.Module):
 
     @staticmethod
     def _compute_depth_ce_loss(
-        depth_logits: torch.Tensor, z_labels: torch.Tensor, bin_values: torch.Tensor
+        depth_logits: torch.Tensor,
+        z_labels: torch.Tensor,
+        bin_values: torch.Tensor,
+        sigma_bins: float = 0.1,
     ) -> torch.Tensor:
-        """Cross-entropy loss on the depth prediction (logits for discrete
-        bins).
+        """Compute the cross-entropy loss on the depth prediction (depth
+        is treated as a classification problem over discrete bins). We use
+        a "soft" version of the one-hot labels, where the label for each
+        bin is computed based on a Gaussian centered at the ground truth
+        depth value.
 
         Args:
             depth_logits (torch.Tensor): Predicted depth logits of shape
@@ -491,28 +504,29 @@ class Pose2p5DLoss(nn.Module):
                 (batch_size, n_keypoints).
             bin_values (torch.Tensor): Center values (i.e. depths) of each
                 discrete bin. Shape: (depth_n_bins,).
+            sigma_bins (float): Standard deviation of Gaussian used to
+                soften the one-hot labels (in number of bins).
 
         Returns:
             torch.Tensor: Computed cross-entropy loss (scalar).
         """
-        batch_size, n_keypoints = z_labels.shape
-        # z_labels unsqueezed to (batch_size, n_keypoints, 1)
-        # bin_values viewed as (1, 1, depth_n_bins)
-        diffs_from_each_bin_center = (
+        bin_width = bin_values[1] - bin_values[0]
+        sigma = sigma_bins * bin_width
+
+        # Soften labels: compute normalized distances from each bin center and apply
+        # a Gaussian function to get "soft" labels (actually implemented via softmax)
+        normalized_dist_from_bin_centers = (
             z_labels.unsqueeze(-1) - bin_values.view(1, 1, -1)
-        ).abs()
-        # Convert labels from depth values to bin indices
-        # bin_idx_label: (batch_size, n_keypoints)
-        bin_idx_label = diffs_from_each_bin_center.argmin(dim=-1)
-        # Collapse depth logits to shape (batch_size*n_keypoints, depth_n_bins) for
-        # cross-entropy calculation
-        depth_logits_collapsed = depth_logits.view(batch_size * n_keypoints, -1)
-        # Flatten target index to shape (batch_size*n_keypoints,) to match logits
-        bin_idx_label_collapsed = bin_idx_label.flatten()
-        ce_loss = F.cross_entropy(
-            depth_logits_collapsed, bin_idx_label_collapsed, reduction="mean"
+        ) / sigma.clamp_min(1e-6)
+        soft_labels = torch.softmax(
+            -0.5 * (normalized_dist_from_bin_centers**2), dim=-1
         )
-        return ce_loss
+
+        # Cross-entropy with model predictions:
+        # H(label, pred) = \sum_i label_i * log(pred_i)
+        logp_pred = F.log_softmax(depth_logits, dim=-1)
+        ce = -(soft_labels * logp_pred).sum(dim=-1)  # (batch_size, n_keypoints)
+        return ce.mean()
 
     @staticmethod
     def _compute_depth_l1_loss(
@@ -629,7 +643,7 @@ class Pose2p5DLoss(nn.Module):
         # Compute depth losses
         self._check_depth_labels(depth_labels, bin_values)
         depth_ce_loss = self._compute_depth_ce_loss(
-            depth_logits, depth_labels, bin_values
+            depth_logits, depth_labels, bin_values, self.depth_sigma_bins
         )
         depth_l1_loss = self._compute_depth_l1_loss(
             depth_logits, depth_labels, bin_values
