@@ -90,6 +90,35 @@ class ResNetFeatureExtractor(nn.Module):
         if my_module_weights is not None:
             self.load_state_dict(my_module_weights)
 
+    @staticmethod
+    def _apply_imagenet_normalization(
+        x: torch.Tensor,
+        mean: list = [0.485, 0.456, 0.406],
+        std: list = [0.229, 0.224, 0.225],
+    ) -> torch.Tensor:
+        """Normalize input image tensor to the format expected by
+        ImageNet-pretrained models from torchvision.
+
+        See https://docs.pytorch.org/vision/0.8/models.html
+
+        Args:
+            x (torch.Tensor): Input image tensor of shape (batch_size, 3,
+                height, width), with pixel values in [0, 1].
+                `SimulatedDataLoader` and `SyntheticFramesSampler`, and
+                `AtomDataset` already do this normalization.
+            mean (list): Per-channel mean for normalization.
+            std (list): Per-channel standard deviation for normalization.
+
+        Returns:
+            x_normalized (torch.Tensor): Image tensor further normalized
+                to the format expected by ImageNet-pretrained models.
+        """
+        # ImageNet mean and std
+        mean = torch.tensor(mean, device=x.device).view(1, 3, 1, 1)
+        std = torch.tensor(std, device=x.device).view(1, 3, 1, 1)
+        x_normalized = (x - mean) / std
+        return x_normalized
+
     def forward(self, x):
         """
         Args:
@@ -101,7 +130,8 @@ class ResNetFeatureExtractor(nn.Module):
                 (batch_size, out_channels, *self.out_feature_map_size)
                 where self._out_feature_map_size depends on the input size.
         """
-        return self.resnet_feature_extractor(x)
+        x_norm = self._apply_imagenet_normalization(x)
+        return self.resnet_feature_extractor(x_norm)
 
     def data_dependent_init(self, x: torch.Tensor):
         """Initialize data-dependent parameters based on a sample input.
