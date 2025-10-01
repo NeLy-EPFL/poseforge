@@ -9,7 +9,8 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from biomechpose.pose_estimation import ResNetFeatureExtractor
+from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
+from biomechpose.pose_estimation.data import concat_atomic_batches, collapse_batch
 from biomechpose.pose_estimation.contrast_representation.projection_head import (
     ContrastiveProjectionHead,
 )
@@ -82,36 +83,6 @@ class ContrastivePretrainingPipeline:
             checkpoint_path_stem.with_suffix(".projection_head.pth"),
         )
 
-    @staticmethod
-    def _concat_atomic_batches(atomic_batches: torch.Tensor) -> torch.Tensor:
-        n_atomic_batches = atomic_batches.shape[0]
-        concatenated_batch = torch.cat(
-            [atomic_batches[i] for i in range(n_atomic_batches)],
-            dim=1,
-        ).to(atomic_batches.device)
-        return concatenated_batch
-
-    @staticmethod
-    def _collapse_batch(batch: torch.Tensor) -> tuple[torch.Tensor, int, int]:
-        """Reshape a group of atomic batches into a single batch, and
-        collapse the n_variants and n_samples dimensions.
-
-        Args:
-            batch (torch.Tensor): Tensor of shape
-                (n_variants, n_atomic_batches * n_samples, C, H, W)
-
-        Returns:
-            torch.Tensor: Collapsed batch of shape
-                (n_variants * n_atomic_batches * n_samples, C, H, W)
-        """
-        n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = batch.shape
-        # collapsed_batch:
-        #     (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
-        collapsed_batch = batch.view(
-            n_variants * n_samples_all_atomic_batches, n_channels, nrows, ncols
-        )
-        return collapsed_batch
-
     def train(
         self,
         training_data_loader: DataLoader,
@@ -163,9 +134,9 @@ class ContrastivePretrainingPipeline:
             for step_idx, (atomic_batches, _) in enumerate(training_data_loader):
                 # Merge atomic batches into a single batch
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
-                concatenated_batch = self._concat_atomic_batches(atomic_batches)
+                concatenated_batch = concat_atomic_batches(atomic_batches)
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
-                collapsed_batch = self._collapse_batch(concatenated_batch)
+                collapsed_batch = collapse_batch(concatenated_batch)
 
                 # Run models
                 with torch.amp.autocast(str(self.device), enabled=self.use_float16):
@@ -303,9 +274,9 @@ class ContrastivePretrainingPipeline:
 
                 # Merge atomic batches into a single batch (same as training)
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
-                concatenated_batch = self._concat_atomic_batches(atomic_batches)
+                concatenated_batch = concat_atomic_batches(atomic_batches)
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
-                collapsed_batch = self._collapse_batch(concatenated_batch)
+                collapsed_batch = collapse_batch(concatenated_batch)
 
                 # Forward pass with mixed precision
                 with torch.amp.autocast(str(self.device), enabled=self.use_float16):

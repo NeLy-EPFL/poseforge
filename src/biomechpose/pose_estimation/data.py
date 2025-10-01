@@ -7,7 +7,7 @@ import json
 from torch.utils.data import Dataset
 from collections import defaultdict
 from pathlib import Path
-from typing import Callable, Generator
+from typing import Callable, Iterator
 
 from biomechpose.util import (
     check_num_frames,
@@ -179,7 +179,7 @@ class SimulatedDataSequence:
 
         return labels
 
-    def generate_batches(self, batch_size: int) -> Generator[torch.Tensor, None, None]:
+    def generate_batches(self, batch_size: int) -> Iterator[torch.Tensor]:
         """Generator that yields batches of synthetic images as PyTorch tensors.
 
         Args:
@@ -699,6 +699,34 @@ class AtomicBatchDataset(Dataset):
 
         return frames, sim_data
 
+
+def concat_atomic_batches(atomic_batches: torch.Tensor) -> torch.Tensor:
+    n_atomic_batches = atomic_batches.shape[0]
+    concatenated_batch = torch.cat(
+        [atomic_batches[i] for i in range(n_atomic_batches)],
+        dim=1,
+    ).to(atomic_batches.device)
+    return concatenated_batch
+
+def collapse_batch(batch: torch.Tensor) -> tuple[torch.Tensor, int, int]:
+    """Reshape a group of atomic batches into a single batch, and
+    collapse the n_variants and n_samples dimensions.
+
+    Args:
+        batch (torch.Tensor): Tensor of shape
+            (n_variants, n_atomic_batches * n_samples, C, H, W)
+
+    Returns:
+        torch.Tensor: Collapsed batch of shape
+            (n_variants * n_atomic_batches * n_samples, C, H, W)
+    """
+    n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = batch.shape
+    # collapsed_batch:
+    #     (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
+    collapsed_batch = batch.view(
+        n_variants * n_samples_all_atomic_batches, n_channels, nrows, ncols
+    )
+    return collapsed_batch
 
 def _test_throughput():
     from time import time
