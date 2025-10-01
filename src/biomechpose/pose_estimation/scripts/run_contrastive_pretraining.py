@@ -162,8 +162,10 @@ def pretrain_contrastive_model(
     logging.info(
         f"Created feature extractor with output dim {feature_extractor.output_dim}"
     )
+    # Extractor output is global-pooled to 1x1 (see ContrastivePretrainingPipeline)
+    projection_head_input_dim = feature_extractor.output_channels * 1 * 1
     projection_head = ContrastiveProjectionHead(
-        input_dim=feature_extractor.output_dim,
+        input_dim=projection_head_input_dim,
         hidden_dim=model.projection_head_hidden_dim,
         output_dim=model.projection_head_output_dim,
     )
@@ -286,9 +288,9 @@ if __name__ == "__main__":
     # output_config = OutputConfig(
     #     output_basedir="bulk_data/pose_estimation/contrastive_pretraining/trial0",
     #     logging_interval=10,
-    #     checkpoint_interval=500,
-    #     validation_interval=500,
-    #     nbatches_per_validation=300,
+    #     checkpoint_interval=50,
+    #     validation_interval=50,
+    #     nbatches_per_validation=30,
     # )
     # pretrain_contrastive_model(
     #     sampling=sampling_config,

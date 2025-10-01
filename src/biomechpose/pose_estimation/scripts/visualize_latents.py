@@ -16,7 +16,7 @@ def visualize_simulation(
 ):
     output_dir.mkdir(parents=True, exist_ok=True)
     with h5py.File(inferred_latents_path, "r") as f:
-        for feature in ["h_features", "z_features"]:
+        for feature in ["h_features_pooled", "z_features"]:
             for stage in training_stages:
                 latent_space_data = f[f"{feature}/{stage}"][:]
                 visualize_latent_trajectory(

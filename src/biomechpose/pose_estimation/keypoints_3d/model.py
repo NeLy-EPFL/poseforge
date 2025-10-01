@@ -76,7 +76,7 @@ class Pose2p5DModel(nn.Module):
         self.upsampling_core = self._build_upsampling_core(
             n_layers=upsample_n_layers,
             n_hidden_channels=upsample_n_hidden_channels,
-            n_channels_in=self.feature_extractor.out_channels,
+            n_channels_in=self.feature_extractor.output_channels,
         )
 
         # Heatmap head for (x, y) keypoint locations

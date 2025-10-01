@@ -54,7 +54,7 @@ def predict_for_dataset(
     start_time = time()
     for batch in dataset.generate_batches(batch_size):
         # batch: (n_variants * n_frames, n_channels=3, n_rows, n_cols)
-        # h_features: (n_variants * n_frames, n_channels=512, *out_feature_map_size)
+        # h_features: (n_variants * n_frames, n_channels=512, *output_feature_map_size)
         # h_feature_pooled: (n_variants * n_frames, feature_dim)
         # z_features: (n_variants * n_frames, feature_dim)
         h_features, h_features_pooled, z_features = pipeline.inference(batch)
@@ -170,9 +170,11 @@ def run_feature_extractor_inference(
 
     # Initialize models (feature extractor & projection head) and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Extractor output is global-pooled to 1x1 (see ContrastivePretrainingPipeline)
     feature_extractor = ResNetFeatureExtractor(weights=None).to(device)
+    projection_head_input_dim = feature_extractor.output_channels * 1 * 1
     projection_head = ContrastiveProjectionHead(
-        input_dim=feature_extractor.output_dim,
+        input_dim=projection_head_input_dim,
         hidden_dim=model.projection_head_hidden_dim,
         output_dim=model.projection_head_output_dim,
     ).to(device)
@@ -274,8 +276,10 @@ if __name__ == "__main__":
     # Example call using function directly (no CLI)
     # sampling_config = SamplingConfig(batch_size=1024)
     # training_stages = [
-    #     f"epoch{epoch:03d}_step{step:06d}" for epoch in range(5) for step in (0, 15000)
-    # ] + ["epoch005_step000000"]
+    #     "epoch000_step000000",
+    #     "epoch000_step000050",
+    #     "epoch000_step000100",
+    # ]
     # model_config = ModelConfig(
     #     training_stages=training_stages,
     #     checkpoint_dir="bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/checkpoints",
@@ -302,7 +306,7 @@ if __name__ == "__main__":
     #     num_channels=3,
     # )
     # output_config = OutputConfig(
-    #     inference_output_dir="bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/inference"
+    #     inference_output_dir="bulk_data/pose_estimation/contrastive_pretraining/trial0/inference"
     # )
     # run_feature_extractor_inference(
     #     sampling=sampling_config,

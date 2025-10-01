@@ -9,11 +9,7 @@ from torchvision.models import ResNet18_Weights
 class ResNetFeatureExtractor(nn.Module):
     """Feature extractor using a ResNet-18 backbone."""
 
-    def __init__(
-        self,
-        weights: str | Path | ResNet18_Weights = "IMAGENET1K_V1",
-        global_pool: bool = True,
-    ):
+    def __init__(self, weights: str | Path | ResNet18_Weights = "IMAGENET1K_V1"):
         """
         Args:
             weights (str | Path | ResNet18_Weights): Weights to use for the
@@ -21,16 +17,8 @@ class ResNetFeatureExtractor(nn.Module):
                 off-the-shelf ImageNet weights from torchvision, or a path
                 to a .pth file with weights for this nn.Module (e.g. from
                 pretraining). If None, start from scratch.
-            global_pool (bool): Whether to use the last global adaptive
-                average pooling layer. Keeping this layer is handy for
-                obtaining a fixed-size output regardless of input image
-                size. However, it gets rid of spatial information needed
-                for things like pose estimation via heatmaps.
         """
         super(ResNetFeatureExtractor, self).__init__()
-
-        self.global_pool = global_pool
-        self._out_feature_map_size_cache = None  # to be determined based on input data
 
         # Figure out which weights to use
         if weights == "IMAGENET1K_V1":  # only option as of 2025-09
@@ -80,10 +68,10 @@ class ResNetFeatureExtractor(nn.Module):
         self.resnet_feature_extractor = nn.Sequential(model_elements)
 
         # Find out the output size of the ResNet feature extractor
-        self.out_channels = 512  # ResNet-18 layer4 output channels
+        self.output_channels = 512  # ResNet-18 layer4 output channels
         # These need to be determined based on input data size. Call
         # `data_dependent_init(x)` with a sample input to set them.
-        self.out_feature_map_size = (None, None)
+        self.output_feature_map_size = (None, None)
         self.output_dim = None
 
         # Load weights for this very nn.Module if provided
@@ -127,8 +115,9 @@ class ResNetFeatureExtractor(nn.Module):
 
         Returns:
             features (torch.Tensor): Extracted features. The shape is
-                (batch_size, out_channels, *self.out_feature_map_size)
-                where self._out_feature_map_size depends on the input size.
+                (batch_size, out_channels, *self.output_feature_map_size)
+                where self.output_feature_map_size depends on the input
+                image size.
         """
         x_norm = self._apply_imagenet_normalization(x)
         return self.resnet_feature_extractor(x_norm)
@@ -146,14 +135,11 @@ class ResNetFeatureExtractor(nn.Module):
             x (torch.Tensor): Input image tensor of shape (batch_size, 3,
                 height, width), with pixel values in [0, 1].
         """
-        if self.global_pool:
-            pass  # no need for data-dependent init
-        else:
-            with torch.no_grad():
-                _, _, n_rows_in, n_cols_in = x.shape
-                dummy_batch_size = 1
-                dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
-                feature_map = self.resnet_feature_extractor(dummy_input)
-                _, _, n_rows_out, n_cols_out = feature_map.shape
-            self.out_feature_map_size = (n_rows_out, n_cols_out)
-            self.output_dim = self.out_channels * n_rows_out * n_cols_out
+        with torch.no_grad():
+            _, _, n_rows_in, n_cols_in = x.shape
+            dummy_batch_size = 1
+            dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
+            feature_map = self.resnet_feature_extractor(dummy_input)
+            _, _, n_rows_out, n_cols_out = feature_map.shape
+        self.output_feature_map_size = (n_rows_out, n_cols_out)
+        self.output_dim = self.output_channels * n_rows_out * n_cols_out

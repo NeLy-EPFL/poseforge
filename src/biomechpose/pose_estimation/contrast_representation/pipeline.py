@@ -356,7 +356,7 @@ class ContrastivePretrainingPipeline:
                     h_features = self.feature_extractor(collapsed_batch)
                     h_features_pooled = F.adaptive_avg_pool2d(
                         h_features, (1, 1)
-                    ).flatten(h_features_pooled, start_dim=1)
+                    ).flatten(start_dim=1)
                     z_features = self.projection_head(h_features_pooled)
                     loss = info_nce_loss(
                         z_features,
@@ -417,7 +417,7 @@ class ContrastivePretrainingPipeline:
             with torch.amp.autocast(str(self.device), enabled=self.use_float16):
                 h_features = self.feature_extractor(batch)
                 h_features_pooled = F.adaptive_avg_pool2d(h_features, (1, 1)).flatten(
-                    h_features_pooled, start_dim=1
+                    start_dim=1
                 )
                 z_features = self.projection_head(h_features_pooled)
 
