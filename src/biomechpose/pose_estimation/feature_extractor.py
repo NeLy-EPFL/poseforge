@@ -7,17 +7,7 @@ from torchvision.models import ResNet18_Weights
 
 
 class ResNetFeatureExtractor(nn.Module):
-    """Feature extractor using a ResNet-18 backbone.
-
-    Note:
-        It's probably better to remove the final avgpool layer from this
-        module entirely and do the global adaptive pooling in the caller
-        using `torch.nn.functional.adaptive_avg_pool2d`. However, I have
-        already pretrained models with this architecture, so for
-        compatibility I'm using a `global_pool` boolean flag upon init.
-        The avgpool layer is simply skipped in `.forward(x)` if
-        `global_pool` is False.
-    """
+    """Feature extractor using a ResNet-18 backbone."""
 
     def __init__(
         self,
@@ -74,7 +64,7 @@ class ResNetFeatureExtractor(nn.Module):
         #     conv1 -> bn1 -> relu -> maxpool
         #           -> layer1 -> layer2 -> layer3 -> layer4
         #           -> avgpool -> fc
-        # Remove the head (fc); keep everything up to avgpool
+        # Remove the avgpool and fc; keep everything up to the last conv layer
         model_elements = OrderedDict(
             [
                 ("conv1", self.resnet.conv1),
@@ -85,23 +75,16 @@ class ResNetFeatureExtractor(nn.Module):
                 ("layer2", self.resnet.layer2),
                 ("layer3", self.resnet.layer3),
                 ("layer4", self.resnet.layer4),
-                ("avgpool", self.resnet.avgpool),
             ]
         )
         self.resnet_feature_extractor = nn.Sequential(model_elements)
 
         # Find out the output size of the ResNet feature extractor
-        # For ResNet-18, layer4 has 512 output channels
         self.out_channels = 512  # ResNet-18 layer4 output channels
-        if global_pool:
-            # The avgpool layer reduces spatial dimensions to 1x1
-            self.out_feature_map_size = (1, 1)
-            self.output_dim = self.out_channels * 1 * 1
-        else:
-            # These need to be determined based on input data size. Call
-            # `data_dependent_init(x)` with a sample input to set them.
-            self.out_feature_map_size = (None, None)
-            self.output_dim = None
+        # These need to be determined based on input data size. Call
+        # `data_dependent_init(x)` with a sample input to set them.
+        self.out_feature_map_size = (None, None)
+        self.output_dim = None
 
         # Load weights for this very nn.Module if provided
         if my_module_weights is not None:
@@ -114,16 +97,11 @@ class ResNetFeatureExtractor(nn.Module):
                 height, width), with pixel values in [0, 1].
 
         Returns:
-            features (torch.Tensor): Extracted features. If `global_pool`
-                is True, shape is (batch_size, output_dim). Otherwise,
-                shape is (batch_size, out_channels, h', w'), where h' and
-                w' depend on the input image size.
+            features (torch.Tensor): Extracted features. The shape is
+                (batch_size, out_channels, *self.out_feature_map_size)
+                where self._out_feature_map_size depends on the input size.
         """
-        if self.global_pool:
-            features = self.resnet_feature_extractor(x)
-        else:
-            features = self.resnet_feature_extractor[:-1](x)  # skip avgpool
-        return features
+        return self.resnet_feature_extractor(x)
 
     def data_dependent_init(self, x: torch.Tensor):
         """Initialize data-dependent parameters based on a sample input.
@@ -145,7 +123,7 @@ class ResNetFeatureExtractor(nn.Module):
                 _, _, n_rows_in, n_cols_in = x.shape
                 dummy_batch_size = 1
                 dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
-                feature_map = self.resnet_feature_extractor[:-1](dummy_input)
+                feature_map = self.resnet_feature_extractor(dummy_input)
                 _, _, n_rows_out, n_cols_out = feature_map.shape
             self.out_feature_map_size = (n_rows_out, n_cols_out)
             self.output_dim = self.out_channels * n_rows_out * n_cols_out

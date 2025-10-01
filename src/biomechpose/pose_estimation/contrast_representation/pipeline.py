@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import time
 import logging
 from tqdm import tqdm
@@ -64,6 +65,7 @@ class ContrastivePretrainingPipeline:
         self,
         batch,
         h_features,
+        h_features_pooled,
         z_features,
         loss,
         amp_scaler,
@@ -72,6 +74,7 @@ class ContrastivePretrainingPipeline:
         status = {
             "batch_dtype": batch.dtype,
             "h_features_dtype": h_features.dtype,
+            "h_features_pooled_dtype": h_features_pooled.dtype,
             "z_features_dtype": z_features.dtype,
             "loss_dtype": loss.dtype,
             "amp_enabled": self.use_float16,
@@ -216,7 +219,10 @@ class ContrastivePretrainingPipeline:
                 # Run models
                 with torch.amp.autocast(str(self.device), enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
-                    z_features = self.projection_head(h_features)
+                    h_features_pooled = F.adaptive_avg_pool2d(
+                        h_features, (1, 1)
+                    ).flatten(start_dim=1)
+                    z_features = self.projection_head(h_features_pooled)
                     loss = info_nce_loss(
                         z_features,
                         temperature,
@@ -230,6 +236,7 @@ class ContrastivePretrainingPipeline:
                         self._check_float16_usage(
                             collapsed_batch,
                             h_features,
+                            h_features_pooled,
                             z_features,
                             loss,
                             amp_scaler,
@@ -283,6 +290,7 @@ class ContrastivePretrainingPipeline:
                         concatenated_batch,
                         collapsed_batch,
                         h_features,
+                        h_features_pooled,
                         z_features,
                         loss,
                     )
@@ -346,7 +354,10 @@ class ContrastivePretrainingPipeline:
                 # Forward pass with mixed precision
                 with torch.amp.autocast(str(self.device), enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
-                    z_features = self.projection_head(h_features)
+                    h_features_pooled = F.adaptive_avg_pool2d(
+                        h_features, (1, 1)
+                    ).flatten(h_features_pooled, start_dim=1)
+                    z_features = self.projection_head(h_features_pooled)
                     loss = info_nce_loss(
                         z_features,
                         temperature,
@@ -387,6 +398,8 @@ class ContrastivePretrainingPipeline:
 
         Returns:
             h_features (torch.Tensor): Features from the feature extractor
+            h_features_pooled (torch.Tensor): Globally pooled features from
+                the feature extractor.
             z_features (torch.Tensor): Features from the projection head
         """
         # batch: (batch_size, C, H, W)
@@ -403,6 +416,13 @@ class ContrastivePretrainingPipeline:
             batch = batch.to(self.device, non_blocking=True)
             with torch.amp.autocast(str(self.device), enabled=self.use_float16):
                 h_features = self.feature_extractor(batch)
-                z_features = self.projection_head(h_features)
+                h_features_pooled = F.adaptive_avg_pool2d(h_features, (1, 1)).flatten(
+                    h_features_pooled, start_dim=1
+                )
+                z_features = self.projection_head(h_features_pooled)
 
-        return h_features.to(input_device), z_features.to(input_device)
+        return (
+            h_features.to(input_device),
+            h_features_pooled.to(input_device),
+            z_features.to(input_device),
+        )

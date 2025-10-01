@@ -48,21 +48,25 @@ def predict_for_dataset(
     dataset: SimulatedDataSequence,
     batch_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    h_features_all, z_features_all = [], []
+    h_features_pooled_all, z_features_all = [], []
 
     n_batches = 0
     start_time = time()
     for batch in dataset.generate_batches(batch_size):
         # batch: (n_variants * n_frames, n_channels=3, n_rows, n_cols)
-        # h_feature, z_features: (n_variants * n_frames, feature_dim)
-        h_features, z_features = pipeline.inference(batch)
+        # h_features: (n_variants * n_frames, n_channels=512, *out_feature_map_size)
+        # h_feature_pooled: (n_variants * n_frames, feature_dim)
+        # z_features: (n_variants * n_frames, feature_dim)
+        h_features, h_features_pooled, z_features = pipeline.inference(batch)
 
         # Reshape back to separate variants and frames
         n_samples_this_batch = batch.shape[0] // dataset.n_variants
-        h_features = h_features.view(dataset.n_variants, n_samples_this_batch, -1)
+        h_features_pooled = h_features_pooled.view(
+            dataset.n_variants, n_samples_this_batch, -1
+        )
         z_features = z_features.view(dataset.n_variants, n_samples_this_batch, -1)
 
-        h_features_all.append(h_features)
+        h_features_pooled_all.append(h_features_pooled)
         z_features_all.append(z_features)
         n_batches += 1
 
@@ -71,13 +75,13 @@ def predict_for_dataset(
         f"Processed dataset {dataset.sim_name} in {n_batches} batches. "
         f"Time taken: {walltime:.2f} seconds."
     )
-    return torch.cat(h_features_all, dim=1), torch.cat(z_features_all, dim=1)
+    return torch.cat(h_features_pooled_all, dim=1), torch.cat(z_features_all, dim=1)
 
 
 def initialize_output_hdf_file(output_path: Path, n_variants: int, n_frames: int):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(output_path, "w") as f:
-        f.create_group("h_features")
+        f.create_group("h_features_pooled")
         f.create_group("z_features")
         f.attrs["n_variants"] = n_variants
         f.attrs["n_frames"] = n_frames
@@ -207,7 +211,7 @@ def run_feature_extractor_inference(
 
         for dataset in datasets:
             # h/z_features: (n_variants, n_frames, feature_dim)
-            h_features, z_features = predict_for_dataset(
+            h_features_pooled, z_features = predict_for_dataset(
                 contrastive_pipeline, dataset, batch_size=sampling.batch_size
             )
             # Save to h5
@@ -215,8 +219,9 @@ def run_feature_extractor_inference(
                 inference_output_dir / dataset.sim_name / "contrastive_latents.h5"
             )
             with h5py.File(output_path, "a") as f:
-                f["h_features"].create_dataset(
-                    training_stage, data=h_features.cpu().numpy().astype(np.float16)
+                f["h_features_pooled"].create_dataset(
+                    training_stage,
+                    data=h_features_pooled.cpu().numpy().astype(np.float16),
                 )
                 f["z_features"].create_dataset(
                     training_stage, data=z_features.cpu().numpy().astype(np.float16)
