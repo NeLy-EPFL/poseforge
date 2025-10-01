@@ -64,13 +64,6 @@ class Pose2p5DModel(nn.Module):
             'Must be "entropy" or "peak".'
         )
 
-        # Ensure that we skip the last pooling layer in the feature extractor. This
-        # helps preserve spatial resolution.
-        assert not self.feature_extractor.global_pool, (
-            "Pose2p5Model must be supplied with a feature_extractor that has "
-            "global_pool=False in order to preserve spatial information."
-        )
-
         # Build upsampling core. This is the first level of processing after the ResNet
         # feature extractor, shared by both the heatmap head and the depth head.
         self.upsampling_core = self._build_upsampling_core(

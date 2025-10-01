@@ -160,7 +160,8 @@ def pretrain_contrastive_model(
         weights="IMAGENET1K_V1" if model.use_pretrained_backbone else None
     )
     logging.info(
-        f"Created feature extractor with output dim {feature_extractor.output_dim}"
+        "Created feature extractor "
+        "(output_dim not initialized until data_dependent_init() is called)"
     )
     # Extractor output is global-pooled to 1x1 (see ContrastivePretrainingPipeline)
     projection_head_input_dim = feature_extractor.output_channels * 1 * 1
