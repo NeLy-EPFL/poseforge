@@ -11,10 +11,8 @@ from torch.utils.data import DataLoader
 
 from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 from biomechpose.pose_estimation.data import concat_atomic_batches, collapse_batch
-from biomechpose.pose_estimation.contrast_representation.projection_head import (
-    ContrastiveProjectionHead,
-)
-from biomechpose.pose_estimation.contrast_representation.loss import info_nce_loss
+from biomechpose.pose_estimation.contrast.model import ContrastiveProjectionHead
+from biomechpose.pose_estimation.contrast.loss import info_nce_loss
 from biomechpose.util import clear_memory_cache, check_mixed_precision_status
 
 

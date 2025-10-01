@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 
 from biomechpose.pose_estimation import AtomicBatchDataset, ResNetFeatureExtractor
-from biomechpose.pose_estimation.contrast_representation import (
+from biomechpose.pose_estimation.contrast import (
     ContrastivePretrainingPipeline,
     ContrastiveProjectionHead,
 )

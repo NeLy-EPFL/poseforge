@@ -14,7 +14,7 @@ from time import time
 from pathlib import Path
 
 from biomechpose.pose_estimation import SimulatedDataSequence, ResNetFeatureExtractor
-from biomechpose.pose_estimation.contrast_representation import (
+from biomechpose.pose_estimation.contrast import (
     ContrastivePretrainingPipeline,
     ContrastiveProjectionHead,
 )
