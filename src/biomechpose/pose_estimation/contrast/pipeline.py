@@ -173,7 +173,7 @@ class ContrastivePretrainingPipeline:
                         )
 
                 # Backpropagate and optimize
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)  # set_to_none saves memory
                 amp_scaler.scale(loss).backward()
                 amp_scaler.step(optimizer)
                 amp_scaler.update()
@@ -242,6 +242,8 @@ class ContrastivePretrainingPipeline:
             end = time.time()
             epoch_walltime = end - epoch_start_time
             logging.info(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
+
+        writer.close()
 
     def validate(
         self,

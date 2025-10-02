@@ -179,7 +179,9 @@ class Pose2p5DModel(nn.Module):
         distribution peakier around the most likely value."""
         return F.softmax(logits / max(1e-6, temperature), dim=dim)
 
-    def _get_heatmap_xy_grid(self, heatmap: torch.Tensor) -> torch.Tensor:
+    def _get_heatmap_xy_grid(
+        self, heatmap: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         _, _, n_rows, n_cols = heatmap.shape
 
         if (
@@ -365,6 +367,7 @@ class Pose2p5DLoss(nn.Module):
         depth_ce_loss_weight: float = 1.0,
         depth_l1_loss_weight: float = 0.25,
         depth_sigma_bins: float = 1.0,
+        clamp_labels: bool = True,
     ):
         """
         Args:
@@ -379,6 +382,8 @@ class Pose2p5DLoss(nn.Module):
             depth_sigma_bins (float): Standard deviation of Gaussian used
                 to soften one-hot labels in depth cross-entropy loss (in
                 number of bins). Higher values make the labels softer.
+            clamp_labels (bool): If True, clamp out-of-bounds labels for
+                both x-y and depth to the valid range.
         """
         super().__init__()
         self.heatmap_sigma = heatmap_sigma
@@ -387,6 +392,7 @@ class Pose2p5DLoss(nn.Module):
         self.depth_ce_loss_weight = depth_ce_loss_weight
         self.depth_l1_loss_weight = depth_l1_loss_weight
         self.depth_sigma_bins = depth_sigma_bins
+        self.clamp_labels = clamp_labels
 
         # Check input validity
         if heatmap_loss_func not in ["mse", "kl"]:
@@ -539,20 +545,30 @@ class Pose2p5DLoss(nn.Module):
         l1_loss = F.l1_loss(depth_expected, z_labels, reduction="mean")
         return l1_loss
 
+    @staticmethod
     def _check_xy_labels(
-        self,
         xy_labels_heatmap: torch.Tensor,
         heatmap_shape: tuple[int, int],
         clamp_to_range: bool = False,
-    ) -> bool:
+    ) -> tuple[bool, torch.Tensor | None]:
         """Check if x-y labels are within the heatmap dimensions. Log a
         warning if any label is out of bounds.
 
-        If clamp_to_range is False, return False if any label is out of
-        bounds, or True otherwise.
+        Args:
+            xy_labels_heatmap (torch.Tensor): X-Y coordinates of shape
+                (batch_size, n_keypoints, 2) in heatmap pixel space (NOT
+                input image pixel space!).
+            heatmap_shape (tuple[int, int]): Heatmap dimensions
+                (n_rows, n_cols).
+            clamp_to_range (bool): If True, clamp out-of-bounds labels to
+                the valid range and return the clamped version of
+                xy_labels_heatmap. If False, the clamping step is skipped
+                and None is returned instead.
 
-        If clamp_to_range is True, clamp the labels to be within the valid
-        range and return the clamped version of xy_labels_heatmap.
+        Returns:
+            bool: True if any label is out of bounds, False otherwise.
+            torch.Tensor | None: Clamped version of xy_labels_heatmap if
+                clamp_to_range is True, None otherwise.
         """
         n_rows, n_cols = heatmap_shape
         max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=xy_labels_heatmap.device)
@@ -564,25 +580,35 @@ class Pose2p5DLoss(nn.Module):
             )
 
         if clamp_to_range:
-            xy_labels_heatmap = torch.clamp(xy_labels_heatmap, min=0, max=max_xy)
-            return xy_labels_heatmap
+            labels_clamped = torch.clamp(xy_labels_heatmap, min=0, max=max_xy)
         else:
-            return not is_bad
+            labels_clamped = None
+
+        return is_bad, labels_clamped
 
     @staticmethod
     def _check_depth_labels(
         depth_labels: torch.Tensor,
         bin_values: torch.Tensor,
         clamp_to_range: bool = False,
-    ) -> bool:
+    ) -> tuple[bool, torch.Tensor | None]:
         """Check if depth labels are within the range of depth bins. Log a
         warning if any label is out of bounds.
 
-        If clamp_to_range is False, return False if any label is out of
-        bounds, or True otherwise.
+        Args:
+            depth_labels (torch.Tensor): Ground truth depth values of shape
+                (batch_size, n_keypoints).
+            bin_values (torch.Tensor): Center values (i.e. depths) of each
+                discrete bin. Shape: (depth_n_bins,).
+            clamp_to_range (bool): If True, clamp out-of-bounds labels to
+                the valid range and return the clamped version of
+                depth_labels. If False, the clamping step is skipped and
+                None is returned instead.
 
-        If clamp_to_range is True, clamp the labels to be within the valid
-        range and return the clamped version of depth_labels.
+        Returns:
+            bool: True if any label is out of bounds, False otherwise.
+            torch.Tensor | None: Clamped version of depth_labels if
+                clamp_to_range is True, None otherwise.
         """
         is_bad = (depth_labels < bin_values[0]).any() or (
             depth_labels > bin_values[-1]
@@ -592,12 +618,14 @@ class Pose2p5DLoss(nn.Module):
                 "Some depth labels are outside the range of depth bins. "
                 "This may cause bad values in the loss."
             )
+
         if clamp_to_range:
             dmin, dmax = bin_values[0], bin_values[-1]
-            depth_labels = torch.clamp(depth_labels, min=dmin, max=dmax)
-            return depth_labels
+            labels_clamped = torch.clamp(depth_labels, min=dmin, max=dmax)
         else:
-            return not is_bad
+            labels_clamped = None
+
+        return is_bad, labels_clamped
 
     def forward(
         self,
@@ -652,10 +680,14 @@ class Pose2p5DLoss(nn.Module):
         # Compute depth losses
         self._check_depth_labels(depth_labels, bin_values)
         depth_ce_loss = self._compute_depth_ce_loss(
-            depth_logits, depth_labels, bin_values, self.depth_sigma_bins
+            depth_logits,
+            depth_labels,
+            bin_values,
+            self.depth_sigma_bins,
+            clamp_labels=self.clamp_labels,
         )
         depth_l1_loss = self._compute_depth_l1_loss(
-            depth_logits, depth_labels, bin_values
+            depth_logits, depth_labels, bin_values, clamp_labels=self.clamp_labels
         )
 
         # Compute final loss

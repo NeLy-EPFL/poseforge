@@ -131,7 +131,7 @@ class Pose2p5DPipeline:
                         )
 
                 # Backpropagate and optimize
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)  # set_to_none saves memory
                 amp_scaler.scale(loss_dict["total_loss"]).backward()
                 amp_scaler.step(optimizer)
                 amp_scaler.update()
@@ -192,6 +192,8 @@ class Pose2p5DPipeline:
                 f"Finished epoch {epoch_idx} in {epoch_wall_time:.2f} seconds."
             )
 
+        writer.close()
+
     def validate(
         self, validation_data_loader: DataLoader, max_batches: int | None = None
     ):
@@ -209,6 +211,8 @@ class Pose2p5DPipeline:
         """
         if max_batches is None:
             max_batches = len(validation_data_loader)
+        if max_batches <= 0:
+            raise ValueError("max_batches must be positive or None")
         total_loss_dict = defaultdict(lambda: 0.0)
 
         self.model.eval()
