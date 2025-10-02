@@ -9,11 +9,11 @@ from torchvision.models import ResNet18_Weights
 class ResNetFeatureExtractor(nn.Module):
     """Feature extractor using a ResNet-18 backbone."""
 
-    def __init__(self, weights: str | Path | ResNet18_Weights = "IMAGENET1K_V1"):
+    def __init__(self, weights: str | Path | ResNet18_Weights | None = "IMAGENET1K_V1"):
         """
         Args:
-            weights (str | Path | ResNet18_Weights): Weights to use for the
-                backbone. In practice, use "IMAGENET1K_V1" for
+            weights (str | Path | ResNet18_Weights | None): Weights to use
+                for the backbone. In practice, use "IMAGENET1K_V1" for
                 off-the-shelf ImageNet weights from torchvision, or a path
                 to a .pth file with weights for this nn.Module (e.g. from
                 pretraining). If None, start from scratch.

@@ -5,11 +5,12 @@ logging.basicConfig(
     level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+import torch
 from dataclasses import dataclass
-from torch.utils.data import DataLoader
 from pathlib import Path
 
-from biomechpose.pose_estimation import AtomicBatchDataset, ResNetFeatureExtractor
+from biomechpose.pose_estimation.data import init_atomic_dataset_and_dataloader
+from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 from biomechpose.pose_estimation.contrast import (
     ContrastivePretrainingPipeline,
     ContrastiveProjectionHead,
@@ -105,54 +106,28 @@ def pretrain_contrastive_model(
     # System setup
     set_random_seed(training.seed)
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
+    if len(hardware_avail["gpus"]) == 0:
+        raise RuntimeError("No GPU available for training")
+    torch.backends.cudnn.benchmark = True
 
     # Initialize datasets and dataloaders
-    # Set up atomic datasets
-    train_ds = AtomicBatchDataset(
-        data_dirs=[Path(path) for path in data.train_data_dirs],
-        n_variants=sampling.atomic_batch_nvariants,
+    train_ds, train_loader = init_atomic_dataset_and_dataloader(
+        data_dirs=data.train_data_dirs,
+        atomic_batch_nsamples=sampling.atomic_batch_nsamples,
+        atomic_batch_nvariants=sampling.atomic_batch_nvariants,
         image_size=data.image_size,
-        n_channels=data.num_channels,
-    )
-    val_ds = AtomicBatchDataset(
-        data_dirs=[Path(path) for path in data.val_data_dirs],
-        n_variants=sampling.atomic_batch_nvariants,
-        image_size=data.image_size,
-        n_channels=data.num_channels,
-    )
-    # Check if batch size is valid
-    train_n_atomic_batches_per_batch = (
-        sampling.train_batch_size // sampling.atomic_batch_nsamples
-    )
-    val_n_atomic_batches_per_batch = (
-        sampling.val_batch_size // sampling.atomic_batch_nsamples
-    )
-    assert (
-        sampling.train_batch_size % sampling.atomic_batch_nsamples == 0
-    ), "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
-    assert (
-        sampling.val_batch_size % sampling.atomic_batch_nsamples == 0
-    ), "`val_batch_size` must be a multiple of `atomic_batch_nsamples`"
-    # Create parallel dataloaders
-    num_workers = sampling.num_workers
-    if num_workers is None:
-        num_workers = hardware_avail["num_cpu_cores_available"]
-        logging.info(f"Using {num_workers} data loading workers")
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=train_n_atomic_batches_per_batch,
-        shuffle=True,
+        train_batch_size=sampling.train_batch_size,
         num_workers=sampling.num_workers,
-        pin_memory=True,
-        drop_last=True,
+        num_channels=3,
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=val_n_atomic_batches_per_batch,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+    val_ds, val_loader = init_atomic_dataset_and_dataloader(
+        data_dirs=data.val_data_dirs,
+        atomic_batch_nsamples=sampling.atomic_batch_nsamples,
+        atomic_batch_nvariants=sampling.atomic_batch_nvariants,
+        image_size=data.image_size,
+        train_batch_size=sampling.val_batch_size,
+        num_workers=sampling.num_workers,
+        num_channels=3,
     )
 
     # Initialize models
@@ -204,7 +179,11 @@ def pretrain_contrastive_model(
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(pretrain_contrastive_model)
+    tyro.cli(
+        pretrain_contrastive_model,
+        prog=f"python {Path(__file__).name}",
+        description="Pretrain a ResNet feature extractor using a contrastive loss on synthetic videos.",
+    )
 
     # Example CLI command to run this script:
     # python -u src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py \

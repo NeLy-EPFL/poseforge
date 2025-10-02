@@ -198,7 +198,11 @@ if __name__ == "__main__":
     # CLI
     import tyro
 
-    tyro.cli(extract_atomic_batches)
+    tyro.cli(
+        extract_atomic_batches,
+        prog=f"python {Path(__file__).name}",
+        description="Extract atomic batches from synthetic videos and simulation data.",
+    )
     # CLI example:
     # python src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py \
     #     --atomic-batch-nframes 32 \

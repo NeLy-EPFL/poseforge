@@ -233,7 +233,11 @@ def run_feature_extractor_inference(
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(run_feature_extractor_inference)
+    tyro.cli(
+        run_feature_extractor_inference,
+        prog=f"python {Path(__file__).name}",
+        description="Run inference using a contrastively pretrained feature extractor.",
+    )
 
     # Example CLI command to run this script:
     # python -u src/biomechpose/pose_estimation/scripts/run_feature_extractor_inference.py \

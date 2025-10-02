@@ -7,9 +7,27 @@ from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
 
 class Pose2p5DModel(nn.Module):
-    """2.5D Pose estimation model (for each keypoint, camera col-row coords
-    are predicted via a 2D dense heatmap; depth is predicted separately via
-    another 1D heatmap)."""
+    """A 3D keypoint detection model, but implemented in "2.5D", i.e:
+        - A x-y pathway predicts heatmaps for each keypoint in the 2D image
+          plane of the camera. The (x, y) coordinates of each keypoint are
+          obtained by taking the argmax of the predicted heatmap.
+        - A depth pathway predicts a probability distribution over
+          quantized depth bins for each keypoint. The depth value of each
+          keypoint is obtained by taking the expectation of the predicted
+          distribution.
+    
+    The feature extractor is a ResNet18 model. The intended approach is
+    that this model has been pretrained on ImageNet (published by
+    torchvision), and pretrained again contrastively on synthetic data.
+    When the same simulated frame is rendered by different style transfer
+    models into the experimental domain, their feature representations
+    should be similar.
+    
+    Following the feature extractor, there is an upsampling core consisting
+    of several ConvTranspose2d (decov) layers. A specialized x-y heatmap
+    head and a specialized depth head branch off from the upsampling core,
+    producing x-y heatmaps and depth logits respectively.
+    """
 
     def __init__(
         self,
@@ -67,7 +85,7 @@ class Pose2p5DModel(nn.Module):
         self.upsample_n_layers = upsample_n_layers
         self.upsample_n_hidden_channels = upsample_n_hidden_channels
         self.depth_n_hidden_channels = depth_n_hidden_channels
-        self.confidence_method = confidence_method
+        self.confidence_method = confidence_method.lower()
         self.groupnorm_n_groups = groupnorm_n_groups
         self.pose_head_init_std = pose_head_init_std
 
@@ -363,10 +381,10 @@ class Pose2p5DLoss(nn.Module):
         self,
         heatmap_loss_func: str,
         heatmap_sigma: float = 2.0,
+        depth_sigma_bins: float = 1.0,
         xy_loss_weight: float = 4.0,
         depth_ce_loss_weight: float = 1.0,
         depth_l1_loss_weight: float = 0.25,
-        depth_sigma_bins: float = 1.0,
         clamp_labels: bool = True,
     ):
         """
@@ -375,23 +393,23 @@ class Pose2p5DLoss(nn.Module):
                 Options: "mse" or "kl".
             heatmap_sigma (float): Standard deviation of Gaussian used to
                 create ground truth heatmaps from x-y labels.
+            depth_sigma_bins (float): Standard deviation of Gaussian used
+                to soften one-hot labels in depth cross-entropy loss (in
+                number of bins). Higher values make the labels softer.
             xy_loss_weight (float): Weight for x-y loss.
             depth_ce_loss_weight (float): Weight for cross-entropy term in
                 depth loss.
             depth_l1_loss_weight (float): Weight for L1 term in depth loss.
-            depth_sigma_bins (float): Standard deviation of Gaussian used
-                to soften one-hot labels in depth cross-entropy loss (in
-                number of bins). Higher values make the labels softer.
             clamp_labels (bool): If True, clamp out-of-bounds labels for
                 both x-y and depth to the valid range.
         """
         super().__init__()
+        self.heatmap_loss_func = heatmap_loss_func.lower()
         self.heatmap_sigma = heatmap_sigma
-        self.heatmap_loss_func = heatmap_loss_func
+        self.depth_sigma_bins = depth_sigma_bins
         self.xy_loss_weight = xy_loss_weight
         self.depth_ce_loss_weight = depth_ce_loss_weight
         self.depth_l1_loss_weight = depth_l1_loss_weight
-        self.depth_sigma_bins = depth_sigma_bins
         self.clamp_labels = clamp_labels
 
         # Check input validity
