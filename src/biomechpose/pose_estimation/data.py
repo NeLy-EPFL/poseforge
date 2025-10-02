@@ -700,33 +700,102 @@ class AtomicBatchDataset(Dataset):
         return frames, sim_data
 
 
-def concat_atomic_batches(atomic_batches: torch.Tensor) -> torch.Tensor:
-    n_atomic_batches = atomic_batches.shape[0]
-    concatenated_batch = torch.cat(
-        [atomic_batches[i] for i in range(n_atomic_batches)],
-        dim=1,
-    ).to(atomic_batches.device)
-    return concatenated_batch
+def concat_atomic_batches(
+    frames: torch.Tensor, sim_data: dict[str, torch.Tensor] | None = None
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Concatenate a group of atomic batches along the batch (n_frames)
+    dimension.
 
-def collapse_batch(batch: torch.Tensor) -> tuple[torch.Tensor, int, int]:
+    Args:
+        frames (torch.Tensor): Tensor of shape
+            (n_atomic_batches, n_variants, n_frames, n_channels, height, width)
+        sim_data (dict[str, torch.Tensor], optional): Optional dictionary
+            of simulation data, where each value is a tensor of shape
+            (n_atomic_batches, n_frames, ...). Note that there is no
+            n_variants dimension here because all variants come from the
+            same simulation. If supplied, each dict key-value pair will be
+            repeated along the n_variants dimension and then concatenated
+            along the n_frames dimension so as to match the concatenated
+            atomic_batches. Defaults to None.
+
+    Returns:
+        If sim_data is None:
+            torch.Tensor: Concatenated atomic batch of shape
+                (n_variants, n_atomic_batches * n_frames, n_channels, height, width)
+        If sim_data is not None:
+            torch.Tensor: Concatenated atomic batch of shape
+                (n_variants, n_atomic_batches * n_frames, n_channels, height, width)
+            dict[str, torch.Tensor]: Dictionary of concatenated simulation
+                data, where each value is a tensor of shape
+                (n_atomic_batches * n_frames, ...)
+    """
+    n_atomic_batches = frames.shape[0]
+    # list_of_atomic_batches: each element has shape (n_variants, n_frames, n_channels
+    # n_rows, n_cols). Then concatenate along dim 1 (n_frames)
+    list_of_atomic_batches = [frames[i, ...] for i in range(n_atomic_batches)]
+    concatenated_batch = torch.cat(list_of_atomic_batches, dim=1)
+    concatenated_batch = concatenated_batch.to(frames.device)
+
+    if sim_data is None:
+        return concatenated_batch
+    else:
+        concatenated_sim_data = {}
+        for key, data in sim_data.items():
+            # data has shape (n_atomic_batches, n_frames, ...). Now add a n_variants dim
+            data = data.unsqueeze(1)
+            # list_of_sim_data: each element has shape (n_variants, n_frames, ...).
+            list_of_sim_data = [data[i, ...] for i in range(n_atomic_batches)]
+            # Then concatenate along dim 1 (n_frames)
+            concatenated_data = torch.cat(list_of_sim_data, dim=1)
+            concatenated_data = concatenated_data.to(frames.device)
+            concatenated_sim_data[key] = concatenated_data
+        return concatenated_batch, concatenated_sim_data
+
+
+def collapse_batch(
+    frames: torch.Tensor, sim_data: dict[str, torch.Tensor] | None = None
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Reshape a group of atomic batches into a single batch, and
     collapse the n_variants and n_samples dimensions.
 
     Args:
-        batch (torch.Tensor): Tensor of shape
+        frames (torch.Tensor): Tensor of shape
             (n_variants, n_atomic_batches * n_samples, C, H, W)
+        sim_data (dict[str, torch.Tensor], optional): Optional dictionary
+            of simulation data, already made consistent with the frames
+            tensor using concat_atomic_batches(). Each value should be a
+            tensor of shape (n_atomic_batches * n_samples, ...).
 
     Returns:
-        torch.Tensor: Collapsed batch of shape
-            (n_variants * n_atomic_batches * n_samples, C, H, W)
+        If sim_data is None:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, C, H, W).
+        If sim_data is not None:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, C, H, W).
+            dict[str, torch.Tensor]: Dictionary of simulation data, where
+                each value is a tensor of shape
+                (n_variants * n_atomic_batches * n_samples, ...).
     """
-    n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = batch.shape
-    # collapsed_batch:
-    #     (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
-    collapsed_batch = batch.view(
+    n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = frames.shape
+    # collapsed_frames:
+    # (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
+    collapsed_frames = frames.view(
         n_variants * n_samples_all_atomic_batches, n_channels, nrows, ncols
     )
-    return collapsed_batch
+
+    if sim_data is None:
+        return collapsed_frames
+    else:
+        collapsed_sim_data = {}
+        for key, data in sim_data.items():
+            # data has shape (n_variants, n_atomic_batches * n_samples, ...).
+            collapsed_data = data.view(
+                n_variants * n_samples_all_atomic_batches, *data.shape[2:]
+            )
+            collapsed_sim_data[key] = collapsed_data
+        return collapsed_frames, collapsed_sim_data
+
 
 def _test_throughput():
     from time import time

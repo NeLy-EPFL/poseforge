@@ -297,7 +297,7 @@ class Pose2p5DModel(nn.Module):
 
         Returns:
             dict with keys:
-                "heatmaps": (torch.Tensor) Predicted heatmaps of shape
+                "xy_heatmaps": (torch.Tensor) Predicted heatmaps of shape
                     (n_batches, n_keypoints, n_rows_out, n_cols_out).
                 "depth_logits": (torch.Tensor) Predicted depth logits of
                     shape (n_batches, n_keypoints, depth_n_bins).
@@ -308,7 +308,7 @@ class Pose2p5DModel(nn.Module):
                     shape (n_batches, n_keypoints).
                 "conf_xy": (torch.Tensor) Confidence scores for x-y
                     predictions of shape (n_batches, n_keypoints).
-                "conf_z": (torch.Tensor) Confidence scores for depth
+                "conf_depth": (torch.Tensor) Confidence scores for depth
                     predictions of shape (n_batches, n_keypoints).
         """
         batch_size, _, nrows_in, ncols_in = x.shape
@@ -342,12 +342,12 @@ class Pose2p5DModel(nn.Module):
         depth_pos, depth_conf = self._soft_argmax_1d(depth_logits)
 
         return {
-            "heatmaps": heatmaps,
+            "xy_heatmaps": heatmaps,
             "depth_logits": depth_logits,
             "pred_xy": xy_input_coords,
             "pred_depth": depth_pos,
             "conf_xy": xy_conf,
-            "conf_z": depth_conf,
+            "conf_depth": depth_conf,
             "heatmap_stride_rows": stride_rows,
             "heatmap_stride_cols": stride_cols,
         }
@@ -576,14 +576,14 @@ class Pose2p5DLoss(nn.Module):
 
     def forward(
         self,
-        preds: dict[str, torch.Tensor],
+        pred_dict: dict[str, torch.Tensor],
         xy_labels: torch.Tensor,
         depth_labels: torch.Tensor,
         bin_values: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """
         Args:
-            preds (dict[str, torch.Tensor]): Output of
+            pred_dict (dict[str, torch.Tensor]): Output of
                 Pose2p5DModel.forward().
             xy_labels (torch.Tensor): Ground truth x-y coordinates of shape
                 (batch_size, n_keypoints, 2) in input image pixel space.
@@ -602,11 +602,11 @@ class Pose2p5DLoss(nn.Module):
                 "depth_l1_loss": (torch.Tensor) L1 loss on depth prediction
                     (scalar).
         """
-        heatmaps = preds["heatmaps"]
-        depth_logits = preds["depth_logits"]
-        heatmap_stride_rows = preds["heatmap_stride_rows"]
-        heatmap_stride_cols = preds["heatmap_stride_cols"]
-        batch_size, n_keypoints, n_rows_out, n_cols_out = heatmaps.shape
+        xy_heatmaps = pred_dict["xy_heatmaps"]
+        depth_logits = pred_dict["depth_logits"]
+        heatmap_stride_rows = pred_dict["heatmap_stride_rows"]
+        heatmap_stride_cols = pred_dict["heatmap_stride_cols"]
+        batch_size, n_keypoints, n_rows_out, n_cols_out = xy_heatmaps.shape
 
         # Convert xy labels (image coords) -> heatmap coords
         xy_labels_heatmap = xy_labels.clone()
@@ -621,7 +621,7 @@ class Pose2p5DLoss(nn.Module):
 
         # Compute x-y prediction loss on heatmaps
         xy_heatmap_loss = self._compute_xy_heatmap_loss(
-            self.heatmap_loss_func, heatmaps, heatmap_labels
+            self.heatmap_loss_func, xy_heatmaps, heatmap_labels
         )
 
         # Compute depth losses
