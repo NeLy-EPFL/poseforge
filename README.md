@@ -6,7 +6,7 @@ Pose estimation guided by a biomechanical model.
 ## Complete pipeline and code structure
 
 > [!IMPORTANT]  
-> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of the original [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) repository.
+> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) for Contrastive Unpaired Translation [(Park et al., 2020)](https://taesung.me/ContrastiveUnpairedTranslation/).
 > To install it:
 >
 > ```bash
@@ -66,5 +66,25 @@ Pose estimation guided by a biomechanical model.
     - This script uses a selected trained style transfer model to translate all NeuroMechFly rendering data into the domain of Spotlight behavior recordings.
 
 
-### Part IV: Generalized pose estimation
+### Part IV: Contrastive pretraining on synthetic data
+1. Pre-shuffle the synthetic (and experimental) dataset using `src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py`. This will save small "atomic batches" of data that are always used together during training.
+    - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, one can import the `extract_atomic_batches` function from this file and use it natively within Python (an example is included in the `__main__` section).
+    - To run this on the SCITAS cluster (Jed), see `scripts_on_cluster/atomic_batch_extraction`.
+
+> [!NOTE]
+> The following step are only for pretraining the feature extractor with contrastive pretraining. It does not need to be rerun during production.
+> 
+> 2. Pretrain a ResNet18 feature extractor using `src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py`.
+>     - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, invoke training natively within Python by uncommenting example code in the `__main__` section.
+>     - To train the model on the SCITAS cluster (Kuma), see `scripts_on_cluster/contrastive_pretraining_training`
+
+> [!NOTE]
+> The following steps are only for sanity-checking and visualizing the outcome of the constrastive pretraining step above. They do not need to be rerun during production. In inference time, the feature extractor will be used as a part of the pose estimation model.
+>
+> 3. Run inference using `src/biomechpose/pose_estimation/scripts/run_feature_extractor_inference.py`.
+>      - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, invoke inference natively within Python by uncommenting example code in the `__main__` section.
+>      - To run inference on the SCITAS cluster (Kuma), see `scripts_on_cluster/contrastive_pretraining_inference`. Note that running inference on all data will produce 200–300 GB of data. For quick inspection, it probably suffice to run inference only for one trial, one fly (e.g. `fly5_trial005` reserved for testing).
+> 4. Run `python src/biomechpose/pose_estimation/scripts/visualize_latents.py` to generate videos showing the latent-space trajectories of selected behavior snippets.
+
+### Part V: Generalized pose estimation
 TODO

@@ -111,7 +111,7 @@ class ContrastivePretrainingPipeline:
         # Set up optimizer
         optimizer = self._create_optimizer(adam_kwargs)
 
-        # Set up mixed-point training
+        # Set up mixed-precision training
         amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         check_mixed_precision_status(
             self.use_float16,
