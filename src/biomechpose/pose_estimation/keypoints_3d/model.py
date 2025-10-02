@@ -535,6 +535,7 @@ class Pose2p5DLoss(nn.Module):
                 (batch_size, n_keypoints).
             bin_values (torch.Tensor): Center values (i.e. depths) of each
                 discrete bin. Shape: (depth_n_bins,).
+
         Returns:
             torch.Tensor: Computed L1 loss (scalar).
         """
@@ -550,7 +551,7 @@ class Pose2p5DLoss(nn.Module):
         xy_labels_heatmap: torch.Tensor,
         heatmap_shape: tuple[int, int],
         clamp_to_range: bool = False,
-    ) -> tuple[bool, torch.Tensor | None]:
+    ) -> tuple[bool, torch.Tensor]:
         """Check if x-y labels are within the heatmap dimensions. Log a
         warning if any label is out of bounds.
 
@@ -562,13 +563,14 @@ class Pose2p5DLoss(nn.Module):
                 (n_rows, n_cols).
             clamp_to_range (bool): If True, clamp out-of-bounds labels to
                 the valid range and return the clamped version of
-                xy_labels_heatmap. If False, the clamping step is skipped
-                and None is returned instead.
+                xy_labels_heatmap. If False, the original labels are
+                returned.
 
         Returns:
             bool: True if any label is out of bounds, False otherwise.
-            torch.Tensor | None: Clamped version of xy_labels_heatmap if
-                clamp_to_range is True, None otherwise.
+            torch.Tensor: Clamped version of xy_labels_heatmap if
+                clamp_to_range is True, original xy_labels_heatmap
+                otherwise.
         """
         n_rows, n_cols = heatmap_shape
         max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=xy_labels_heatmap.device)
@@ -580,18 +582,16 @@ class Pose2p5DLoss(nn.Module):
             )
 
         if clamp_to_range:
-            labels_clamped = torch.clamp(xy_labels_heatmap, min=0, max=max_xy)
-        else:
-            labels_clamped = None
+            xy_labels_heatmap = torch.clamp(xy_labels_heatmap, min=0, max=max_xy)
 
-        return is_bad, labels_clamped
+        return is_bad, xy_labels_heatmap
 
     @staticmethod
     def _check_depth_labels(
         depth_labels: torch.Tensor,
         bin_values: torch.Tensor,
         clamp_to_range: bool = False,
-    ) -> tuple[bool, torch.Tensor | None]:
+    ) -> tuple[bool, torch.Tensor]:
         """Check if depth labels are within the range of depth bins. Log a
         warning if any label is out of bounds.
 
@@ -603,12 +603,12 @@ class Pose2p5DLoss(nn.Module):
             clamp_to_range (bool): If True, clamp out-of-bounds labels to
                 the valid range and return the clamped version of
                 depth_labels. If False, the clamping step is skipped and
-                None is returned instead.
+                the original labels are returned.
 
         Returns:
             bool: True if any label is out of bounds, False otherwise.
-            torch.Tensor | None: Clamped version of depth_labels if
-                clamp_to_range is True, None otherwise.
+            torch.Tensor: Clamped version of depth_labels if clamp_to_range
+                is True, original depth_labels otherwise.
         """
         is_bad = (depth_labels < bin_values[0]).any() or (
             depth_labels > bin_values[-1]
@@ -621,11 +621,9 @@ class Pose2p5DLoss(nn.Module):
 
         if clamp_to_range:
             dmin, dmax = bin_values[0], bin_values[-1]
-            labels_clamped = torch.clamp(depth_labels, min=dmin, max=dmax)
-        else:
-            labels_clamped = None
+            depth_labels = torch.clamp(depth_labels, min=dmin, max=dmax)
 
-        return is_bad, labels_clamped
+        return is_bad, depth_labels
 
     def forward(
         self,
@@ -665,7 +663,11 @@ class Pose2p5DLoss(nn.Module):
         xy_labels_heatmap = xy_labels.clone()
         xy_labels_heatmap[..., 0] = xy_labels[..., 0] / heatmap_stride_cols
         xy_labels_heatmap[..., 1] = xy_labels[..., 1] / heatmap_stride_rows
-        self._check_xy_labels(xy_labels_heatmap, (n_rows_out, n_cols_out))
+        _, xy_labels_heatmap = self._check_xy_labels(
+            xy_labels_heatmap,
+            (n_rows_out, n_cols_out),
+            clamp_to_range=self.clamp_labels,
+        )
 
         # Expand xy labels to heatmap labels
         heatmap_labels = self._expand_xy_labels_to_gaussian_heatmaps(
@@ -678,16 +680,17 @@ class Pose2p5DLoss(nn.Module):
         )
 
         # Compute depth losses
-        self._check_depth_labels(depth_labels, bin_values)
+        _, depth_labels = self._check_depth_labels(
+            depth_labels, bin_values, clamp_to_range=self.clamp_labels
+        )
         depth_ce_loss = self._compute_depth_ce_loss(
             depth_logits,
             depth_labels,
             bin_values,
             self.depth_sigma_bins,
-            clamp_labels=self.clamp_labels,
         )
         depth_l1_loss = self._compute_depth_l1_loss(
-            depth_logits, depth_labels, bin_values, clamp_labels=self.clamp_labels
+            depth_logits, depth_labels, bin_values
         )
 
         # Compute final loss
