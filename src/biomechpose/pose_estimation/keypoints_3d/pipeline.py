@@ -179,7 +179,12 @@ class Pose2p5DPipeline:
                     checkpoint_path = (
                         checkpoint_dir / f"epoch{epoch_idx}_step{step_idx}.pt"
                     )
-                    self._save_checkpoint(checkpoint_path)
+                    self._save_checkpoint(
+                        checkpoint_path,
+                        model=self.model,
+                        optimizer=optimizer,
+                        grad_scaler=amp_scaler,
+                    )
                     logging.info(f"Saved checkpoint to {checkpoint_path}")
 
             epoch_wall_time = time.time() - epoch_start_time
@@ -320,8 +325,14 @@ class Pose2p5DPipeline:
             writer.add_scalar(f"val/loss/{key}", value, global_step_idx)
         logging.info(log_str)
 
-    def _save_checkpoint(self, checkpoint_path: Path) -> None:
-        torch.save(self.model.state_dict(), checkpoint_path)
+    @staticmethod
+    def _save_checkpoint(checkpoint_path: Path, model, optimizer, grad_scaler) -> None:
+        state = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "grad_scaler": grad_scaler.state_dict(),
+        }
+        torch.save(state, checkpoint_path)
 
     def _check_amp_status_during_training(
         self,

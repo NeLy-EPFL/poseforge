@@ -540,39 +540,64 @@ class Pose2p5DLoss(nn.Module):
         return l1_loss
 
     def _check_xy_labels(
-        self, xy_labels_heatmap: torch.Tensor, heatmap_shape: tuple[int, int]
+        self,
+        xy_labels_heatmap: torch.Tensor,
+        heatmap_shape: tuple[int, int],
+        clamp_to_range: bool = False,
     ) -> bool:
-        """Check if x-y labels are within the heatmap dimensions. Return
-        True if all labels are valid, False otherwise (and log a warning).
+        """Check if x-y labels are within the heatmap dimensions. Log a
+        warning if any label is out of bounds.
+
+        If clamp_to_range is False, return False if any label is out of
+        bounds, or True otherwise.
+
+        If clamp_to_range is True, clamp the labels to be within the valid
+        range and return the clamped version of xy_labels_heatmap.
         """
         n_rows, n_cols = heatmap_shape
         max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=xy_labels_heatmap.device)
-        too_small = (xy_labels_heatmap < 0).any()
-        too_large = (xy_labels_heatmap > max_xy).any()
-        if too_small or too_large:
+        is_bad = (xy_labels_heatmap < 0).any() or (xy_labels_heatmap > max_xy).any()
+        if is_bad:
             logging.warning(
                 "Some x-y labels are outside the heatmap dimensions. "
                 "This may cause bad values in the loss."
             )
-            return False
-        return True
+
+        if clamp_to_range:
+            xy_labels_heatmap = torch.clamp(xy_labels_heatmap, min=0, max=max_xy)
+            return xy_labels_heatmap
+        else:
+            return not is_bad
 
     @staticmethod
     def _check_depth_labels(
-        depth_labels: torch.Tensor, bin_values: torch.Tensor
+        depth_labels: torch.Tensor,
+        bin_values: torch.Tensor,
+        clamp_to_range: bool = False,
     ) -> bool:
-        """Check if depth labels are within the range of depth bins. Return
-        True if all labels are valid, False otherwise (and log a warning).
+        """Check if depth labels are within the range of depth bins. Log a
+        warning if any label is out of bounds.
+
+        If clamp_to_range is False, return False if any label is out of
+        bounds, or True otherwise.
+
+        If clamp_to_range is True, clamp the labels to be within the valid
+        range and return the clamped version of depth_labels.
         """
-        too_small = (depth_labels < bin_values[0]).any()
-        too_large = (depth_labels > bin_values[-1]).any()
-        if too_small or too_large:
+        is_bad = (depth_labels < bin_values[0]).any() or (
+            depth_labels > bin_values[-1]
+        ).any()
+        if is_bad:
             logging.warning(
                 "Some depth labels are outside the range of depth bins. "
                 "This may cause bad values in the loss."
             )
-            return False
-        return True
+        if clamp_to_range:
+            dmin, dmax = bin_values[0], bin_values[-1]
+            depth_labels = torch.clamp(depth_labels, min=dmin, max=dmax)
+            return depth_labels
+        else:
+            return not is_bad
 
     def forward(
         self,
