@@ -1,7 +1,6 @@
 import random
 import torch
 import numpy as np
-import pandas as pd
 import os
 import psutil
 import gc
@@ -165,7 +164,7 @@ def check_mixed_precision_status(
 
     Args:
         use_float16 (bool): Whether mixed precision is intended to be used.
-        device (torch.device): Device where tensors are located.F
+        device (torch.device): Device where tensors are located.
         tensors (dict[str, torch.Tensor | Iterator[torch.Tensor]] | None):
             Optional dictionary of tensors or iterables of tensors to check dtypes
             for. Note that these can also be model parameters.

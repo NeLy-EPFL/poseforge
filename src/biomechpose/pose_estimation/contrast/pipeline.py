@@ -27,6 +27,10 @@ class ContrastivePretrainingPipeline:
         self.feature_extractor = feature_extractor.to(device)
         self.projection_head = projection_head.to(device)
         self.device = device
+        if torch.cuda.is_available() and "cuda" in str(self.device):
+            self.device_type = "cuda"
+        else:
+            self.device_type = "cpu"
         self.use_float16 = use_float16
 
     def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
@@ -108,7 +112,7 @@ class ContrastivePretrainingPipeline:
         optimizer = self._create_optimizer(adam_kwargs)
 
         # Set up mixed-point training
-        amp_scaler = torch.amp.GradScaler(self.device, enabled=self.use_float16)
+        amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         check_mixed_precision_status(
             self.use_float16,
             self.device,
@@ -137,7 +141,7 @@ class ContrastivePretrainingPipeline:
                 collapsed_batch = collapse_batch(concatenated_batch)
 
                 # Run models
-                with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+                with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
                     h_features_pooled = F.adaptive_avg_pool2d(
                         h_features, (1, 1)
@@ -193,7 +197,7 @@ class ContrastivePretrainingPipeline:
                     running_start_time = time.time()
 
                 # Save checkpoint
-                if (step_idx) % checkpoint_interval == 0:
+                if step_idx % checkpoint_interval == 0:
                     checkpoint_path_stem = (
                         checkpoint_dir
                         / f"checkpoint_epoch{epoch_idx:03d}_step{step_idx:06d}"
@@ -202,7 +206,7 @@ class ContrastivePretrainingPipeline:
                     logging.info(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
 
                 # Run validation
-                if (step_idx) % validation_interval == 0 and step_idx > 0:
+                if step_idx % validation_interval == 0 and step_idx > 0:
                     logging.info(
                         f"Running validation over the first {nbatches_per_validation} "
                         "batches in the validation set"
@@ -277,7 +281,7 @@ class ContrastivePretrainingPipeline:
                 collapsed_batch = collapse_batch(concatenated_batch)
 
                 # Forward pass with mixed precision
-                with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+                with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
                     h_features_pooled = F.adaptive_avg_pool2d(
                         h_features, (1, 1)
@@ -339,7 +343,7 @@ class ContrastivePretrainingPipeline:
         # Run models
         with torch.no_grad():
             batch = batch.to(self.device, non_blocking=True)
-            with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+            with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                 h_features = self.feature_extractor(batch)
                 h_features_pooled = F.adaptive_avg_pool2d(h_features, (1, 1)).flatten(
                     start_dim=1
