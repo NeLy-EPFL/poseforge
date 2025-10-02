@@ -4,7 +4,8 @@ import h5py
 import cv2
 import imageio.v2 as imageio
 import json
-from torch.utils.data import Dataset
+import logging
+from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Iterator
@@ -14,6 +15,7 @@ from biomechpose.util import (
     read_frames_from_video,
     round_up_to_multiple,
     default_video_writing_ffmpeg_params,
+    get_hardware_availability,
 )
 
 
@@ -795,6 +797,51 @@ def collapse_batch(
             )
             collapsed_sim_data[key] = collapsed_data
         return collapsed_frames, collapsed_sim_data
+
+
+def init_atomic_dataset_and_dataloader(
+    data_dirs: list[str | Path],
+    atomic_batch_nsamples: int,
+    atomic_batch_nvariants: int,
+    image_size: tuple[int, int],
+    train_batch_size: int,
+    shuffle: bool = False,
+    num_workers: int | None = None,
+    num_channels: int = 3,
+    pin_memory: bool = True,
+    drop_last: bool = True,
+):
+    # Set up atomic datasets
+    dataset = AtomicBatchDataset(
+        data_dirs=[Path(path) for path in data_dirs],
+        n_variants=atomic_batch_nvariants,
+        image_size=image_size,
+        n_channels=num_channels,
+    )
+
+    # Check if batch size is valid
+    train_n_atomic_batches_per_batch = train_batch_size // atomic_batch_nsamples
+    if not train_batch_size % atomic_batch_nsamples == 0:
+        raise ValueError(
+            "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
+        )
+
+    # Create parallel dataloaders
+    num_workers = num_workers
+    if num_workers is None:
+        hardware_avail = get_hardware_availability()
+        num_workers = hardware_avail["num_cpu_cores_available"]
+        logging.info(f"Using {num_workers} data loading workers")
+    dataloader = DataLoader(
+        dataset,
+        batch_size=train_n_atomic_batches_per_batch,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+    )
+
+    return dataset, dataloader
 
 
 def _test_throughput():

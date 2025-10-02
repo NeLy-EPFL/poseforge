@@ -18,7 +18,7 @@ class Pose2p5DPipeline:
     def __init__(
         self,
         model: Pose2p5DModel,
-        loss: Pose2p5DLoss,
+        loss_func: Pose2p5DLoss,
         depth_offset: float = 100.0,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
@@ -26,7 +26,7 @@ class Pose2p5DPipeline:
         """
         Args:
             model (Pose2p5DModel): Model to train.
-            loss (Pose2p5DLoss): Loss function.
+            loss_func (Pose2p5DLoss): Loss function.
             depth_offset (float): Use `depth_label - depth_offset` as the
                 target for depth prediction. Practically, set this to the
                 working distance of the camera (distance between camera and
@@ -35,7 +35,7 @@ class Pose2p5DPipeline:
             use_float16 (bool): Whether to use mixed-precision in training.
         """
         self.model = model.to(device)
-        self.loss = loss.to(device)
+        self.loss_func = loss_func.to(device)
         self.depth_offset = depth_offset
         self.device = device
         if torch.cuda.is_available() and "cuda" in str(self.device):
@@ -111,7 +111,7 @@ class Pose2p5DPipeline:
                     depth_labels_adjusted = (
                         sim_data_collapsed["keypoint_pos"][:, :, 2] - self.depth_offset
                     )
-                    loss_dict = self.loss(
+                    loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,
                         depth_labels=depth_labels_adjusted,
@@ -246,7 +246,7 @@ class Pose2p5DPipeline:
                     depth_labels_adjusted = (
                         sim_data_collapsed["keypoint_pos"][:, :, 2] - self.depth_offset
                     )
-                    loss_dict = self.loss(
+                    loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,
                         depth_labels=depth_labels_adjusted,
