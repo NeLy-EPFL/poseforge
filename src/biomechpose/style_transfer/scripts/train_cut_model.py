@@ -6,7 +6,6 @@ import time
 import torch
 import numpy as np
 import wandb
-import pickle
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -179,4 +178,3 @@ if __name__ == "__main__":
         visualizer.close()
     if opt.wandb_project:
         wandb.finish()
-
