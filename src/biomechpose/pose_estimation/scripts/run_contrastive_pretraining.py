@@ -116,7 +116,7 @@ def pretrain_contrastive_model(
         atomic_batch_nsamples=sampling.atomic_batch_nsamples,
         atomic_batch_nvariants=sampling.atomic_batch_nvariants,
         image_size=data.image_size,
-        train_batch_size=sampling.train_batch_size,
+        batch_size=sampling.train_batch_size,
         num_workers=sampling.num_workers,
         num_channels=3,
     )
@@ -125,7 +125,7 @@ def pretrain_contrastive_model(
         atomic_batch_nsamples=sampling.atomic_batch_nsamples,
         atomic_batch_nvariants=sampling.atomic_batch_nvariants,
         image_size=data.image_size,
-        train_batch_size=sampling.val_batch_size,
+        batch_size=sampling.val_batch_size,
         num_workers=sampling.num_workers,
         num_channels=3,
     )

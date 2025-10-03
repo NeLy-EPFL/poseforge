@@ -35,7 +35,7 @@ if __name__ == "__main__":
         "bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/inference/"
     )
     output_basedir = Path(
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_202501001a/latents_viz/"
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/latents_viz/"
     )
     example_sims = [
         "BO_Gal4_fly5_trial005/segment_003/subsegment_000",  # walking

@@ -808,7 +808,7 @@ def init_atomic_dataset_and_dataloader(
     atomic_batch_nsamples: int,
     atomic_batch_nvariants: int,
     image_size: tuple[int, int],
-    train_batch_size: int,
+    batch_size: int,
     load_dof_angles: bool = False,
     load_keypoint_positions: bool = False,
     load_body_segment_maps: bool = False,
@@ -818,6 +818,42 @@ def init_atomic_dataset_and_dataloader(
     pin_memory: bool = True,
     drop_last: bool = True,
 ):
+    """
+    Initializes an AtomicBatchDataset and a corresponding DataLoader for
+    training.
+    
+    Args:
+        data_dirs (list[str | Path]): List of directories that (potentially
+            recursively) contain the data.
+        atomic_batch_nsamples (int): Number of samples (unique frames from
+            NeuroMechFly simulation) in each atomic batch.
+        atomic_batch_nvariants (int): Number of variants in each atomic
+            batch.
+        image_size (tuple[int, int]): Size of the images (height, width).
+        batch_size (int): Desired batch size. Must be a multiple of
+            atomic_batch_nsamples.  TODO: further divide by n_variants?
+        load_dof_angles (bool, optional): Whether to load degree-of-freedom
+            angles. Defaults to False.
+        load_keypoint_positions (bool, optional): Whether to load keypoint
+            positions. Defaults to False.
+        load_body_segment_maps (bool, optional): Whether to load body
+            segment maps. Defaults to False.
+        shuffle (bool, optional): Whether to shuffle the data. Defaults to
+            False.
+        num_workers (int | None, optional): Number of worker threads for
+            data loading. If None, uses available CPU cores.
+        num_channels (int, optional): Number of image channels. Default 3.
+        pin_memory (bool, optional): Whether to use pinned memory in
+            DataLoader. Defaults to True.
+        drop_last (bool, optional): Whether to drop the last incomplete
+            batch. Defaults to True.
+            
+    Returns:
+        dataset (AtomicBatchDataset):
+            The initialized dataset.
+        dataloader (torch.utils.data.DataLoader):
+            The corresponding dataloader.
+    """
     # Set up atomic datasets
     dataset = AtomicBatchDataset(
         data_dirs=[Path(path) for path in data_dirs],
@@ -830,8 +866,8 @@ def init_atomic_dataset_and_dataloader(
     )
 
     # Check if batch size is valid
-    train_n_atomic_batches_per_batch = train_batch_size // atomic_batch_nsamples
-    if not train_batch_size % atomic_batch_nsamples == 0:
+    n_atomic_batches_per_batch = batch_size // atomic_batch_nsamples
+    if not batch_size % atomic_batch_nsamples == 0:
         raise ValueError(
             "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
         )
@@ -844,7 +880,7 @@ def init_atomic_dataset_and_dataloader(
         logging.info(f"Using {num_workers} data loading workers")
     dataloader = DataLoader(
         dataset,
-        batch_size=train_n_atomic_batches_per_batch,
+        batch_size=n_atomic_batches_per_batch,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory,
