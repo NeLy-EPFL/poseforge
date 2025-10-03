@@ -29,6 +29,7 @@ python -u $extraction_cli_path \
     --atomic-batch-nframes 32 \
     --atomic-batch-nvariants-max 4 \
     --minimum-time-diff-frames 60 \
+    --original-image-size 464 464 \
     --input-basedir <<<INPUT_BASEDIR>>> \
     --nmf-sim-rendering-basedir bulk_data/nmf_rendering \
     --output-dir <<<OUTPUT_DIR>>>
