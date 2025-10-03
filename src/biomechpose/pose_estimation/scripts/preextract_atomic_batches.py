@@ -19,6 +19,7 @@ def extract_atomic_batches(
     input_basedir: Path | str,
     nmf_sim_rendering_basedir: Path | str,
     output_dir: Path | str,
+    original_image_size: tuple[int, int] | None,
     n_jobs: int = -1,
     logging_interval: int = 100,
     cache_metadata: bool = True,
@@ -54,6 +55,11 @@ def extract_atomic_batches(
         nmf_sim_rendering_basedir (Path | str): The base directory for NMF
             simulation rendering.
         output_dir (Path | str): The output directory for atomic batches.
+        original_image_size (tuple[int, int] | None): The original image
+            size (H, W) before the images were downsampled in
+
+            . If not None, 2D keypoint positions
+            will be scaled to match the output image size.
         n_jobs (int, optional): The number of jobs to run in parallel. 0 =
             run in a plain loop; -1 = use all available cores. Defaults to
             -1.
@@ -109,6 +115,7 @@ def extract_atomic_batches(
             synthetic_video_paths,
             simulated_labels_path,
             sim_name=f"{exp_trial}/{segment}/{subsegment}",
+            original_image_size=original_image_size,
             cache_metadata=cache_metadata,
             use_cached_metadata=use_cached_metadata,
         )
@@ -220,6 +227,7 @@ if __name__ == "__main__":
     #     input_basedir="bulk_data/style_transfer/production/translated_videos",
     #     nmf_sim_rendering_basedir="bulk_data/nmf_rendering/",
     #     output_dir="bulk_data/pose_estimation/atomic_batches",
+    #     original_image_size=(464, 464),
     #     n_jobs=-1,
     #     logging_interval=100,
     #     cache_metadata=True,

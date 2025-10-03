@@ -27,10 +27,12 @@ class SimulatedDataSequence:
         sim_name: str = "",
         cache_metadata: bool = True,
         use_cached_metadata: bool = True,
+        original_image_size: tuple[int, int] | None = None,
     ):
         self.synthetic_video_paths = synthetic_video_paths
         self.simulated_labels_path = simulated_labels_path
         self.sim_name = sim_name
+        self.original_image_size = original_image_size
 
         # Validate input paths
         for path in synthetic_video_paths:
@@ -50,6 +52,14 @@ class SimulatedDataSequence:
         self.n_frames, self.frame_size, self.fps = self._get_metadata(
             synthetic_video_paths[0], cache_metadata, use_cached_metadata
         )
+
+        # If image has been downsampled from the original, compute the zoom factor and
+        # return keypoint positions converted to the scale of output images.
+        if original_image_size is not None:
+            zoom_factor = np.array(self.frame_size) / np.array(original_image_size)
+        else:
+            zoom_factor = np.array([1.0, 1.0])
+        self.image_zoom_factor = zoom_factor
 
     def _get_metadata(self, sample_video_path, cache_metadata, use_cached_metadata):
         # Already checked that all videos are under the same directory, so just save the
@@ -156,6 +166,9 @@ class SimulatedDataSequence:
                 assert (
                     len(keypoint_pos.shape) == 3 and keypoint_pos.shape[2] == 3
                 ), f"Unexpected keypoint_pos shape: {keypoint_pos.shape}"
+                # Rescale to match output image size if original size is different
+                if self.original_image_size is not None:
+                    keypoint_pos[:, :, :2] *= self.image_zoom_factor[None, None, :]
                 labels["keypoint_pos"] = keypoint_pos
 
             if load_mesh_states:
@@ -821,7 +834,7 @@ def init_atomic_dataset_and_dataloader(
     """
     Initializes an AtomicBatchDataset and a corresponding DataLoader for
     training.
-    
+
     Args:
         data_dirs (list[str | Path]): List of directories that (potentially
             recursively) contain the data.
@@ -847,7 +860,7 @@ def init_atomic_dataset_and_dataloader(
             DataLoader. Defaults to True.
         drop_last (bool, optional): Whether to drop the last incomplete
             batch. Defaults to True.
-            
+
     Returns:
         dataset (AtomicBatchDataset):
             The initialized dataset.
