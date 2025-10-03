@@ -731,7 +731,7 @@ def concat_atomic_batches(
                 data, where each value is a tensor of shape
                 (n_atomic_batches * n_frames, ...)
     """
-    n_atomic_batches = frames.shape[0]
+    n_atomic_batches, n_variants, _, _, _, _ = frames.shape
     # list_of_atomic_batches: each element has shape (n_variants, n_frames, n_channels
     # n_rows, n_cols). Then concatenate along dim 1 (n_frames)
     list_of_atomic_batches = [frames[i, ...] for i in range(n_atomic_batches)]
@@ -745,6 +745,10 @@ def concat_atomic_batches(
         for key, data in sim_data.items():
             # data has shape (n_atomic_batches, n_frames, ...). Now add a n_variants dim
             data = data.unsqueeze(1)
+            # Repeat along n_variants times along the new dim
+            repeats = [1] * data.ndim
+            repeats[1] = n_variants
+            data = data.repeat(*repeats)
             # list_of_sim_data: each element has shape (n_variants, n_frames, ...).
             list_of_sim_data = [data[i, ...] for i in range(n_atomic_batches)]
             # Then concatenate along dim 1 (n_frames)
@@ -805,6 +809,9 @@ def init_atomic_dataset_and_dataloader(
     atomic_batch_nvariants: int,
     image_size: tuple[int, int],
     train_batch_size: int,
+    load_dof_angles: bool = False,
+    load_keypoint_positions: bool = False,
+    load_body_segment_maps: bool = False,
     shuffle: bool = False,
     num_workers: int | None = None,
     num_channels: int = 3,
@@ -817,6 +824,9 @@ def init_atomic_dataset_and_dataloader(
         n_variants=atomic_batch_nvariants,
         image_size=image_size,
         n_channels=num_channels,
+        load_dof_angles=load_dof_angles,
+        load_keypoint_positions=load_keypoint_positions,
+        load_body_segment_maps=load_body_segment_maps,
     )
 
     # Check if batch size is valid

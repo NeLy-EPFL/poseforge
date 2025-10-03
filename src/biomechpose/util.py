@@ -155,7 +155,7 @@ def check_mixed_precision_status(
     use_float16: bool,
     device: torch.device,
     tensors: dict[str, torch.Tensor | Iterator[torch.Tensor]] | None = None,
-    amp_scaler: torch.amp.GradScaler | None = None,
+    grad_scaler: torch.amp.GradScaler | None = None,
     print_results: bool = False,
     subtitle: str | None = None,
 ) -> dict:
@@ -182,13 +182,13 @@ def check_mixed_precision_status(
         "device_supports_half": torch.cuda.is_available()
         and torch.cuda.get_device_capability()[0] >= 7,
     }
-    if amp_scaler is not None:
-        status["amp_scaler_enabled"] = amp_scaler.is_enabled()
+    if grad_scaler is not None:
+        status["amp_scaler_enabled"] = grad_scaler.is_enabled()
 
     # Check model parameter dtypes
     if tensors is not None:
         for name, thing in tensors.items():
-            if isinstance(thing, torch.Tensor):
+            if isinstance(thing, (torch.Tensor, np.ndarray, float, int)):
                 thing = [thing]
             dtypes = set(p.dtype for p in thing)
             status[f"{name}_param_dtypes"] = [str(dt) for dt in sorted(dtypes)]

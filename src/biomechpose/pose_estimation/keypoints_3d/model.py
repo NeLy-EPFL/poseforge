@@ -10,7 +10,8 @@ class Pose2p5DModel(nn.Module):
     """A 3D keypoint detection model, but implemented in "2.5D", i.e:
         - A x-y pathway predicts heatmaps for each keypoint in the 2D image
           plane of the camera. The (x, y) coordinates of each keypoint are
-          obtained by taking the argmax of the predicted heatmap.
+          obtained by taking the soft-argmax (expectation) of the predicted
+          heatmap.
         - A depth pathway predicts a probability distribution over
           quantized depth bins for each keypoint. The depth value of each
           keypoint is obtained by taking the expectation of the predicted
@@ -591,6 +592,7 @@ class Pose2p5DLoss(nn.Module):
                 otherwise.
         """
         n_rows, n_cols = heatmap_shape
+        min_xy = torch.tensor([0, 0], device=xy_labels_heatmap.device)
         max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=xy_labels_heatmap.device)
         is_bad = (xy_labels_heatmap < 0).any() or (xy_labels_heatmap > max_xy).any()
         if is_bad:
@@ -600,7 +602,7 @@ class Pose2p5DLoss(nn.Module):
             )
 
         if clamp_to_range:
-            xy_labels_heatmap = torch.clamp(xy_labels_heatmap, min=0, max=max_xy)
+            xy_labels_heatmap = torch.clamp(xy_labels_heatmap, min=min_xy, max=max_xy)
 
         return is_bad, xy_labels_heatmap
 

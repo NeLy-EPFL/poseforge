@@ -141,7 +141,7 @@ def _init_model_from_config(
     feature_extractor: ResNetFeatureExtractor, model_config: ModelConfig
 ) -> Pose2p5DModel:
     model = Pose2p5DModel(
-        num_keypoints=model_config.n_keypoints,
+        n_keypoints=model_config.n_keypoints,
         feature_extractor=feature_extractor,
         depth_n_bins=model_config.depth_n_bins,
         depth_min=model_config.depth_min,
@@ -223,6 +223,7 @@ def train_keypoints3d_model(
         atomic_batch_nvariants=sampling.atomic_batch_nvariants,
         image_size=data.image_size,
         train_batch_size=sampling.train_batch_size,
+        load_keypoint_positions=True,
         num_workers=sampling.num_workers,
         num_channels=3,
         shuffle=True,
@@ -233,6 +234,7 @@ def train_keypoints3d_model(
         atomic_batch_nvariants=sampling.atomic_batch_nvariants,
         image_size=data.image_size,
         train_batch_size=sampling.val_batch_size,
+        load_keypoint_positions=True,
         num_workers=sampling.num_workers,
         num_channels=3,
         shuffle=False,
@@ -277,8 +279,84 @@ def train_keypoints3d_model(
 if __name__ == "__main__":
     import tyro
 
-    args = tyro.cli(
-        train_keypoints3d_model,
-        prog=f"python {Path(__file__).name}",
-        description="Train a 3D keypoint detection model using pretrained feature extractor.",
+    # args = tyro.cli(
+    #     train_keypoints3d_model,
+    #     prog=f"python {Path(__file__).name}",
+    #     description="Train a 3D keypoint detection model using pretrained feature extractor.",
+    # )
+    
+    sampling_config = SamplingConfig(
+        atomic_batch_nsamples=32,
+        atomic_batch_nvariants=4,
+        train_batch_size=32,  # consumes ~7 GB GPU memory, limit on my 3080 Ti
+        val_batch_size=32,
+        num_workers=8,
+    )
+    pretraining_trial_dir = Path(
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/"
+    )
+    checkpoint_to_use = (
+        pretraining_trial_dir
+        / "checkpoints/checkpoint_epoch009_step003000.feature_extractor.pth"
+    )
+    model_config = ModelConfig(
+        feature_extractor_weights=str(checkpoint_to_use),
+        model_weights=None,
+        projection_head_hidden_dim=512,
+        projection_head_output_dim=256,
+        n_keypoints=32,
+        depth_n_bins=64,
+        depth_min=0.0,
+        depth_max=2.0,
+        xy_temperature=0.8,
+        depth_temperature=0.8,
+        upsample_n_layers=3,
+        upsample_n_hidden_channels=256,
+        depth_n_hidden_channels=256,
+        confidence_method="entropy",
+        groupnorm_n_groups=32,
+        pose_head_init_std=1e-3,
+    )
+    loss_config = LossConfig(
+        heatmap_loss_func="kl",
+        heatmap_sigma=2.0,
+        depth_sigma_bins=1.0,
+        xy_loss_weight=4.0,
+        depth_ce_loss_weight=1.0,
+        depth_l1_loss_weight=0.25,
+        clamp_labels=True,
+    )
+    data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
+    train_data_dirs = [
+        data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+        for fly in range(1, 5)  # flies 1-4
+        for trial in range(1, 6)  # trials 1-5
+    ]
+    val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
+    data_config = DataConfig(
+        train_data_dirs=[str(path) for path in train_data_dirs],
+        val_data_dirs=[str(path) for path in val_data_dirs],
+        image_size=(256, 256),
+        depth_offset=100.0,
+    )
+    training_config = TrainingConfig(
+        num_epochs=10,
+        seed=42,
+        adam_lr=3e-4,
+        adam_weight_decay=1e-4,
+    )
+    output_config = OutputConfig(
+        output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20250103a/",
+        logging_interval=10,
+        checkpoint_interval=500,
+        validation_interval=500,
+        nbatches_per_validation=300,
+    )
+    train_keypoints3d_model(
+        sampling=sampling_config,
+        model=model_config,
+        loss=loss_config,
+        data=data_config,
+        training=training_config,
+        output=output_config,
     )

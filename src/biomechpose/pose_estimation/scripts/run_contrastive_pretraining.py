@@ -244,15 +244,13 @@ if __name__ == "__main__":
     #     projection_head_hidden_dim=512,
     #     projection_head_output_dim=256,
     # )
-    # data_base_dir = Path("bulk_data/pose_estimation/atomic_batches")
+    # data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
     # train_data_dirs = [
-    #     data_base_dir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+    #     data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
     #     for fly in range(1, 5)  # flies 1-4
     #     for trial in range(1, 6)  # trials 1-5
     # ]
-    # val_data_dirs = [data_base_dir / f"BO_Gal4_fly1_trial001"]
-    # for d in train_data_dirs + val_data_dirs:
-    #     print(f"\"{d}\"")
+    # val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
     # data_config = DataConfig(
     #     train_data_dirs=[str(path) for path in train_data_dirs],
     #     val_data_dirs=[str(path) for path in val_data_dirs],
