@@ -35,6 +35,7 @@ def run_inference_cli(
     netG: str,
     training_batch_size: int,
     lambGAN: float,
+    image_side_length: int = 256,
     input_video_filename: str = "processed_nmf_sim_render_colorcode_0.mp4",
     output_video_filename: str = "domain_translated_video.mp4",
     inference_batch_size: int | None = None,
@@ -60,6 +61,7 @@ def run_inference_cli(
             architecture used during training.
         training_batch_size (int): Batch size used during training.
         lambGAN (float): Weight for the GAN loss during training.
+        image_side_length (int): Side length (in pixels) of input images.
         input_video_filename (str): Filename of the input video within each
             simulation directory. For example,
             "processed_nmf_sim_render_colorcode_0.mp4", which is the
@@ -106,6 +108,7 @@ def run_inference_cli(
         "netG": netG,
         "batsize": training_batch_size,
         "lambGAN": lambGAN,
+        "image_side_length": image_side_length,
     }
     inference_pipeline = get_inference_pipeline(checkpoint_path, model_hparams, device)
     if inference_batch_size is None:

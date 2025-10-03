@@ -21,6 +21,7 @@ def test_checkpoint(
     checkpoint_path: Path,
     simulation_data_dirs: list[Path],
     output_basedir: Path,
+    image_side_length: int = 256,
     batch_size: int | None = None,
     device: str | torch.device = "cuda",
     progress_bar: bool = False,
@@ -44,6 +45,7 @@ def test_checkpoint(
         output_basedir: Base directory where output videos should be saved
             (file structure under this directory will be:
             {run_name}/epoch{epoch:03d}_examplesim{i:02d}.mp4)
+        image_side_length: Side length (in px) to scale input images to.
         batch_size: Number of frames to process in a batch. If None, the
             maximum possible batch size will be automatically detected.
         device: Device to run inference on ("cpu" or "cuda")
@@ -55,6 +57,7 @@ def test_checkpoint(
 
     # Parse and save hyperparameters
     model_hparams = parse_hyperparameters_from_trial_name(trial_name)
+    model_hparams["image_side_length"] = image_side_length
     with open(output_dir / "metadata.json", "w") as f:
         metadata = {
             "hyperparameters": model_hparams,
