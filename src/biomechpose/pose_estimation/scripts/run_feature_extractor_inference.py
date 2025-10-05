@@ -52,15 +52,15 @@ def predict_for_dataset(
 
     n_batches = 0
     start_time = time()
-    for batch in dataset.generate_batches(batch_size):
+    for frames, _ in dataset.generate_batches(batch_size):
         # batch: (n_variants * n_frames, n_channels=3, n_rows, n_cols)
         # h_features: (n_variants * n_frames, n_channels=512, *output_feature_map_size)
         # h_features_pooled: (n_variants * n_frames, feature_dim)
         # z_features: (n_variants * n_frames, feature_dim)
-        h_features, h_features_pooled, z_features = pipeline.inference(batch)
+        h_features, h_features_pooled, z_features = pipeline.inference(frames)
 
         # Reshape back to separate variants and frames
-        n_samples_this_batch = batch.shape[0] // dataset.n_variants
+        n_samples_this_batch = frames.shape[0] // dataset.n_variants
         h_features_pooled = h_features_pooled.view(
             dataset.n_variants, n_samples_this_batch, -1
         )
