@@ -113,8 +113,8 @@ class Pose2p5DPipeline:
                     )
                     loss_dict = self.loss_func(
                         pred_dict,
-                        xy_labels=xy_labels,  # TODO: Stride adjustment?
-                        depth_labels=depth_labels_adjusted,  # TODO: Check base depth?
+                        xy_labels=xy_labels,
+                        depth_labels=depth_labels_adjusted,
                         bin_values=self.model.depth_bin_centers,
                     )
 
@@ -283,7 +283,10 @@ class Pose2p5DPipeline:
                     pred_dict["pred_depth"] + self.depth_offset
                 )
         self.model.train()
-        return {k: v.to(input_device) for k, v in pred_dict.items()}
+        return {
+            k: v.to(input_device) if isinstance(v, torch.Tensor) else v
+            for k, v in pred_dict.items()
+        }
 
     def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.model.parameters(), **adam_kwargs)
@@ -350,13 +353,13 @@ class Pose2p5DPipeline:
             self.device,
             print_results=True,
             tensors={
-            "pred_xy_heatmaps": pred_dict["xy_heatmaps"],
-            "pred_depth_logits": pred_dict["depth_logits"],
-            "pred_xy": pred_dict["pred_xy"],
-            "pred_depth": pred_dict["pred_depth"],
-            "pred_conf_xy": pred_dict["conf_xy"],
-            "pred_conf_depth": pred_dict["conf_depth"],
-        },
+                "pred_xy_heatmaps": pred_dict["xy_heatmaps"],
+                "pred_depth_logits": pred_dict["depth_logits"],
+                "pred_xy": pred_dict["pred_xy"],
+                "pred_depth": pred_dict["pred_depth"],
+                "pred_conf_xy": pred_dict["conf_xy"],
+                "pred_conf_depth": pred_dict["conf_depth"],
+            },
             grad_scaler=grad_scaler,
             subtitle=subtitle,
         )
