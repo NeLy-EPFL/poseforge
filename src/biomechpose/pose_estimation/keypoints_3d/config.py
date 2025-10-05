@@ -86,10 +86,10 @@ class TrainingDataConfig(SerializableDataClass):
     # Number of different frames to include in each batch. Note that n_variants variants
     # of each frame will be included, so effective batch size =
     # train_batch_size * n_variants.
-    # This must be a multiple of `atomic_epoch_n_samples` in `AtomicBatchDataset`.
+    # This must be a multiple of `atomic_batch_n_samples` in `AtomicBatchDataset`.
     train_batch_size: int
     # Validation batch size. Can be much smaller than train_batch_size. Must be
-    # a multiple of `atomic_epoch_n_samples` in `AtomicBatchDataset`
+    # a multiple of `atomic_batch_n_samples` in `AtomicBatchDataset`
     val_batch_size: int
     # Number of workers for data loading. Use number of CPU cores if None.
     num_workers: int | None = None

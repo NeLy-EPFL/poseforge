@@ -161,7 +161,7 @@ class AtomicBatchDataset(Dataset):
         image_size: tuple[int, int],
         n_channels: int = 1,
         spacing: int = 10,
-    ) -> np.ndarray:
+    ) -> torch.Tensor:
         """Read an atomic batch of frames from a video file.
 
         Args:
@@ -173,8 +173,8 @@ class AtomicBatchDataset(Dataset):
                 variants. Defaults to 10.
 
         Returns:
-            atomic_batch (np.ndarray): Array of shape (n_variants, n_frames,
-                n_channels, height, width)
+            atomic_batch (torch.Tensor): Tensor of shape (n_variants,
+                n_frames, n_channels, height, width)
         """
         frames, fps = read_frames_from_video(video_path)
         n_frames = len(frames)
@@ -341,7 +341,7 @@ def collapse_batch(
     """
     n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = frames.shape
     # collapsed_frames:
-    # (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
+    # (n_variants * n_atomic_batches * atomic_batch_n_samples, C, H, W)
     collapsed_frames = frames.view(
         n_variants * n_samples_all_atomic_batches, n_channels, nrows, ncols
     )
@@ -425,7 +425,7 @@ def init_atomic_dataset_and_dataloader(
     n_atomic_batches_per_batch = batch_size // atomic_batch_n_samples
     if not batch_size % atomic_batch_n_samples == 0:
         raise ValueError(
-            "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
+            "`train_batch_size` must be a multiple of `atomic_batch_n_samples`"
         )
 
     # Create parallel dataloaders
