@@ -6,6 +6,8 @@ import psutil
 import gc
 import logging
 import imageio.v2 as imageio
+import dataclasses
+import yaml
 from pathlib import Path
 from typing import Any, Iterator
 from matplotlib import pyplot as plt
@@ -203,3 +205,23 @@ def check_mixed_precision_status(
         print("================================================================")
 
     return status
+
+
+@dataclasses.dataclass(frozen=True)
+class SerializableDataClass:
+    def save(self, path: Path | str):
+        if not Path(path).suffix.lower() in [".yaml", ".yml"]:
+            raise ValueError(
+                f"Invalid file extension for {path}. Expected .yaml or .yml"
+            )
+        with open(path, "w") as f:
+            yaml.safe_dump(dataclasses.asdict(self), f, indent=2, sort_keys=False)
+
+    @classmethod
+    def load(cls, path: Path | str):
+        """Load configuration from YAML file"""
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"File does not exist: {path}")
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        return cls(**data)

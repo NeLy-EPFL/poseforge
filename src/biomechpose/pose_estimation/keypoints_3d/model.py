@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import logging
+from pathlib import Path
 
+import biomechpose.pose_estimation.keypoints_3d.config as config
 from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
 
@@ -16,14 +18,14 @@ class Pose2p5DModel(nn.Module):
           quantized depth bins for each keypoint. The depth value of each
           keypoint is obtained by taking the expectation of the predicted
           distribution.
-    
+
     The feature extractor is a ResNet18 model. The intended approach is
     that this model has been pretrained on ImageNet (published by
     torchvision), and pretrained again contrastively on synthetic data.
     When the same simulated frame is rendered by different style transfer
     models into the experimental domain, their feature representations
     should be similar.
-    
+
     Following the feature extractor, there is an upsampling core consisting
     of several ConvTranspose2d (decov) layers. A specialized x-y heatmap
     head and a specialized depth head branch off from the upsampling core,
@@ -123,6 +125,73 @@ class Pose2p5DModel(nn.Module):
             torch.linspace(depth_min, depth_max, depth_n_bins, dtype=torch.float32),
             persistent=False,
         )
+
+    @classmethod
+    def create_architecture_from_config(
+        cls, architecture_config: config.ModelArchitectureConfig | Path | str
+    ) -> "Pose2p5DModel":
+        # Load from file if config is given as a path
+        if isinstance(architecture_config, (Path, str)):
+            architecture_config = config.ModelArchitectureConfig.load(
+                architecture_config
+            )
+            logging.info(f"Loaded model architecture config from {architecture_config}")
+        # Initialize feature extractor (WITHOUT WEIGHTS at this step!)
+        feature_extractor = ResNetFeatureExtractor()
+
+        # Initialize model from config (WITHOUT WEIGHTS at this step!)
+        obj = cls(
+            n_keypoints=architecture_config.n_keypoints,
+            feature_extractor=feature_extractor,
+            depth_n_bins=architecture_config.depth_n_bins,
+            depth_min=architecture_config.depth_min,
+            depth_max=architecture_config.depth_max,
+            xy_temperature=architecture_config.xy_temperature,
+            depth_temperature=architecture_config.depth_temperature,
+            upsample_n_layers=architecture_config.upsample_n_layers,
+            upsample_n_hidden_channels=architecture_config.upsample_n_hidden_channels,
+            depth_n_hidden_channels=architecture_config.depth_n_hidden_channels,
+            confidence_method=architecture_config.confidence_method,
+            groupnorm_n_groups=architecture_config.groupnorm_n_groups,
+            pose_head_init_std=architecture_config.pose_head_init_std,
+        )
+
+        logging.info("Created Pose2p5DModel from architecture config")
+        return obj
+
+    def load_weights_from_config(
+        self, weights_config: config.ModelWeightsConfig | Path | str
+    ):
+        # Load from file if config is given as a path
+        if isinstance(weights_config, (Path, str)):
+            weights_config = config.ModelWeightsConfig.load(weights_config)
+            logging.info(f"Loaded model weights config from {weights_config}")
+
+        # Check if config has either feature extractor weights or full model weights
+        if (
+            weights_config.feature_extractor_weights is None
+            and weights_config.model_weights is None
+        ):
+            logging.warning("weights_config contains nothing useful. No action taken.")
+
+        # If full model weights are provided, load them directly
+        if weights_config.model_weights is not None:
+            checkpoint_path = Path(weights_config.model_weights)
+            if not checkpoint_path.is_file():
+                raise ValueError(f"Model weights path {checkpoint_path} is not a file")
+            weights = torch.load(checkpoint_path, map_location="cpu")
+            self.load_state_dict(weights)
+            logging.info(
+                f"Loaded Pose2p5DModel weights (inc. feature extractor) from config"
+            )
+            return
+
+        # Otherwise, init feature extractor first
+        self.feature_extractor = ResNetFeatureExtractor(
+            # Path, str, or "IMAGENET1K_V1"
+            weights=weights_config.feature_extractor_weights
+        )
+        logging.info("Set up feature extractor from config")
 
     def _build_upsampling_core(self) -> nn.Sequential:
         layers = []
@@ -418,6 +487,29 @@ class Pose2p5DLoss(nn.Module):
             raise ValueError(
                 f'Invalid heatmap_loss: {heatmap_loss_func}. Must be "mse" or "kl".'
             )
+
+    @classmethod
+    def create_from_config(
+        cls, loss_config: config.LossConfig | Path | str
+    ) -> "Pose2p5DLoss":
+        # Load from file if config is given as a path
+        if isinstance(loss_config, (Path, str)):
+            loss_config = config.LossConfig.load(loss_config)
+            logging.info(f"Loaded model loss config from {loss_config}")
+
+        # Initialize loss from config
+        obj = cls(
+            heatmap_loss_func=loss_config.heatmap_loss_func,
+            heatmap_sigma=loss_config.heatmap_sigma,
+            depth_sigma_bins=loss_config.depth_sigma_bins,
+            xy_loss_weight=loss_config.xy_loss_weight,
+            depth_ce_loss_weight=loss_config.depth_ce_loss_weight,
+            depth_l1_loss_weight=loss_config.depth_l1_loss_weight,
+            clamp_labels=loss_config.clamp_labels,
+        )
+
+        logging.info("Created Pose2p5DLoss from loss config")
+        return obj
 
     @staticmethod
     def _expand_xy_labels_to_gaussian_heatmaps(
