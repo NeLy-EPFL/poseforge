@@ -112,14 +112,11 @@ class Pose2p5DPipeline:
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames_collapsed)
                     xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                    depth_labels_adjusted = (
-                        sim_data_collapsed["keypoint_pos"][:, :, 2]
-                        - self.model.depth_offset
-                    )
+                    depth_labels = sim_data_collapsed["keypoint_pos"][:, :, 2]
                     loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,
-                        depth_labels=depth_labels_adjusted,
+                        depth_labels=depth_labels,
                         bin_values=self.model.depth_bin_centers,  # buffered upon init
                     )
 

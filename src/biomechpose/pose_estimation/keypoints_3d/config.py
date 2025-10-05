@@ -14,12 +14,9 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Number of bins to quantize depth values (distances from camera) into
     depth_n_bins: int = 64
     # Minimum depth (distance from camera) in mm
-    depth_min: float = -2.0
+    depth_min: float = -102.0
     # Maximum depth (distance from camera) in mm
-    depth_max: float = 2.0
-    # Base depth of all keypoints in mm. The model will predict the relative depth, i.e.
-    # depth_label - base_depth, instead of the absolute depth.
-    depth_offset: float = -100.0
+    depth_max: float = -98.0
     # Temperature param to regulate the "softness" of the predicted x-y heatmaps
     xy_temperature: float = 0.8
     # Temperature param to regulate the "softness" of the predicted depth distributions

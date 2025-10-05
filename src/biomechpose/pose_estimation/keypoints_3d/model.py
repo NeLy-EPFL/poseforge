@@ -39,7 +39,6 @@ class Pose2p5DModel(nn.Module):
         depth_n_bins: int,
         depth_min: float,
         depth_max: float,
-        depth_offset: float,
         xy_temperature: float,
         depth_temperature: float,
         upsample_n_layers: int = 3,
@@ -58,11 +57,6 @@ class Pose2p5DModel(nn.Module):
                 prediction.
             depth_min (float): Minimum depth value (closest to camera).
             depth_max (float): Maximum depth value (farthest from camera).
-            depth_offset (float): Offset for depth prediction. Encapsulated
-                from the caller, the core depth head will predict depth
-                values relative to this offset. Note that this is purely
-                within the internal logic of the model; the returned depth
-                predictions will NOT have this offset subtracted.
             xy_temperature (float): Temperature for soft-argmax in x-y
                 heatmaps.
             depth_temperature (float): Temperature for soft-argmax in depth
@@ -89,7 +83,6 @@ class Pose2p5DModel(nn.Module):
         self.depth_n_bins = depth_n_bins
         self.depth_min = depth_min
         self.depth_max = depth_max
-        self.depth_offset = depth_offset
         self.xy_temperature = xy_temperature
         self.depth_temperature = depth_temperature
         self.upsample_n_layers = upsample_n_layers
@@ -153,7 +146,6 @@ class Pose2p5DModel(nn.Module):
             depth_n_bins=architecture_config.depth_n_bins,
             depth_min=architecture_config.depth_min,
             depth_max=architecture_config.depth_max,
-            depth_offset=architecture_config.depth_offset,
             xy_temperature=architecture_config.xy_temperature,
             depth_temperature=architecture_config.depth_temperature,
             upsample_n_layers=architecture_config.upsample_n_layers,
@@ -443,7 +435,7 @@ class Pose2p5DModel(nn.Module):
             "xy_heatmaps": heatmaps,
             "depth_logits": depth_logits,
             "pred_xy": xy_input_coords,
-            "pred_depth": depth_pos + self.depth_offset,
+            "pred_depth": depth_pos,
             "conf_xy": xy_conf,
             "conf_depth": depth_conf,
             "heatmap_stride_rows": stride_rows,
