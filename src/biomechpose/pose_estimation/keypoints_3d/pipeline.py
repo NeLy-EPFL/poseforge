@@ -4,14 +4,22 @@ import logging
 from collections import defaultdict
 from tqdm import tqdm
 from datetime import datetime
-from typing import Any
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from biomechpose.pose_estimation.data import concat_atomic_batches, collapse_batch
+import biomechpose.pose_estimation.keypoints_3d.config as config
+from biomechpose.pose_estimation.data.synthetic import (
+    init_atomic_dataset_and_dataloader,
+    concat_atomic_batches,
+    collapse_batch,
+)
 from biomechpose.pose_estimation.keypoints_3d import Pose2p5DModel, Pose2p5DLoss
-from biomechpose.util import clear_memory_cache, check_mixed_precision_status
+from biomechpose.util import (
+    clear_memory_cache,
+    check_mixed_precision_status,
+    set_random_seed,
+)
 
 
 class Pose2p5DPipeline:
@@ -19,7 +27,6 @@ class Pose2p5DPipeline:
         self,
         model: Pose2p5DModel,
         loss_func: Pose2p5DLoss,
-        depth_offset: float = 100.0,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
@@ -27,16 +34,11 @@ class Pose2p5DPipeline:
         Args:
             model (Pose2p5DModel): Model to train.
             loss_func (Pose2p5DLoss): Loss function.
-            depth_offset (float): Use `depth_label - depth_offset` as the
-                target for depth prediction. Practically, set this to the
-                working distance of the camera (distance between camera and
-                bottom of the arena). Default: 100.0 (mm).
             device (torch.device | str): Device to use for training.
             use_float16 (bool): Whether to use mixed-precision in training.
         """
         self.model = model.to(device)
         self.loss_func = loss_func.to(device)
-        self.depth_offset = depth_offset
         self.device = device
         if torch.cuda.is_available() and "cuda" in str(self.device):
             self.device_type = "cuda"
@@ -46,28 +48,31 @@ class Pose2p5DPipeline:
 
     def train(
         self,
-        training_data_loader: DataLoader,
-        validation_data_loader: DataLoader,
-        num_epochs: int,
-        *,
-        adam_kwargs: dict[str, Any],
-        log_dir: Path | str,
-        checkpoint_dir: Path | str,
-        log_interval: int = 10,
-        checkpoint_interval: int = 100,
-        validation_interval: int = 100,
-        nbatches_per_validation: int | None = None,
+        n_epochs: int,
+        data_config: config.TrainingDataConfig,
+        optimizer_config: config.OptimizerConfig,
+        artifacts_config: config.TrainingArtifactsConfig,
+        seed: int = 42,
     ):
-        # Set up logging and checkpointing
-        log_dir = Path(log_dir)
+        # Set seed for reproducibility
+        set_random_seed(seed)
+
+        # Set up training and validation data
+        train_ds, train_loader = self._init_training_dataset_and_dataloader(data_config)
+        val_ds, val_loader = self._init_validation_dataset_and_dataloader(data_config)
+        n_batches_per_epoch = len(train_loader)
+
+        # Set up logging dir and logger
+        log_dir = Path(artifacts_config.output_basedir) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(log_dir=str(log_dir))
-        checkpoint_dir = Path(checkpoint_dir)
+
+        # Set up checkpointing dir
+        checkpoint_dir = Path(artifacts_config.output_basedir) / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        n_batches_per_epoch = len(training_data_loader)
 
         # Set up optimizer
-        optimizer = self._create_optimizer(adam_kwargs)
+        optimizer = self._create_optimizer(optimizer_config)
 
         # Set up mixed-point training
         amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
@@ -77,16 +82,16 @@ class Pose2p5DPipeline:
 
         # Training loop
         self.model.train()
-        for epoch_idx in range(num_epochs):
+        for epoch_idx in range(n_epochs):
             logging.info(
-                f"Starting epoch {epoch_idx} out of {num_epochs} at {datetime.now()}"
+                f"Starting epoch {epoch_idx} out of {n_epochs} at {datetime.now()}"
             )
             running_loss_dict = defaultdict(lambda: 0.0)
             epoch_start_time = time.time()
             running_start_time = time.time()
 
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
-                training_data_loader
+                train_loader
             ):
                 # Merge atomic batches into a single batch
                 atomic_batches_frames = atomic_batches_frames.to(
@@ -99,7 +104,6 @@ class Pose2p5DPipeline:
                 frames_concat, sim_data_concat = concat_atomic_batches(
                     atomic_batches_frames, atomic_batches_sim_data
                 )
-                n_variants, n_samples, _, _, _ = frames_concat.shape
                 frames_collapsed, sim_data_collapsed = collapse_batch(
                     frames_concat, sim_data_concat
                 )
@@ -109,13 +113,14 @@ class Pose2p5DPipeline:
                     pred_dict = self.model(frames_collapsed)
                     xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
                     depth_labels_adjusted = (
-                        sim_data_collapsed["keypoint_pos"][:, :, 2] - self.depth_offset
+                        sim_data_collapsed["keypoint_pos"][:, :, 2]
+                        - self.model.depth_offset
                     )
                     loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,
                         depth_labels=depth_labels_adjusted,
-                        bin_values=self.model.depth_bin_centers,
+                        bin_values=self.model.depth_bin_centers,  # buffered upon init
                     )
 
                     # Check if float16 is used
@@ -125,7 +130,6 @@ class Pose2p5DPipeline:
                         )
                         self._check_amp_status_during_training(
                             pred_dict,
-                            loss_dict,
                             amp_scaler,
                             subtitle="Variables at start of training",
                         )
@@ -140,12 +144,15 @@ class Pose2p5DPipeline:
                 for key, loss in loss_dict.items():
                     running_loss_dict[key] += loss.item()
 
-                if step_idx % log_interval == 0 and step_idx > 0:
+                if step_idx % artifacts_config.logging_interval == 0 and step_idx > 0:
                     avg_loss_dict = {
-                        k: x / log_interval for k, x in running_loss_dict.items()
+                        k: x / artifacts_config.logging_interval
+                        for k, x in running_loss_dict.items()
                     }
                     time_now = time.time()
-                    throughput = log_interval / (time_now - running_start_time)
+                    throughput = artifacts_config.logging_interval / (
+                        time_now - running_start_time
+                    )
 
                     running_loss_dict = defaultdict(lambda: 0.0)
                     running_start_time = time_now
@@ -159,9 +166,13 @@ class Pose2p5DPipeline:
                     )
 
                 # Run validation
-                if step_idx % validation_interval == 0 and step_idx > 0:
+                if (
+                    step_idx % artifacts_config.validation_interval == 0
+                    and step_idx > 0
+                ):
                     val_loss_dict = self.validate(
-                        validation_data_loader, max_batches=nbatches_per_validation
+                        val_loader,
+                        max_batches=artifacts_config.n_batches_per_validation,
                     )
                     self.update_logs_validation(
                         writer,
@@ -173,19 +184,21 @@ class Pose2p5DPipeline:
 
                 # Save checkpoint
                 # (every log_interval steps and last step of each epoch)
-                if (step_idx % checkpoint_interval == 0 and step_idx > 0) or (
-                    step_idx == n_batches_per_epoch - 1
-                ):
-                    checkpoint_path = (
-                        checkpoint_dir / f"epoch{epoch_idx}_step{step_idx}.pt"
+                if (
+                    step_idx % artifacts_config.checkpoint_interval == 0
+                    and step_idx > 0
+                ) or (step_idx == n_batches_per_epoch - 1):
+                    checkpoint_path_stem = (
+                        checkpoint_dir / f"epoch{epoch_idx}_step{step_idx}"
                     )
                     self._save_checkpoint(
-                        checkpoint_path,
+                        checkpoint_path_stem,
                         model=self.model,
+                        loss=self.loss_func,
                         optimizer=optimizer,
                         grad_scaler=amp_scaler,
                     )
-                    logging.info(f"Saved checkpoint to {checkpoint_path}")
+                    logging.info(f"Saved checkpoint to {checkpoint_path_stem}.*.pth")
 
             epoch_wall_time = time.time() - epoch_start_time
             logging.info(
@@ -243,14 +256,12 @@ class Pose2p5DPipeline:
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames_collapsed)
                     xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                    depth_labels_adjusted = (
-                        sim_data_collapsed["keypoint_pos"][:, :, 2] - self.depth_offset
-                    )
+                    depth_labels_adjusted = sim_data_collapsed["keypoint_pos"][:, :, 2]
                     loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,
                         depth_labels=depth_labels_adjusted,
-                        bin_values=self.model.depth_bin_centers,
+                        bin_values=self.model.depth_bin_centers,  # buffered upon init
                     )
                 # Accumulate losses
                 for key, loss in loss_dict.items():
@@ -278,18 +289,57 @@ class Pose2p5DPipeline:
             frames = frames.to(self.device)
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                 pred_dict = self.model(frames)
-                # Adjust depth predictions by adding back the offset
-                pred_dict["pred_depth_adjusted"] = (
-                    pred_dict["pred_depth"] + self.depth_offset
-                )
+                pred_dict["pred_depth_adjusted"] = pred_dict["pred_depth"]
         self.model.train()
         return {
             k: v.to(input_device) if isinstance(v, torch.Tensor) else v
             for k, v in pred_dict.items()
         }
 
-    def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
-        return torch.optim.Adam(self.model.parameters(), **adam_kwargs)
+    def _create_optimizer(
+        self, optimizer_config: config.OptimizerConfig
+    ) -> torch.optim.Optimizer:
+        return torch.optim.Adam(
+            self.model.parameters(),
+            lr=optimizer_config.adam_lr,
+            weight_decay=optimizer_config.adam_weight_decay,
+        )
+
+    @staticmethod
+    def _init_training_dataset_and_dataloader(data_config: config.TrainingDataConfig):
+        return init_atomic_dataset_and_dataloader(
+            data_dirs=data_config.train_data_dirs,
+            atomic_batch_n_samples=data_config.atomic_batch_n_samples,
+            atomic_batch_n_variants=data_config.atomic_batch_n_variants,
+            image_size=data_config.image_size,
+            batch_size=data_config.train_batch_size,
+            load_dof_angles=False,
+            load_keypoint_positions=True,
+            load_body_segment_maps=False,
+            shuffle=True,
+            num_workers=data_config.num_workers,
+            num_channels=3,
+            pin_memory=True,
+            drop_last=True,
+        )
+
+    @staticmethod
+    def _init_validation_dataset_and_dataloader(data_config: config.TrainingDataConfig):
+        return init_atomic_dataset_and_dataloader(
+            data_dirs=data_config.val_data_dirs,
+            atomic_batch_n_samples=data_config.atomic_batch_n_samples,
+            atomic_batch_n_variants=data_config.atomic_batch_n_variants,
+            image_size=data_config.image_size,
+            batch_size=data_config.val_batch_size,
+            load_dof_angles=False,
+            load_keypoint_positions=True,
+            load_body_segment_maps=False,
+            shuffle=False,
+            num_workers=data_config.num_workers,
+            num_channels=3,
+            pin_memory=True,
+            drop_last=True,
+        )
 
     def _update_logs_training(
         self,
@@ -333,18 +383,28 @@ class Pose2p5DPipeline:
         logging.info(log_str)
 
     @staticmethod
-    def _save_checkpoint(checkpoint_path: Path, model, optimizer, grad_scaler) -> None:
-        state = {
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "grad_scaler": grad_scaler.state_dict(),
-        }
-        torch.save(state, checkpoint_path)
+    def _save_checkpoint(
+        checkpoint_path_stem: Path,
+        model: Pose2p5DModel,
+        loss: Pose2p5DLoss | None = None,
+        optimizer: torch.optim.Optimizer | None = None,
+        grad_scaler: torch.amp.GradScaler | None = None,
+    ) -> None:
+        path = checkpoint_path_stem.with_suffix(".model.pth")
+        torch.save(model.state_dict(), path)
+        if loss is not None:
+            path = checkpoint_path_stem.with_suffix(".loss.pth")
+            torch.save(loss.state_dict(), path)
+        if optimizer is not None:
+            path = checkpoint_path_stem.with_suffix(".optimizer.pth")
+            torch.save(optimizer.state_dict(), path)
+        if grad_scaler is not None:
+            path = checkpoint_path_stem.with_suffix(".grad_scaler.pth")
+            torch.save(grad_scaler.state_dict(), path)
 
     def _check_amp_status_during_training(
         self,
         pred_dict: dict[str, torch.Tensor],
-        loss_dict: dict[str, torch.Tensor],
         grad_scaler: torch.amp.GradScaler,
         subtitle: str = "Variables during training",
     ):
