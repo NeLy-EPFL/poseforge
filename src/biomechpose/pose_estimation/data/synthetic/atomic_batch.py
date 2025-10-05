@@ -112,7 +112,7 @@ class AtomicBatchDataset(Dataset):
             spacing (int, optional): Number of pixels to insert between
                 variants. Defaults to 10.
         """
-        atomic_batch = atomic_batch.numpy()
+        atomic_batch = atomic_batch.detach().cpu().numpy()
         n_variants, n_frames, n_channels, n_rows, n_cols = atomic_batch.shape
 
         # Check n_channels and expand if needed
