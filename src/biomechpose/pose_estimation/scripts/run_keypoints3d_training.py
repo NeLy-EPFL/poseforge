@@ -54,7 +54,7 @@ class ModelConfig:
     # Number of bins to quantize depth values (distances from camera) into
     depth_n_bins: int = 64
     # Minimum depth (distance from camera) in mm
-    depth_min: float = 0.0
+    depth_min: float = -2.0
     # Maximum depth (distance from camera) in mm
     depth_max: float = 2.0
     # Temperature param to regulate the "softness" of the predicted x-y heatmaps
@@ -108,7 +108,7 @@ class DataConfig:
     image_size: tuple[int, int] = (256, 256)
     # Base depth of all keypoints in mm. The model will predict the relative depth, i.e.
     # depth_label - base_depth, instead of the absolute depth.
-    depth_offset: float = 100.0
+    depth_offset: float = -100.0
 
 
 @dataclass
@@ -306,7 +306,7 @@ if __name__ == "__main__":
         projection_head_output_dim=256,
         n_keypoints=32,
         depth_n_bins=64,
-        depth_min=0.0,
+        depth_min=-2.0,
         depth_max=2.0,
         xy_temperature=0.8,
         depth_temperature=0.8,
@@ -337,19 +337,19 @@ if __name__ == "__main__":
         train_data_dirs=[str(path) for path in train_data_dirs],
         val_data_dirs=[str(path) for path in val_data_dirs],
         image_size=(256, 256),
-        depth_offset=100.0,
+        depth_offset=-100.0,
     )
     training_config = TrainingConfig(
-        num_epochs=10,
+        num_epochs=30,
         seed=42,
         adam_lr=3e-4,
         adam_weight_decay=1e-4,
     )
     output_config = OutputConfig(
         output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20250103a/",
-        logging_interval=10,
-        checkpoint_interval=500,
-        validation_interval=500,
+        logging_interval=100,
+        checkpoint_interval=1000,
+        validation_interval=1000,
         nbatches_per_validation=300,
     )
     train_keypoints3d_model(
