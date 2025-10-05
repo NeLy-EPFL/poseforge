@@ -215,7 +215,7 @@ class SerializableDataClass:
                 f"Invalid file extension for {path}. Expected .yaml or .yml"
             )
         with open(path, "w") as f:
-            yaml.dump(dataclasses.asdict(self), f, indent=2)
+            yaml.safe_dump(dataclasses.asdict(self), f, indent=2, sort_keys=False)
 
     @classmethod
     def load(cls, path: Path | str):

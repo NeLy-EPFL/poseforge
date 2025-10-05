@@ -191,8 +191,10 @@ class SimulatedDataSequence:
             batch_size (int): Total batch size (will be divided by n_variants)
 
         Yields:
-            torch.Tensor: Batch tensor of shape (batch_size, 3, height, width)
-                with values normalized to [0, 1]
+            tuple[torch.Tensor, dict[str, torch.Tensor] | None]: A tuple containing:
+                - frames: Batch tensor of shape (batch_size, 3, height, width)
+                  with values normalized to [0, 1]
+                - labels: Dictionary of label tensors if available, otherwise None
         """
         n_samples_per_batch = batch_size // self.n_variants
         n_batches = (self.n_frames + n_samples_per_batch - 1) // n_samples_per_batch
