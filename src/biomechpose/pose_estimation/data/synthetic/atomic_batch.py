@@ -233,7 +233,7 @@ class AtomicBatchDataset(Dataset):
     @staticmethod
     def load_atomic_batch_sim_data(
         input_path: Path, keys: list[str] | None
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, torch.Tensor]:
         """Load simulation data for an atomic batch from an HDF5 file.
 
         Args:
@@ -241,7 +241,7 @@ class AtomicBatchDataset(Dataset):
             keys (list[str] | None): List of keys to load. If None, all keys are loaded.
 
         Returns:
-            dict[str, np.ndarray]: Dictionary of simulation data.
+            dict[str, torch.Tensor]: Dictionary of simulation data.
         """
         with h5py.File(input_path, "r") as f:
             if keys is None:
