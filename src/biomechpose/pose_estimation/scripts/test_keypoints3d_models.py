@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
 from collections import defaultdict
 
@@ -13,6 +12,7 @@ from biomechpose.pose_estimation.keypoints_3d import (
     Pose2p5DPipeline,
 )
 from biomechpose.pose_estimation.camera import CameraToWorldMapper
+from biomechpose.pose_estimation.keypoints_3d.visualizer import Keypoints3DVisualizer
 
 
 def _setup_datasets(
@@ -96,67 +96,6 @@ def inference_on_dataset(
     return all_preds, all_labels
 
 
-def visualize_predictions(
-    preds: dict[str, np.ndarray],
-    labels: dict[str, np.ndarray],
-    keypoints_order: list[str],
-    output_dir: Path,
-    data_freq: int = 300,
-):
-    stride_x = preds["heatmap_stride_cols"][0]
-    stride_y = preds["heatmap_stride_rows"][0]
-    pred_xy_heatmaps = preds["xy_heatmaps"]  # (variants, frames, keypoints, H, W)
-    pred_depth_logits = preds[
-        "depth_logits"
-    ]  # (variants, frames, keypoints, depth_bins)
-    pred_xy = preds["pred_xy"]  # (variants, frames, keypoints, 2)
-    pred_depth = preds["pred_depth"]  # (variants, frames, keypoints)
-    pred_world_xyz = preds["pred_world_xyz"]  # (variants, frames, keypoints, 3)
-    label_xy = labels["keypoint_pos"][:, :, :2]  # (frames, keypoints, 2)
-    label_depth = labels["keypoint_pos"][:, :, 2]  # (frames, keypoints)
-    label_world_xyz = labels["keypoint_pos_world_xyz"]  # (frames, keypoints, 3)
-    n_variants, n_frames, n_keypoints, _, _ = pred_xy_heatmaps.shape
-
-    fig, axes = plt.subplots(
-        n_keypoints, 6, figsize=(6 * 3, n_keypoints * 2), tight_layout=True
-    )
-    t_grid = np.arange(n_frames) / data_freq
-    for i_keypoint in range(n_keypoints):
-        for i_panel, panel_name in enumerate(["column", "row", "depth", "x", "y", "z"]):
-            ax = axes[i_keypoint, i_panel]
-            keypoint_name = keypoints_order[i_keypoint]
-
-            # Plot col, row, depth in camera coords
-            if panel_name in ("column", "row", "depth"):
-                is_depth = panel_name == "depth"
-                if is_depth:
-                    pred = pred_depth[:, :, i_keypoint]
-                    label = label_depth[:, i_keypoint]
-                else:
-                    pred = pred_xy[:, :, i_keypoint, i_panel]
-                    label = label_xy[:, i_keypoint, i_panel]
-                for i_variant in range(n_variants):
-                    ax.plot(t_grid, pred[i_variant, :], linewidth=1)
-                ax.plot(t_grid, label, color="black", linewidth=2)
-                ax.set_xlabel("time (s)")
-                ax.set_ylabel("depth (mm)" if is_depth else f"{panel_name} (pixels)")
-                ax.set_title(f"{keypoint_name}, {panel_name}")
-
-            # Plot x, y, z in world coords, but individually
-            if panel_name in ("x", "y", "z"):
-                pred = pred_world_xyz[:, :, i_keypoint, i_panel - 3]
-                label = label_world_xyz[:, i_keypoint, i_panel - 3]
-                for i_variant in range(n_variants):
-                    ax.plot(t_grid, pred[i_variant, :], linewidth=1)
-                ax.plot(t_grid, label, color="black", linewidth=2)
-                ax.set_xlabel("time (s)")
-                ax.set_ylabel(f"{panel_name} (mm)")
-                ax.set_title(f"{keypoint_name}, {panel_name}")
-
-    fig.savefig(output_dir / "xyz_timeseries.png")
-    print(output_dir / "xyz_timeseries.png")
-
-
 def test_keypoints3d_models(
     style_transfer_models: list[str],
     simulation_data_basedir: str,
@@ -228,7 +167,12 @@ def test_keypoints3d_models(
         output_dir.mkdir(parents=True, exist_ok=True)
         labels_metadata = dataset.get_sim_data_metadata()
         keypoints_order = labels_metadata["keypoint_pos"]["keys"]
-        visualize_predictions(preds, labels, keypoints_order, output_dir)
+        
+        visualizer = Keypoints3DVisualizer(preds, labels, keypoints_order, output_dir)
+        visualizer.make_keypoint_pos_timeseries_plot(
+            output_dir / "keypoint_pos_timeseries.png"
+        )
+        print(output_dir / "keypoint_pos_timeseries.png")
         break
 
 
