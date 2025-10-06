@@ -387,7 +387,7 @@ def init_atomic_dataset_and_dataloader(
             batch.
         image_size (tuple[int, int]): Size of the images (height, width).
         batch_size (int): Desired batch size. Must be a multiple of
-            atomic_batch_n_samples.  TODO: further divide by n_variants?
+            atomic_batch_n_samples.
         load_dof_angles (bool, optional): Whether to load degree-of-freedom
             angles. Defaults to False.
         load_keypoint_positions (bool, optional): Whether to load keypoint
