@@ -26,14 +26,15 @@ class Pose2p5DPipeline:
     def __init__(
         self,
         model: Pose2p5DModel,
-        loss_func: Pose2p5DLoss,
+        loss_func: Pose2p5DLoss | None,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
         """
         Args:
             model (Pose2p5DModel): Model to train.
-            loss_func (Pose2p5DLoss): Loss function.
+            loss_func (Pose2p5DLoss | None): Loss function. Not required if
+                performing inference only.
             device (torch.device | str): Device to use for training.
             use_float16 (bool): Whether to use mixed-precision in training.
         """
@@ -79,6 +80,10 @@ class Pose2p5DPipeline:
         self._check_amp_status_for_model_params(
             amp_scaler, subtitle="Model parameters before training"
         )
+        
+        # Check if loss function is provided
+        if self.loss_func is None:
+            raise ValueError("Loss function must be provided for training")
 
         # Training loop
         self.model.train()
@@ -224,6 +229,9 @@ class Pose2p5DPipeline:
         if max_batches <= 0:
             raise ValueError("max_batches must be positive or None")
         total_loss_dict = defaultdict(lambda: 0.0)
+        
+        if self.loss_func is None:
+            raise ValueError("Loss function must be provided for validation")
 
         self.model.eval()
         clear_memory_cache()
