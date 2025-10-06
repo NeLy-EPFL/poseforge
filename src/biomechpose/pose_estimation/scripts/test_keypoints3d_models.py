@@ -12,6 +12,7 @@ from biomechpose.pose_estimation.keypoints_3d import (
     Pose2p5DLoss,
     Pose2p5DPipeline,
 )
+from biomechpose.pose_estimation.camera import CameraToWorldMapper
 
 
 def _setup_datasets(
@@ -110,31 +111,48 @@ def visualize_predictions(
     ]  # (variants, frames, keypoints, depth_bins)
     pred_xy = preds["pred_xy"]  # (variants, frames, keypoints, 2)
     pred_depth = preds["pred_depth"]  # (variants, frames, keypoints)
+    pred_world_xyz = preds["pred_world_xyz"]  # (variants, frames, keypoints, 3)
     label_xy = labels["keypoint_pos"][:, :, :2]  # (frames, keypoints, 2)
     label_depth = labels["keypoint_pos"][:, :, 2]  # (frames, keypoints)
+    label_world_xyz = labels["keypoint_pos_world_xyz"]  # (frames, keypoints, 3)
     n_variants, n_frames, n_keypoints, _, _ = pred_xy_heatmaps.shape
 
     fig, axes = plt.subplots(
-        n_keypoints, 3, figsize=(3 * 3, n_keypoints * 2), tight_layout=True
+        n_keypoints, 6, figsize=(6 * 3, n_keypoints * 2), tight_layout=True
     )
     t_grid = np.arange(n_frames) / data_freq
     for i_keypoint in range(n_keypoints):
-        for i_dim, dim in enumerate(["x", "y", "depth"]):
-            ax = axes[i_keypoint, i_dim]
-            if i_dim < 2:
-                # XY
-                pred = pred_xy[:, :, i_keypoint, i_dim]
-                label = label_xy[:, i_keypoint, i_dim]
-            else:
-                # Depth
-                pred = pred_depth[:, :, i_keypoint]
-                label = label_depth[:, i_keypoint]
-            for i_variant in range(n_variants):
-                ax.plot(t_grid, pred[i_variant, :], linewidth=1)
-            ax.plot(t_grid, label, color="black", linewidth=2)
-            ax.set_xlabel("Time (s)")
-            ax.set_ylabel(f"{dim} (pixels)" if i_dim < 2 else f"{dim} (mm)")
-            ax.set_title(f"{keypoints_order[i_keypoint]}, {dim}")
+        for i_panel, panel_name in enumerate(["column", "row", "depth", "x", "y", "z"]):
+            ax = axes[i_keypoint, i_panel]
+            keypoint_name = keypoints_order[i_keypoint]
+
+            # Plot col, row, depth in camera coords
+            if panel_name in ("column", "row", "depth"):
+                is_depth = panel_name == "depth"
+                if is_depth:
+                    pred = pred_depth[:, :, i_keypoint]
+                    label = label_depth[:, i_keypoint]
+                else:
+                    pred = pred_xy[:, :, i_keypoint, i_panel]
+                    label = label_xy[:, i_keypoint, i_panel]
+                for i_variant in range(n_variants):
+                    ax.plot(t_grid, pred[i_variant, :], linewidth=1)
+                ax.plot(t_grid, label, color="black", linewidth=2)
+                ax.set_xlabel("time (s)")
+                ax.set_ylabel("depth (mm)" if is_depth else f"{panel_name} (pixels)")
+                ax.set_title(f"{keypoint_name}, {panel_name}")
+
+            # Plot x, y, z in world coords, but individually
+            if panel_name in ("x", "y", "z"):
+                pred = pred_world_xyz[:, :, i_keypoint, i_panel - 3]
+                label = label_world_xyz[:, i_keypoint, i_panel - 3]
+                for i_variant in range(n_variants):
+                    ax.plot(t_grid, pred[i_variant, :], linewidth=1)
+                ax.plot(t_grid, label, color="black", linewidth=2)
+                ax.set_xlabel("time (s)")
+                ax.set_ylabel(f"{panel_name} (mm)")
+                ax.set_title(f"{keypoint_name}, {panel_name}")
+
     fig.savefig(output_dir / "xyz_timeseries.png")
     print(output_dir / "xyz_timeseries.png")
 
@@ -150,6 +168,9 @@ def test_keypoints3d_models(
     batch_size: int,
     original_image_size: tuple[int, int] | None,
     output_basedir: str,
+    camera_distance: float = 100.0,
+    camera_rotation_euler: tuple[float, float, float] = (0, np.pi, -np.pi / 2),
+    camera_fov_deg: float = 5.0,
 ):
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
@@ -166,12 +187,8 @@ def test_keypoints3d_models(
     # )
     # Temporary hack: previously trained model has a different checkpoint format, but
     # shares the same neural architecture. In the future we will use the loading method
-    # above.
-    model.load_state_dict(
-        torch.load(
-            "bulk_data/pose_estimation/keypoints3d/trial_20250103a/checkpoints/epoch9_step50000.pt"
-        )["model"]
-    )
+    # above. TODO
+    model.load_state_dict(torch.load(model_checkpoint_path)["model"])
     if loss_config_path:
         loss_func = Pose2p5DLoss.create_from_config(loss_config_path)
     else:
@@ -190,11 +207,23 @@ def test_keypoints3d_models(
         raise RuntimeError("No datasets found for testing")
     print(f"Found {len(datasets)} datasets for testing.")
 
+    # Set up camera mapper
+    cam_mapper = CameraToWorldMapper(
+        camera_pos=(0.0, 0.0, -camera_distance),
+        camera_fov_deg=camera_fov_deg,
+        rendering_size=(original_image_size[0], original_image_size[1]),
+        rotation_euler=camera_rotation_euler,
+    )
+
     # Run inference for each dataset
     for dataset in datasets:
         print(f"Running inference on dataset {dataset.sim_name}")
         preds, labels = inference_on_dataset(dataset, pipeline, batch_size)
         preds["pred_depth"] = preds["pred_depth"] - 100  # TODO: Remove this hack
+        preds["pred_world_xyz"] = cam_mapper(preds["pred_xy"], preds["pred_depth"])
+        labels["keypoint_pos_world_xyz"] = cam_mapper(
+            labels["keypoint_pos"][:, :, :2], labels["keypoint_pos"][:, :, 2]
+        )
         output_dir = Path(output_basedir) / dataset.sim_name.replace("/", "_")
         output_dir.mkdir(parents=True, exist_ok=True)
         labels_metadata = dataset.get_sim_data_metadata()
@@ -220,7 +249,7 @@ if __name__ == "__main__":
         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005"
     ]
     model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/model_architecture_config.yaml"
-    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/checkpoints/epoch0_step29000.model.pth"
+    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20250103a/checkpoints/epoch9_step50000.pt"
     loss_config_path = (
         "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/loss_config.yaml"
     )
