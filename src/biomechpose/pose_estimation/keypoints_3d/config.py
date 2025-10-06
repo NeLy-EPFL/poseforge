@@ -75,7 +75,7 @@ class TrainingDataConfig(SerializableDataClass):
     # Paths to validation data (recursively containing atomic batches)
     val_data_dirs: list[str]
     # Frame size (height, width)
-    image_size: tuple[int, int]
+    input_image_size: tuple[int, int]
     # Numbers of samples (frames) in each pre-extracted atomic batch
     atomic_batch_n_samples: int
     # Number of variants (synthetic images made by different style transfer models)

@@ -222,5 +222,7 @@ class SimulatedDataSequence:
             else:
                 labels = self.read_simulated_labels(frame_ids)
                 labels = {key: torch.from_numpy(value) for key, value in labels.items()}
+                if "keypoint_pos" in labels:
+                    labels["keypoint_pos"][:, :, :2] *= (256/464)  # TODO: remove this hack
 
             yield frames, labels

@@ -294,7 +294,6 @@ class Pose2p5DPipeline:
             frames = frames.to(self.device)
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                 pred_dict = self.model(frames)
-                pred_dict["pred_depth_adjusted"] = pred_dict["pred_depth"]
         self.model.train()
         return {
             k: v.to(input_device) if isinstance(v, torch.Tensor) else v
@@ -316,7 +315,7 @@ class Pose2p5DPipeline:
             data_dirs=data_config.train_data_dirs,
             atomic_batch_n_samples=data_config.atomic_batch_n_samples,
             atomic_batch_n_variants=data_config.atomic_batch_n_variants,
-            image_size=data_config.image_size,
+            input_image_size=data_config.input_image_size,
             batch_size=data_config.train_batch_size,
             load_dof_angles=False,
             load_keypoint_positions=True,
@@ -334,7 +333,7 @@ class Pose2p5DPipeline:
             data_dirs=data_config.val_data_dirs,
             atomic_batch_n_samples=data_config.atomic_batch_n_samples,
             atomic_batch_n_variants=data_config.atomic_batch_n_variants,
-            image_size=data_config.image_size,
+            input_image_size=data_config.input_image_size,
             batch_size=data_config.val_batch_size,
             load_dof_angles=False,
             load_keypoint_positions=True,

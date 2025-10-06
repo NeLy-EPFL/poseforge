@@ -107,7 +107,7 @@ if __name__ == "__main__":
     training_data_config = config.TrainingDataConfig(
         train_data_dirs=[str(path) for path in train_data_dirs],
         val_data_dirs=[str(path) for path in val_data_dirs],
-        image_size=(256, 256),
+        input_image_size=(256, 256),
         atomic_batch_n_samples=32,
         atomic_batch_n_variants=4,
         train_batch_size=32,
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     )
     optimizer_config = config.OptimizerConfig()
     training_artifacts_config = config.TrainingArtifactsConfig(
-        output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20250105a/",
+        output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20250106a/",
         logging_interval=1000,
         checkpoint_interval=1000,
         validation_interval=1000,

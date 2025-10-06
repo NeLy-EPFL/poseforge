@@ -254,6 +254,8 @@ class AtomicBatchDataset(Dataset):
             sim_data = {
                 key: torch.from_numpy(f[key][:]).to(torch.float32) for key in keys
             }
+            if "keypoint_pos" in sim_data:
+                sim_data["keypoint_pos"][..., :2] *= (256/464)  # TODO: remove this hack
 
             return sim_data
 
@@ -363,7 +365,7 @@ def init_atomic_dataset_and_dataloader(
     data_dirs: list[str | Path],
     atomic_batch_n_samples: int,
     atomic_batch_n_variants: int,
-    image_size: tuple[int, int],
+    input_image_size: tuple[int, int],
     batch_size: int,
     load_dof_angles: bool = False,
     load_keypoint_positions: bool = False,
@@ -414,7 +416,7 @@ def init_atomic_dataset_and_dataloader(
     dataset = AtomicBatchDataset(
         data_dirs=[Path(path) for path in data_dirs],
         n_variants=atomic_batch_n_variants,
-        image_size=image_size,
+        image_size=input_image_size,
         n_channels=num_channels,
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,

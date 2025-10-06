@@ -36,6 +36,8 @@ def _setup_datasets(
     datasets = []
     for exp_trial, segment, subsegment in sorted(simulations_to_use):
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
+        # if sim_name != "BO_Gal4_fly5_trial005/segment_003/subsegment_000":
+        #     continue  # TODO: remove
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
             for model in style_transfer_models
@@ -76,6 +78,8 @@ def inference_on_dataset(
 
     for key in all_labels.keys():
         all_labels[key] = np.concatenate(all_labels[key], axis=0)
+    
+    all_preds["pred_depth"] = all_preds["pred_depth"] + 100  # TODO: Remove this hack
 
     return all_preds, all_labels
 
@@ -91,15 +95,13 @@ def visualize_predictions(
     pred_xy_heatmaps = preds["xy_heatmaps"]  # (variants, frames, keypoints, H, W)
     pred_depth_logits = preds["pred_depth"]  # (variants, frames, keypoints, depth_bins)
     pred_xy = preds["pred_xy"]  # (variants, frames, keypoints, 2)
-    pred_xy[:, :, :, 0] *= stride_x
-    pred_xy[:, :, :, 1] *= stride_y
     pred_depth = preds["pred_depth"]  # (frames, keylabpoints)
     label_xy = labels["keypoint_pos"][:, :, :2]  # (frames, keypoints, 2)
     label_depth = labels["keypoint_pos"][:, :, 2]  # (frames, keypoints)
     n_variants, n_frames, n_keypoints, _, _ = pred_xy_heatmaps.shape
 
     fig, axes = plt.subplots(
-        n_keypoints, 3, figsize=(3 * 1.5, n_keypoints * 2), tight_layout=True
+        n_keypoints, 3, figsize=(3 * 1.5, n_keypoints * 1), tight_layout=True
     )
     t_grid = np.arange(n_frames) / data_freq
     for i_keypoint in range(n_keypoints):
@@ -117,6 +119,7 @@ def visualize_predictions(
                 ax.plot(t_grid, pred[i_variant, :], linewidth=1)
             ax.plot(t_grid, label, color="black", linewidth=2)
     fig.savefig(output_dir / "xyz_timeseries.png")
+    print(output_dir / "xyz_timeseries.png")  # TODO: remove
 
 
 def test_keypoints3d_models(
@@ -144,8 +147,10 @@ def test_keypoints3d_models(
     #     config.ModelWeightsConfig(model_weights=model_checkpoint_path)
     # )
     model.load_state_dict(
-        torch.load(model_checkpoint_path)["model"]
-    )  # TODO: remove this hack
+        torch.load(
+            "bulk_data/pose_estimation/keypoints3d/trial_20250103a/checkpoints/epoch9_step50000.pt"
+        )["model"]
+    )
     if loss_config_path:
         loss_func = Pose2p5DLoss.create_from_config(loss_config_path)
     else:
@@ -190,13 +195,13 @@ if __name__ == "__main__":
     synthetic_videos_subdirs = [
         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005"
     ]
-    model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20250103a/configs/model_architecture_config.yaml"
-    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20250103a/checkpoints/epoch9_step50000.pt"
+    model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/model_architecture_config.yaml"
+    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/checkpoints/epoch0_step29000.model.pth"
     loss_config_path = (
-        "bulk_data/pose_estimation/keypoints3d/trial_20250103a/configs/loss_config.yaml"
+        "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/loss_config.yaml"
     )
     batch_size = 32
-    output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20250103a/inference/"
+    output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/inference/"
     test_keypoints3d_models(
         style_transfer_models=style_transfer_models,
         simulation_data_basedir=simulation_data_basedir,
