@@ -254,8 +254,6 @@ class AtomicBatchDataset(Dataset):
             sim_data = {
                 key: torch.from_numpy(f[key][:]).to(torch.float32) for key in keys
             }
-            if "keypoint_pos" in sim_data:
-                sim_data["keypoint_pos"][..., :2] *= (256/464)  # TODO: remove this hack
 
             return sim_data
 

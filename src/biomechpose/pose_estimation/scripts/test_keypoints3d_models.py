@@ -19,6 +19,7 @@ def _setup_datasets(
     simulation_data_basedir: Path,
     synthetic_videos_basedir: Path,
     synthetic_videos_subdirs: list[Path | str] | None,
+    original_image_size: tuple[int, int] | None,
 ):
     # Find all simulations to use based on available style transfer videos
     if synthetic_videos_subdirs is None:
@@ -46,7 +47,10 @@ def _setup_datasets(
             simulation_data_basedir / sim_name / "processed_simulation_data.h5"
         )
         dataset = SimulatedDataSequence(
-            synthetic_video_paths, sim_data_path, sim_name=sim_name
+            synthetic_video_paths,
+            sim_data_path,
+            sim_name=sim_name,
+            original_image_size=original_image_size,
         )
         datasets.append(dataset)
 
@@ -78,7 +82,7 @@ def inference_on_dataset(
 
     for key in all_labels.keys():
         all_labels[key] = np.concatenate(all_labels[key], axis=0)
-    
+
     all_preds["pred_depth"] = all_preds["pred_depth"] + 100  # TODO: Remove this hack
 
     return all_preds, all_labels
@@ -131,6 +135,7 @@ def test_keypoints3d_models(
     model_checkpoint_path: str,
     loss_config_path: str | None,
     batch_size: int,
+    original_image_size: tuple[int, int] | None,
     output_basedir: str,
 ):
     # System setup
@@ -163,6 +168,7 @@ def test_keypoints3d_models(
         Path(simulation_data_basedir),
         Path(synthetic_videos_basedir),
         synthetic_videos_subdirs,
+        original_image_size=original_image_size,
     )
     if len(datasets) == 0:
         raise RuntimeError("No datasets found for testing")
@@ -201,6 +207,7 @@ if __name__ == "__main__":
         "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/loss_config.yaml"
     )
     batch_size = 32
+    original_image_size = (464, 464)
     output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/inference/"
     test_keypoints3d_models(
         style_transfer_models=style_transfer_models,
@@ -211,5 +218,6 @@ if __name__ == "__main__":
         model_checkpoint_path=model_checkpoint_path,
         loss_config_path=loss_config_path,
         batch_size=batch_size,
+        original_image_size=original_image_size,
         output_basedir=output_basedir,
     )
