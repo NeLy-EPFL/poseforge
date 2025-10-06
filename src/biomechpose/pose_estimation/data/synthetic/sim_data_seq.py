@@ -39,9 +39,12 @@ class SimulatedDataSequence:
         self.n_variants = len(synthetic_video_paths)
         assert self.n_variants > 0, "At least one synthetic video required"
 
-        self.n_frames, self.frame_size, self.fps = self._get_metadata(
+        metadata = self.get_video_metadata(
             synthetic_video_paths[0], cache_metadata, use_cached_metadata
         )
+        self.n_frames = metadata["n_frames"]
+        self.frame_size = metadata["frame_size"]
+        self.fps = metadata["fps"]
 
         # If image has been downsampled from the original, compute the zoom factor and
         # return keypoint positions converted to the scale of output images.
@@ -51,7 +54,9 @@ class SimulatedDataSequence:
             zoom_factor = np.array([1.0, 1.0])
         self.image_zoom_factor = zoom_factor
 
-    def _get_metadata(self, sample_video_path, cache_metadata, use_cached_metadata):
+    def get_video_metadata(
+        self, sample_video_path, cache_metadata, use_cached_metadata
+    ):
         # Already checked that all videos are under the same directory, so just save the
         # cache there
         cache_path = sample_video_path.parent / "cached_sim_metadata.json"
@@ -80,7 +85,18 @@ class SimulatedDataSequence:
                 }
                 with open(cache_path, "w") as f:
                     json.dump(metadata, f, indent=2)
-        return n_frames, frame_size, fps
+        return {"n_frames": n_frames, "frame_size": frame_size, "fps": fps}
+
+    def get_sim_data_metadata(self) -> dict:
+        metadata = {}
+        with h5py.File(self.simulated_labels_path, "r") as ds:
+            postprocessed_ds = ds["postprocessed"]
+            metadata["dof_angles"] = dict(postprocessed_ds["dof_angles"].attrs)
+            metadata["keypoint_pos"] = dict(postprocessed_ds["keypoint_pos"].attrs)
+            metadata["segmentation_labels"] = dict(
+                postprocessed_ds["segmentation_labels"].attrs
+            )
+        return metadata
 
     def __len__(self) -> int:
         return self.n_frames

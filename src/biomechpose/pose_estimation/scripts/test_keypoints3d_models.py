@@ -37,8 +37,6 @@ def _setup_datasets(
     datasets = []
     for exp_trial, segment, subsegment in sorted(simulations_to_use):
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
-        # if sim_name != "BO_Gal4_fly5_trial005/segment_003/subsegment_000":
-        #     continue  # TODO: remove
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
             for model in style_transfer_models
@@ -62,22 +60,31 @@ def inference_on_dataset(
 ):
     all_preds = defaultdict(list)
     all_labels = defaultdict(list)
+
     for frames, labels in dataset.generate_batches(batch_size=batch_size):
         preds = pipeline.inference(frames)
+
+        # Un-interleave predictions: from (n_variants * n_frames_in_batch, ...)
+        # to (n_variants, n_frames_in_batch, ...)
+        current_batch_frames = frames.shape[0] // dataset.n_variants
         for key, value in preds.items():
             if isinstance(value, torch.Tensor):
                 value = value.detach().cpu().numpy()
+            if isinstance(value, np.ndarray) and len(value.shape) > 0:
+                # Reshape from interleaved format back to (variants, frames, ...)
+                value = value.reshape(
+                    (dataset.n_variants, current_batch_frames, *value.shape[1:])
+                )
             all_preds[key].append(value)
+
         for key, value in labels.items():
             all_labels[key].append(value.cpu().numpy())
 
-    # Concatenate across batches
+    # Concatenate across batches along the frame dimension
     for key, value in all_preds.items():
-        if isinstance(value[0], np.ndarray):
-            value = np.concatenate(value, axis=0)
-            value = value.reshape(
-                (dataset.n_variants, dataset.n_frames) + value.shape[1:]
-            )
+        if isinstance(value[0], np.ndarray) and len(value[0].shape) > 0:
+            # Concatenate along frame dimension (axis=1)
+            value = np.concatenate(value, axis=1)
         all_preds[key] = value
 
     for key in all_labels.keys():
@@ -91,21 +98,24 @@ def inference_on_dataset(
 def visualize_predictions(
     preds: dict[str, np.ndarray],
     labels: dict[str, np.ndarray],
+    keypoints_order: list[str],
     output_dir: Path,
     data_freq: int = 300,
 ):
     stride_x = preds["heatmap_stride_cols"][0]
     stride_y = preds["heatmap_stride_rows"][0]
     pred_xy_heatmaps = preds["xy_heatmaps"]  # (variants, frames, keypoints, H, W)
-    pred_depth_logits = preds["pred_depth"]  # (variants, frames, keypoints, depth_bins)
+    pred_depth_logits = preds[
+        "depth_logits"
+    ]  # (variants, frames, keypoints, depth_bins)
     pred_xy = preds["pred_xy"]  # (variants, frames, keypoints, 2)
-    pred_depth = preds["pred_depth"]  # (frames, keylabpoints)
+    pred_depth = preds["pred_depth"]  # (variants, frames, keypoints)
     label_xy = labels["keypoint_pos"][:, :, :2]  # (frames, keypoints, 2)
     label_depth = labels["keypoint_pos"][:, :, 2]  # (frames, keypoints)
     n_variants, n_frames, n_keypoints, _, _ = pred_xy_heatmaps.shape
 
     fig, axes = plt.subplots(
-        n_keypoints, 3, figsize=(3 * 1.5, n_keypoints * 1), tight_layout=True
+        n_keypoints, 3, figsize=(3 * 3, n_keypoints * 2), tight_layout=True
     )
     t_grid = np.arange(n_frames) / data_freq
     for i_keypoint in range(n_keypoints):
@@ -122,8 +132,11 @@ def visualize_predictions(
             for i_variant in range(n_variants):
                 ax.plot(t_grid, pred[i_variant, :], linewidth=1)
             ax.plot(t_grid, label, color="black", linewidth=2)
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel(f"{dim} (pixels)" if i_dim < 2 else f"{dim} (mm)")
+            ax.set_title(f"{keypoints_order[i_keypoint]}, {dim}")
     fig.savefig(output_dir / "xyz_timeseries.png")
-    print(output_dir / "xyz_timeseries.png")  # TODO: remove
+    print(output_dir / "xyz_timeseries.png")
 
 
 def test_keypoints3d_models(
@@ -151,6 +164,9 @@ def test_keypoints3d_models(
     # model.load_weights_from_config(
     #     config.ModelWeightsConfig(model_weights=model_checkpoint_path)
     # )
+    # Temporary hack: previously trained model has a different checkpoint format, but
+    # shares the same neural architecture. In the future we will use the loading method
+    # above.
     model.load_state_dict(
         torch.load(
             "bulk_data/pose_estimation/keypoints3d/trial_20250103a/checkpoints/epoch9_step50000.pt"
@@ -181,7 +197,9 @@ def test_keypoints3d_models(
         preds["pred_depth"] = preds["pred_depth"] - 100  # TODO: Remove this hack
         output_dir = Path(output_basedir) / dataset.sim_name.replace("/", "_")
         output_dir.mkdir(parents=True, exist_ok=True)
-        visualize_predictions(preds, labels, output_dir)
+        labels_metadata = dataset.get_sim_data_metadata()
+        keypoints_order = labels_metadata["keypoint_pos"]["keys"]
+        visualize_predictions(preds, labels, keypoints_order, output_dir)
         break
 
 
