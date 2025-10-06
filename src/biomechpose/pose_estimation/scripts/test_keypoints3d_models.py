@@ -38,6 +38,8 @@ def _setup_datasets(
     datasets = []
     for exp_trial, segment, subsegment in sorted(simulations_to_use):
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
+        if sim_name != "BO_Gal4_fly5_trial005/segment_001/subsegment_000":
+            continue  # TODO: debugging, remove later 
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
             for model in style_transfer_models
@@ -167,13 +169,24 @@ def test_keypoints3d_models(
         output_dir.mkdir(parents=True, exist_ok=True)
         labels_metadata = dataset.get_sim_data_metadata()
         keypoints_order = labels_metadata["keypoint_pos"]["keys"]
-        
-        visualizer = Keypoints3DVisualizer(preds, labels, keypoints_order, output_dir)
-        visualizer.make_keypoint_pos_timeseries_plot(
-            output_dir / "keypoint_pos_timeseries.png"
+
+        exp_trial, segment, subsegment = dataset.sim_name.split("/")
+        visualizer = Keypoints3DVisualizer(
+            preds,
+            labels,
+            keypoints_order,
+            output_dir,
+            nmf_rendering_basedir=simulation_data_basedir,
+            synthetic_videos_basedir=synthetic_videos_basedir,
+            style_transfer_models=style_transfer_models,
+            exp_trial=exp_trial,
+            segment=segment,
+            subsegment=subsegment,
         )
-        print(output_dir / "keypoint_pos_timeseries.png")
-        break
+        # visualizer.plot_keypoints_over_time(output_dir / "keypoint_pos_timeseries.png")
+        # print(output_dir / "keypoint_pos_timeseries.png")
+        visualizer.make_summary_video(output_dir / "keypoint_3d_visualization.mp4")
+        print(output_dir / "keypoint_3d_visualization.mp4")
 
 
 if __name__ == "__main__":
