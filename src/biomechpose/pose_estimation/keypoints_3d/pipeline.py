@@ -80,7 +80,7 @@ class Pose2p5DPipeline:
         self._check_amp_status_for_model_params(
             amp_scaler, subtitle="Model parameters before training"
         )
-        
+
         # Check if loss function is provided
         if self.loss_func is None:
             raise ValueError("Loss function must be provided for training")
@@ -172,6 +172,19 @@ class Pose2p5DPipeline:
                     step_idx % artifacts_config.validation_interval == 0
                     and step_idx > 0
                 ):
+                    del (
+                        atomic_batches_frames,
+                        atomic_batches_sim_data,
+                        frames_concat,
+                        sim_data_concat,
+                        frames_collapsed,
+                        sim_data_collapsed,
+                        pred_dict,
+                        xy_labels,
+                        depth_labels,
+                    )
+                    clear_memory_cache()
+                    
                     val_loss_dict = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
@@ -183,6 +196,8 @@ class Pose2p5DPipeline:
                         n_batches_per_epoch=n_batches_per_epoch,
                         val_loss_dict=val_loss_dict,
                     )
+
+                    clear_memory_cache()
 
                 # Save checkpoint
                 # (every log_interval steps and last step of each epoch)
@@ -229,7 +244,7 @@ class Pose2p5DPipeline:
         if max_batches <= 0:
             raise ValueError("max_batches must be positive or None")
         total_loss_dict = defaultdict(lambda: 0.0)
-        
+
         if self.loss_func is None:
             raise ValueError("Loss function must be provided for validation")
 
@@ -444,3 +459,4 @@ class Pose2p5DPipeline:
             grad_scaler=grad_scaler,
             subtitle=subtitle,
         )
+
