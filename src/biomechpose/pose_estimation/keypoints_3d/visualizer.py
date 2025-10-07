@@ -8,8 +8,10 @@ import cv2
 import logging
 import cmasher
 import imageio.v2 as imageio
+import time
 from PIL import Image
 from pathlib import Path
+from joblib import Parallel, delayed
 
 from biomechpose.util import (
     configure_matplotlib_style,
@@ -86,7 +88,7 @@ def render_single_frame(
 ) -> None:
     """Standalone function to render a single frame - can be pickled for multiprocessing"""
     try:
-        fig = plt.figure(figsize=(20, 12))
+        fig = plt.figure(figsize=(24, 12))
         gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
 
         # Row 0: Videos
@@ -198,8 +200,8 @@ def _plot_merged_heatmaps_standalone(ax, frame_idx: int, variant_idx: int, pred_
         ax.scatter(label_x, label_y, color="white", s=marker_size, 
                   edgecolors="black", linewidth=2)
 
-    ax.set_xlim(0, merged_heatmap_prob.shape[1])
-    ax.set_ylim(merged_heatmap_prob.shape[0], 0)  # Flip y-axis for image coordinates
+    ax.set_xlim(0, merged_heatmap_prob.shape[1] - 1)
+    ax.set_ylim(0, merged_heatmap_prob.shape[0] - 1)  # Flip y-axis for image coordinates
     ax.set_aspect("equal")
 
 
@@ -226,8 +228,8 @@ def _plot_depth_distributions_standalone(ax, frame_idx: int, variant_idx: int, p
         ax.scatter(kp_idx, depth_bin, color='white', s=marker_size, marker='o', 
                   edgecolors='black', linewidth=1)
 
-    # Add white vertical lines after each leg (every 6 keypoints)
-    for leg_end in range(6, n_keypoints, 6):
+    # Add white vertical lines after each leg (every 5 keypoints)
+    for leg_end in range(5, n_keypoints, 5):
         ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
 
     ax.set_xlabel("Keypoint Index")
@@ -295,9 +297,9 @@ def _plot_3d_skeleton_standalone(ax, frame_idx: int, variant_idx: int, pred_worl
 
     # Set labels and limits
     if variant_idx == 0:
-        ax.set_xlabel("ant.-post. (mm)")
-        ax.set_ylabel("lateral (mm)")
-        ax.set_zlabel("dors.-vent. (mm)")
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y (mm)")
+        ax.set_zlabel("z (mm)")
     else:
         ax.set_xticklabels([])
         ax.set_yticklabels([])
@@ -308,24 +310,11 @@ def _plot_3d_skeleton_standalone(ax, frame_idx: int, variant_idx: int, pred_worl
     if variant_idx is not None:
         all_points = np.vstack([all_points, pred_world_xyz[variant_idx, frame_idx]])
 
-    # Calculate ranges for each dimension
-    x_range = np.ptp(all_points[:, 0])
-    y_range = np.ptp(all_points[:, 1])
-    z_range = np.ptp(all_points[:, 2])
-    
-    # Use the maximum range to ensure equal scaling
-    max_range = max(x_range, y_range, z_range) / 2.0
-    
-    # Center points for each dimension
-    mid_x = np.mean(all_points[:, 0])
-    mid_y = np.mean(all_points[:, 1])
-    mid_z = np.mean(all_points[:, 2])
+    # Set fixed limits for all axes (instead of dynamic calculation)
+    ax.set_xlim(0.5, 3.5)  # x (mm)
+    ax.set_ylim(-3.5, -0.5)  # y (mm)
+    ax.set_zlim(-0.5, 2.0)  # z (mm)
 
-    # Set equal limits for all axes
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(mid_z - max_range, mid_z + max_range)
-    
     # Ensure equal aspect ratio
     ax.set_box_aspect([1,1,1])
     
@@ -391,7 +380,7 @@ def setup_figure_and_axes(
                    va='center', ha='center', fontsize=12, fontweight='bold', color='black')
         else:
             # Pre-setup depth plot formatting
-            for leg_end in range(6, n_keypoints, 6):
+            for leg_end in range(5, n_keypoints, 5):
                 ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
             
             n_legs = 6
@@ -427,9 +416,9 @@ def setup_figure_and_axes(
             ax = fig.add_subplot(gs[3, col_idx], projection="3d")
             variant_idx = col_idx - 1
             if variant_idx == 0:
-                ax.set_xlabel("ant.-post. (mm)")
-                ax.set_ylabel("lateral (mm)")
-                ax.set_zlabel("dors.-vent. (mm)", rotation=90)
+                ax.set_xlabel("x (mm)")
+                ax.set_ylabel("y (mm)")
+                ax.set_zlabel("z (mm)", rotation=90)
             else:
                 ax.set_xticklabels([])
                 ax.set_yticklabels([])
@@ -538,7 +527,7 @@ def render_frames_with_reused_figure(
                                                    label_depth, depth_min, depth_max, depth_n_bins,
                                                    n_keypoints, marker_size, cmap)
                 # Re-apply formatting after clear
-                for leg_end in range(6, n_keypoints, 6):
+                for leg_end in range(5, n_keypoints, 5):
                     ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
                 
                 n_legs = 6
@@ -572,9 +561,9 @@ def render_frames_with_reused_figure(
                                            marker_size)
                 # Re-apply formatting after clear
                 if variant_idx == 0:
-                    ax.set_xlabel("ant.-post. (mm)")
-                    ax.set_ylabel("lateral (mm)")
-                    ax.set_zlabel("dors.-vent. (mm)", rotation=90)
+                    ax.set_xlabel("x (mm)")
+                    ax.set_ylabel("y (mm)")
+                    ax.set_zlabel("z (mm)", rotation=90)
                 else:
                     ax.set_xticklabels([])
                     ax.set_yticklabels([])
@@ -615,8 +604,261 @@ def render_frames_optimized_standalone(
     marker_size: int,
     cmap,  # matplotlib colormap
     n_keypoints: int,
+    n_workers: int = -2,
 ) -> None:
-    """Optimized frame rendering by reusing figure elements and only updating data"""
+    """Optimized frame rendering by reusing figure elements and using parallel processing"""
+    
+    # Handle sequential processing case
+    if n_workers == 1:
+        logger.info("Using sequential processing (n_workers=1)")
+        render_frames_optimized_standalone_sequential(
+            frames_dir, all_video_frames, n_cols, n_frames,
+            pred_xy_heatmaps, pred_depth_logits, pred_world_xyz,
+            label_xy, label_depth, label_world_xyz, keypoints_order,
+            stride_x, stride_y, depth_min, depth_max, depth_n_bins,
+            marker_size, cmap, n_keypoints
+        )
+        return
+    
+    logger.info(f"Starting parallel frame rendering with {n_workers} workers...")
+    start_time = time.time()
+    
+    # Split frame indices into chunks for parallel processing
+    frame_indices = list(range(n_frames))
+    
+    # Determine actual number of workers
+    if n_workers == -2:
+        import multiprocessing
+        actual_workers = max(1, multiprocessing.cpu_count() - 1)
+    elif n_workers == -1:
+        import multiprocessing
+        actual_workers = multiprocessing.cpu_count()
+    else:
+        actual_workers = max(1, n_workers)
+    
+    # Split frames into chunks for each worker
+    chunk_size = max(1, n_frames // actual_workers)
+    frame_chunks = [frame_indices[i:i + chunk_size] for i in range(0, n_frames, chunk_size)]
+    
+    logger.info(f"Using {actual_workers} workers to process {n_frames} frames")
+    logger.info(f"Frame chunks: {[len(chunk) for chunk in frame_chunks]}")
+    
+    # Run parallel processing
+    Parallel(n_jobs=actual_workers, prefer="processes")(
+        delayed(render_frame_chunk_worker)(
+            frame_chunk,
+            frames_dir,
+            all_video_frames,
+            n_cols,
+            pred_xy_heatmaps,
+            pred_depth_logits,
+            pred_world_xyz,
+            label_xy,
+            label_depth,
+            label_world_xyz,
+            keypoints_order,
+            stride_x,
+            stride_y,
+            depth_min,
+            depth_max,
+            depth_n_bins,
+            marker_size,
+            cmap,
+            n_keypoints,
+            worker_id
+        ) for worker_id, frame_chunk in enumerate(frame_chunks)
+    )
+    
+    end_time = time.time()
+    logger.info(f"Parallel frame rendering completed in {end_time - start_time:.2f} seconds")
+
+
+def render_frame_chunk_worker(
+    frame_indices: list[int],
+    frames_dir: Path,
+    all_video_frames: dict,
+    n_cols: int,
+    pred_xy_heatmaps: np.ndarray,
+    pred_depth_logits: np.ndarray,
+    pred_world_xyz: np.ndarray,
+    label_xy: np.ndarray,
+    label_depth: np.ndarray,
+    label_world_xyz: np.ndarray,
+    keypoints_order: list[str],
+    stride_x: int,
+    stride_y: int,
+    depth_min: float,
+    depth_max: float,
+    depth_n_bins: int,
+    marker_size: int,
+    cmap,
+    n_keypoints: int,
+    worker_id: int,
+) -> None:
+    """Worker function that processes a chunk of frames with figure reuse"""
+    if not frame_indices:
+        return
+        
+    worker_start_time = time.time()
+    logger.info(f"Worker {worker_id}: Processing {len(frame_indices)} frames: {frame_indices[0]}-{frame_indices[-1]}")
+    
+    # Pre-compute values used multiple times
+    depth_bin_centers = np.linspace(depth_min, depth_max, depth_n_bins)
+    
+    # Setup figure and axes once per worker
+    fig, video_axes, heatmap_axes, depth_axes, skeleton_axes = setup_figure_and_axes(
+        n_cols, n_keypoints, depth_min, depth_max, depth_n_bins
+    )
+    
+    try:
+        # Process each frame in this chunk using the same figure
+        for i, frame_idx in enumerate(frame_indices):
+            try:
+                # Update video frames
+                for col_idx in range(n_cols):
+                    ax = video_axes[col_idx]
+                    ax.clear()
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    
+                    if col_idx == 0:
+                        ax.set_title("NeuroMechFly\nsimulation", fontweight="bold", pad=20)
+                        if "original" in all_video_frames and frame_idx < len(all_video_frames["original"]):
+                            video_frame = all_video_frames["original"][frame_idx]
+                            if video_frame is not None:
+                                ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                            else:
+                                ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
+                                       ha="center", va="center", transform=ax.transAxes)
+                        else:
+                            ax.text(0.5, 0.5, f"Original Video\nNot Found", 
+                                   ha="center", va="center", transform=ax.transAxes)
+                    else:
+                        model_idx = col_idx - 1
+                        ax.set_title(f"Synthetic rendering\n(variant {model_idx})", fontweight="bold", pad=20)
+                        model_key = f"synthetic_{model_idx}"
+                        if model_key in all_video_frames and frame_idx < len(all_video_frames[model_key]):
+                            video_frame = all_video_frames[model_key][frame_idx]
+                            if video_frame is not None:
+                                ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                            else:
+                                ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
+                                       ha="center", va="center", transform=ax.transAxes)
+                        else:
+                            ax.text(0.5, 0.5, f"Synthetic Video\nModel {model_idx}\nNot Found", 
+                                   ha="center", va="center", transform=ax.transAxes)
+                
+                # Update heatmaps (only data columns)
+                for col_idx in range(1, n_cols):
+                    ax = heatmap_axes[col_idx]
+                    ax.clear()
+                    variant_idx = col_idx - 1
+                    plot_merged_heatmaps_standalone(ax, frame_idx, variant_idx, pred_xy_heatmaps,
+                                                  label_xy, stride_x, stride_y, n_keypoints,
+                                                  marker_size, cmap)
+                    # Re-apply formatting after clear
+                    ax.set_aspect("equal")
+                    if variant_idx == 0:
+                        ax.set_ylabel("row (px)")
+                        ax.set_xlabel("column (px)")
+                    else:
+                        ax.set_xticklabels([])
+                        ax.set_yticklabels([])
+                
+                # Update depth plots (only data columns)
+                for col_idx in range(1, n_cols):
+                    ax = depth_axes[col_idx]
+                    ax.clear()
+                    variant_idx = col_idx - 1
+                    plot_depth_distributions_standalone(ax, frame_idx, variant_idx, pred_depth_logits,
+                                                       label_depth, depth_min, depth_max, depth_n_bins,
+                                                       n_keypoints, marker_size, cmap)
+                    # Re-apply formatting after clear
+                    for leg_end in range(5, n_keypoints, 5):
+                        ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
+                    
+                    n_legs = 6
+                    n_keypoints_per_leg = 5
+                    n_antennae = 2
+                    x_ticks = [
+                        (n_keypoints_per_leg * i) + (n_keypoints_per_leg / 2) - 0.5
+                        for i in range(n_legs)
+                    ] + [n_legs * n_keypoints_per_leg + (n_antennae / 2) - 0.5]
+                    k_ticklabels = [f"{side}{pos}" for side in "LR" for pos in "FMH"] + ["A"]
+                    ax.set_xticks(x_ticks)
+                    
+                    if variant_idx == 0:
+                        ax.set_xticklabels(k_ticklabels)
+                        ax.set_ylabel("depth (mm)")
+                        if depth_n_bins > 10:
+                            tick_indices = range(0, depth_n_bins, max(1, depth_n_bins // 5))
+                            ax.set_yticks(tick_indices)
+                            ax.set_yticklabels([f"{depth_bin_centers[i]:.1f}" for i in tick_indices], fontsize=8)
+                    else:
+                        ax.set_xticklabels([])
+                        ax.set_yticklabels([])
+                
+                # Update 3D skeletons (only data columns)
+                for col_idx in range(1, n_cols):
+                    ax = skeleton_axes[col_idx]
+                    ax.clear()
+                    variant_idx = col_idx - 1
+                    plot_3d_skeleton_standalone(ax, frame_idx, variant_idx, pred_world_xyz,
+                                               label_world_xyz, keypoints_order, n_keypoints,
+                                               marker_size)
+                    # Re-apply formatting after clear
+                    if variant_idx == 0:
+                        ax.set_xlabel("x (mm)")
+                        ax.set_ylabel("y (mm)")
+                        ax.set_zlabel("z (mm)", rotation=90)
+                    else:
+                        ax.set_xticklabels([])
+                        ax.set_yticklabels([])
+                        ax.set_zticklabels([])
+                    ax.set_box_aspect([1, 1, 1])
+                
+                # Save frame
+                frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
+                fig.savefig(frame_path, dpi=100, bbox_inches=None, pad_inches=0.1)
+                
+                # Progress reporting (less frequent to avoid spam)
+                if i % 20 == 0 or i == len(frame_indices) - 1:
+                    logger.info(f"Worker {worker_id}: Rendered frame {frame_idx} ({i+1}/{len(frame_indices)})")
+                    
+            except Exception as e:
+                logger.error(f"Worker {worker_id}: Failed to render frame {frame_idx}: {e}")
+                
+    finally:
+        plt.close(fig)
+        
+    worker_end_time = time.time()
+    logger.info(f"Worker {worker_id}: Completed {len(frame_indices)} frames in {worker_end_time - worker_start_time:.2f} seconds")
+
+
+def render_frames_optimized_standalone_sequential(
+    frames_dir: Path,
+    all_video_frames: dict,  # {"original": list[np.ndarray], "synthetic_0": list[np.ndarray], ...}
+    n_cols: int,
+    n_frames: int,
+    # Data arrays - all with consistent frame indexing
+    pred_xy_heatmaps: np.ndarray,    # (n_variants, n_frames, n_keypoints, H, W)
+    pred_depth_logits: np.ndarray,   # (n_variants, n_frames, n_keypoints, depth_bins)
+    pred_world_xyz: np.ndarray,      # (n_variants, n_frames, n_keypoints, 3)
+    label_xy: np.ndarray,            # (n_frames, n_keypoints, 2)
+    label_depth: np.ndarray,         # (n_frames, n_keypoints)
+    label_world_xyz: np.ndarray,     # (n_frames, n_keypoints, 3)
+    keypoints_order: list[str],      # list of keypoint names
+    # Parameters
+    stride_x: int,
+    stride_y: int,
+    depth_min: float,
+    depth_max: float,
+    depth_n_bins: int,
+    marker_size: int,
+    cmap,  # matplotlib colormap
+    n_keypoints: int,
+) -> None:
+    """Original sequential rendering - kept for fallback"""
     print("Setting up reusable figure...")
     
     # Setup figure and axes once
@@ -787,24 +1029,11 @@ def plot_3d_skeleton_standalone(ax, frame_idx: int, variant_idx: int, pred_world
     if variant_idx is not None:
         all_points = np.vstack([all_points, pred_world_xyz[variant_idx, frame_idx]])
 
-    # Calculate ranges for each dimension
-    x_range = np.ptp(all_points[:, 0])
-    y_range = np.ptp(all_points[:, 1])
-    z_range = np.ptp(all_points[:, 2])
-    
-    # Use the maximum range to ensure equal scaling
-    max_range = max(x_range, y_range, z_range) / 2.0
-    
-    # Center points for each dimension
-    mid_x = np.mean(all_points[:, 0])
-    mid_y = np.mean(all_points[:, 1])
-    mid_z = np.mean(all_points[:, 2])
+    # Set fixed limits for all axes (instead of dynamic calculation)
+    ax.set_xlim(0.5, 3.5)  # x (mm)
+    ax.set_ylim(-3.5, -0.5)  # y (mm)
+    ax.set_zlim(-0.5, 2.0)  # z (mm)
 
-    # Set equal limits for all axes
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(mid_z - max_range, mid_z + max_range)
-    
     # Set viewing angle - rotate 90 degrees clockwise around z-axis
     azimuth = (np.cos(2 * np.pi * frame_idx / azimuth_rotation_period) * max_abs_azimuth)
     ax.view_init(elev=camera_elevation, azim=azimuth)
@@ -829,7 +1058,20 @@ class Keypoints3DVisualizer:
         depth_n_bins: int = 64,
         cmap=cmasher.cm.nuclear,
         marker_size: int = 15,
+        n_workers: int = -2,
     ):
+        """
+        Initialize the 3D keypoints visualizer.
+        
+        Parameters:
+        -----------
+        n_workers : int, default=-2
+            Number of worker processes for parallel frame rendering.
+            - -2: Use all CPU cores except 1 (recommended for most cases)
+            - -1: Use all CPU cores
+            - 1: Sequential processing (no parallelization) 
+            - N > 1: Use exactly N workers
+        """
         self.preds = preds
         self.labels = labels
         self.keypoints_order = keypoints_order
@@ -846,6 +1088,7 @@ class Keypoints3DVisualizer:
         self.depth_n_bins = depth_n_bins
         self.cmap = cmap
         self.marker_size = marker_size
+        self.n_workers = n_workers
 
         self.stride_x = preds["heatmap_stride_cols"][0]
         self.stride_y = preds["heatmap_stride_rows"][0]
@@ -991,6 +1234,7 @@ class Keypoints3DVisualizer:
             marker_size=self.marker_size,
             cmap=self.cmap,
             n_keypoints=self.n_keypoints,
+            n_workers=self.n_workers,
         )
 
     def _load_all_video_frames(
@@ -1312,8 +1556,8 @@ class Keypoints3DVisualizer:
                 linewidth=1,
             )
 
-        # Add white vertical lines after each leg (every 6 keypoints)
-        for leg_end in range(6, self.n_keypoints, 6):
+        # Add white vertical lines after each leg (every 5 keypoints)
+        for leg_end in range(5, self.n_keypoints, 5):
             ax.axvline(x=leg_end - 0.5, color="white", linewidth=1)
 
         # Set labels and ticks
@@ -1458,9 +1702,9 @@ class Keypoints3DVisualizer:
 
         # Set labels and limits
         if variant_idx == 0:
-            ax.set_xlabel("ant.-post. (mm)")
-            ax.set_ylabel("lateral (mm)")
-            ax.set_zlabel("dors.-vent. (mm)", rotation=90)
+            ax.set_xlabel("x (mm)")
+            ax.set_ylabel("y (mm)")
+            ax.set_zlabel("z (mm)", rotation=90)
         else:
             ax.set_xticklabels([])
             ax.set_yticklabels([])
@@ -1473,23 +1717,10 @@ class Keypoints3DVisualizer:
                 [all_points, self.pred_world_xyz[variant_idx, frame_idx]]
             )
 
-        # Calculate ranges for each dimension
-        x_range = np.ptp(all_points[:, 0])
-        y_range = np.ptp(all_points[:, 1])
-        z_range = np.ptp(all_points[:, 2])
-
-        # Use the maximum range to ensure equal scaling
-        max_range = max(x_range, y_range, z_range) / 2.0
-
-        # Center points for each dimension
-        mid_x = np.mean(all_points[:, 0])
-        mid_y = np.mean(all_points[:, 1])
-        mid_z = np.mean(all_points[:, 2])
-
-        # Set equal limits for all axes
-        ax.set_xlim(mid_x - max_range, mid_x + max_range)
-        ax.set_ylim(mid_y - max_range, mid_y + max_range)
-        ax.set_zlim(mid_z - max_range, mid_z + max_range)
+        # Set fixed limits for all axes (instead of dynamic calculation)
+        ax.set_xlim(0.5, 3.5)  # x (mm)
+        ax.set_ylim(-3.5, -0.5)  # y (mm)
+        ax.set_zlim(-0.5, 2.0)  # z (mm)
 
         # Ensure equal aspect ratio
         ax.set_box_aspect([1, 1, 1])

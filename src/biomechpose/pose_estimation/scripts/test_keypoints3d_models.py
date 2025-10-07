@@ -112,6 +112,7 @@ def test_keypoints3d_models(
     camera_distance: float = 100.0,
     camera_rotation_euler: tuple[float, float, float] = (0, np.pi, -np.pi / 2),
     camera_fov_deg: float = 5.0,
+    n_workers: int = -2,
 ):
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
@@ -194,6 +195,7 @@ def test_keypoints3d_models(
             exp_trial=exp_trial,
             segment=segment,
             subsegment=subsegment,
+            n_workers=n_workers,
         )
         # visualizer.plot_keypoints_over_time(output_dir / "keypoint_pos_timeseries.png")
         # print(output_dir / "keypoint_pos_timeseries.png")
@@ -225,6 +227,11 @@ if __name__ == "__main__":
     batch_size = 32
     original_image_size = (464, 464)
     output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/inference/"
+    # n_workers options:
+    # -2: Use all CPU cores except 1 (recommended, default)
+    # -1: Use all CPU cores  
+    # 1: Sequential processing (no parallelization)
+    # N > 1: Use exactly N workers
     test_keypoints3d_models(
         style_transfer_models=style_transfer_models,
         simulation_data_basedir=simulation_data_basedir,
@@ -236,4 +243,5 @@ if __name__ == "__main__":
         batch_size=batch_size,
         original_image_size=original_image_size,
         output_basedir=output_basedir,
+        n_workers=-2,  # Use all cores except 1 for parallel processing
     )
