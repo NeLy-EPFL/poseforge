@@ -1,17 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
+import logging
+import cmasher
 from pathlib import Path
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 import tempfile
 import shutil
 
 from biomechpose.util import configure_matplotlib_style
+from biomechpose.simulate_nmf.utils import kchain_plotting_colors
 
 
 configure_matplotlib_style()
+
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 class Keypoints3DVisualizer:
@@ -31,6 +36,8 @@ class Keypoints3DVisualizer:
         depth_min: float = -102.0,
         depth_max: float = -98.0,
         depth_n_bins: int = 64,
+        cmap = cmasher.cm.nuclear,
+        marker_size: int = 30,
     ):
         self.preds = preds
         self.labels = labels
@@ -46,6 +53,8 @@ class Keypoints3DVisualizer:
         self.depth_min = depth_min
         self.depth_max = depth_max
         self.depth_n_bins = depth_n_bins
+        self.cmap = cmap
+        self.marker_size = marker_size
 
         self.stride_x = preds["heatmap_stride_cols"][0]
         self.stride_y = preds["heatmap_stride_rows"][0]
@@ -174,7 +183,7 @@ class Keypoints3DVisualizer:
                             video_frame = all_video_frames['original'][frame_idx]
                             if video_frame is not None:
                                 ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
-                                ax.set_title("Original Simulation")
+                                ax.set_title("NeuroMechFly Simulation")
                             else:
                                 ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
                                        ha="center", va="center", transform=ax.transAxes)
@@ -189,7 +198,7 @@ class Keypoints3DVisualizer:
                             video_frame = all_video_frames[model_key][frame_idx]
                             if video_frame is not None:
                                 ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
-                                ax.set_title(f"Style Transfer {model_idx}")
+                                ax.set_title(f"Style transfer variant {model_idx}")
                             else:
                                 ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
                                        ha="center", va="center", transform=ax.transAxes)
@@ -203,46 +212,49 @@ class Keypoints3DVisualizer:
                 for col_idx in range(n_cols):
                     ax = fig.add_subplot(gs[1, col_idx])
                     if col_idx == 0:
-                        # Show ground truth heatmap in first column
-                        self._plot_ground_truth_heatmap(ax, frame_idx)
-                        ax.set_title("Ground Truth Heatmap")
+                        # # Show ground truth heatmap in first column
+                        # self._plot_ground_truth_heatmap(ax, frame_idx)
+                        # ax.set_title("Ground Truth Heatmap")
+                        ax.axis("off")
                     else:
                         # Show merged heatmaps for all keypoints
                         variant_idx = col_idx - 1
                         self._plot_merged_heatmaps(ax, frame_idx, variant_idx)
-                        ax.set_title(f"Pred Heatmaps - Model {variant_idx}")
+                        ax.set_title(f"X-Y heatmaps - variant {variant_idx}")
 
                 # Row 2: Depth distributions
                 for col_idx in range(n_cols):
                     ax = fig.add_subplot(gs[2, col_idx])
                     if col_idx == 0:
-                        # Show label depth distribution in first column
-                        self._plot_label_depth_distribution(ax, frame_idx)
-                        ax.set_title("Label Depth Distribution")
+                        # # Show label depth distribution in first column
+                        # self._plot_label_depth_distribution(ax, frame_idx)
+                        # ax.set_title("Label Depth Distribution")
+                        ax.axis("off")
                     else:
                         # Show depth distributions as heatmaps
                         variant_idx = col_idx - 1
                         self._plot_depth_distributions(ax, frame_idx, variant_idx)
-                        ax.set_title(f"Depth Dist - Model {variant_idx}")
+                        ax.set_title(f"Depth logits - variant {variant_idx}")
 
                 # Row 3: 3D body skeleton
                 for col_idx in range(n_cols):
                     ax = fig.add_subplot(gs[3, col_idx], projection="3d")
                     if col_idx == 0:
-                        # Show only ground truth skeleton
-                        self._plot_3d_skeleton(
-                            ax, frame_idx, None, show_ground_truth=True
-                        )
-                        ax.set_title("Ground Truth 3D")
+                        # # Show only ground truth skeleton
+                        # self._plot_3d_skeleton(
+                        #     ax, frame_idx, None, show_ground_truth=True
+                        # )
+                        # ax.set_title("Ground Truth 3D")
+                        ax.axis("off")
                     else:
                         # Show prediction + ground truth skeleton
                         variant_idx = col_idx - 1
                         self._plot_3d_skeleton(
                             ax, frame_idx, variant_idx, show_ground_truth=True
                         )
-                        ax.set_title(f"3D Skeleton - Model {variant_idx}")
+                        ax.set_title(f"3D skeleton - variant {variant_idx}")
 
-                plt.tight_layout()
+                # plt.tight_layout()
 
                 # Save frame
                 frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
@@ -319,31 +331,36 @@ class Keypoints3DVisualizer:
         # Get heatmaps for this frame and variant
         heatmaps = self.pred_xy_heatmaps[variant_idx, frame_idx]  # (n_keypoints, H, W)
 
-        # Merge all keypoint heatmaps (take maximum across keypoints)
-        merged_heatmap = np.max(heatmaps, axis=0)  # (H, W)
+        # Convert each keypoint's heatmap to probabilities independently
+        heatmaps_prob = np.zeros_like(heatmaps)
+        for kp_idx in range(self.n_keypoints):
+            # Normalize each keypoint's heatmap to probabilities
+            heatmap_flat = heatmaps[kp_idx].flatten()
+            heatmap_flat_shifted = heatmap_flat - np.max(heatmap_flat)
+            probs_flat = np.exp(heatmap_flat_shifted) / np.sum(np.exp(heatmap_flat_shifted))
+            heatmaps_prob[kp_idx] = probs_flat.reshape(heatmaps[kp_idx].shape)
 
-        # Display merged heatmap with dynamic vmax using viridis colormap
-        vmax = merged_heatmap.max()  # Use dynamic vmax (removed the *2.0 multiplier)
-        im = ax.imshow(merged_heatmap, cmap="viridis", alpha=0.7, vmax=vmax)
+        # Merge all keypoint heatmaps (take maximum across keypoints)
+        merged_heatmap_prob = np.max(heatmaps_prob, axis=0)  # (H, W)
+
+        # Display merged heatmap with fixed vmin/vmax for xy heatmaps
+        im = ax.imshow(merged_heatmap_prob, cmap=self.cmap, vmin=0, vmax=0.04)
 
         # Plot label points as prominent dots
         for kp_idx in range(self.n_keypoints):
             label_x = self.label_xy[frame_idx, kp_idx, 0] / self.stride_x
             label_y = self.label_xy[frame_idx, kp_idx, 1] / self.stride_y
             ax.scatter(
-                label_x, label_y, color="cyan", s=50, edgecolors="black", linewidth=2
+                label_x, label_y, color="white", s=self.marker_size, edgecolors="black", linewidth=2
             )
 
-        ax.set_xlim(0, merged_heatmap.shape[1])
-        ax.set_ylim(merged_heatmap.shape[0], 0)  # Flip y-axis for image coordinates
+        ax.set_xlim(0, merged_heatmap_prob.shape[1])
+        ax.set_ylim(merged_heatmap_prob.shape[0], 0)  # Flip y-axis for image coordinates
         ax.set_aspect("equal")
         
-        # Add colorbar
-        try:
-            cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
-            cbar.ax.tick_params(labelsize=8)
-        except:
-            pass  # Skip colorbar if it causes issues
+        # # Add colorbar
+        # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
+        # cbar.ax.tick_params(labelsize=8)
 
     def _plot_ground_truth_heatmap(self, ax, frame_idx: int):
         """Plot ground truth heatmap generated from label coordinates"""
@@ -375,7 +392,7 @@ class Keypoints3DVisualizer:
         
         # Display ground truth heatmap with dynamic vmax using viridis colormap
         vmax = gt_heatmap.max()  # Use dynamic vmax (removed the *2.0 multiplier)
-        im = ax.imshow(gt_heatmap, cmap="viridis", alpha=0.7, vmax=vmax)
+        im = ax.imshow(gt_heatmap, cmap=self.cmap, vmax=vmax)
         
         # Plot label points as cyan dots for reference
         for kp_idx in range(self.n_keypoints):
@@ -384,19 +401,16 @@ class Keypoints3DVisualizer:
             # Only plot if within bounds
             if (0 <= label_x < heatmap_shape[1] and 0 <= label_y < heatmap_shape[0]):
                 ax.scatter(
-                    label_x, label_y, color="cyan", s=50, edgecolors="black", linewidth=2
+                    label_x, label_y, color="white", s=self.marker_size, edgecolors="black", linewidth=2
                 )
 
         ax.set_xlim(0, heatmap_shape[1])
         ax.set_ylim(heatmap_shape[0], 0)  # Flip y-axis for image coordinates
         ax.set_aspect("equal")
         
-        # Add colorbar
-        try:
-            cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
-            cbar.ax.tick_params(labelsize=8)
-        except:
-            pass  # Skip colorbar if it causes issues
+        # # Add colorbar
+        # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
+        # cbar.ax.tick_params(labelsize=8)
 
     def _plot_depth_distributions(self, ax, frame_idx: int, variant_idx: int):
         """Plot depth predictions as a simple heatmap showing distribution across keypoints for this variant"""
@@ -417,33 +431,31 @@ class Keypoints3DVisualizer:
         # print(f"  Depth probs range: [{depth_probs.min():.6f}, {depth_probs.max():.6f}]")
         # print(f"  Keypoints with max prob < 0.1: {np.sum(depth_probs.max(axis=1) < 0.1)}/{self.n_keypoints}")
 
-        # Use a better colormap scaling - set vmin to a small value to highlight differences
-        vmin = max(depth_probs.min(), 1e-6)  # Avoid log(0) issues
-        vmax = depth_probs.max()
+        # Use fixed vmin/vmax for depth distributions
         
         # Show as heatmap: depth bins (y-axis) vs keypoints (x-axis) - SWAPPED AXES
-        im = ax.imshow(depth_probs.T, cmap='viridis', aspect='auto', alpha=0.8, 
-                      vmin=vmin, vmax=vmax)
+        im = ax.imshow(depth_probs.T, cmap=self.cmap, aspect='auto', 
+                      vmin=0, vmax=0.5)
         
         # Compute depth bin centers for proper mapping
         depth_bin_centers = np.linspace(self.depth_min, self.depth_max, self.depth_n_bins)
         
-        # Add ground truth depth as red dots (coordinates swapped)
+        # Add ground truth depth as white dots
         for kp_idx in range(self.n_keypoints):
             label_depth = self.label_depth[frame_idx, kp_idx]
             # Convert depth to bin index using proper mapping
             depth_bin = np.argmin(np.abs(depth_bin_centers - label_depth))
-            ax.scatter(kp_idx, depth_bin, color='red', s=30, marker='o', 
-                      edgecolors='white', linewidth=1)
+            ax.scatter(kp_idx, depth_bin, color='white', s=self.marker_size, marker='o', 
+                      edgecolors='black', linewidth=1)
 
         # Add white vertical lines after each leg (every 6 keypoints)
         for leg_end in range(6, self.n_keypoints, 6):
-            ax.axvline(x=leg_end - 0.5, color='white', linewidth=2, alpha=0.8)
+            ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
 
-        # Set labels and ticks - swapped axes
+        # Set labels and ticks
         ax.set_xlabel("Keypoint Index")
         ax.set_ylabel("Depth Bins")
-        ax.set_title(f"Depth Distribution - Variant {variant_idx}")
+        ax.set_title(f"Depth logits - variant {variant_idx}")
         
         # Show all keypoints as tick marks but no labels
         ax.set_xticks(range(self.n_keypoints))
@@ -458,12 +470,9 @@ class Keypoints3DVisualizer:
             ax.set_yticklabels([f"{depth_bin_centers[i]:.1f}" for i in tick_indices], 
                               fontsize=8)
         
-        # Add colorbar if there's space
-        try:
-            cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04, label='Probability')
-            cbar.ax.tick_params(labelsize=8)
-        except:
-            pass  # Skip colorbar if it causes issues
+        # # Add colorbar
+        # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04, label='Probability')
+        # cbar.ax.tick_params(labelsize=8)
 
     def _plot_label_depth_distribution(self, ax, frame_idx: int):
         """Plot label depth distribution in same format as prediction depth distributions"""
@@ -485,25 +494,25 @@ class Keypoints3DVisualizer:
             label_depth_probs[kp_idx, depth_bin] = 1.0
         
         # Use same format as prediction plots - show as heatmap with swapped axes
-        im = ax.imshow(label_depth_probs.T, cmap='viridis', aspect='auto', alpha=0.8, 
+        im = ax.imshow(label_depth_probs.T, cmap=self.cmap, aspect='auto', 
                       vmin=0, vmax=1.0)
         
-        # Add the same ground truth depth as red dots (which are the same as the data)
+        # Add the same ground truth depth as white dots (which are the same as the data)
         for kp_idx in range(self.n_keypoints):
             label_depth = label_depths[kp_idx]
             # Convert depth to bin index using proper mapping
             depth_bin = np.argmin(np.abs(depth_bin_centers - label_depth))
-            ax.scatter(kp_idx, depth_bin, color='red', s=30, marker='o', 
-                      edgecolors='white', linewidth=1)
+            ax.scatter(kp_idx, depth_bin, color='white', s=self.marker_size, marker='o', 
+                      edgecolors='black', linewidth=1)
 
-        # Add white vertical lines after each leg (every 6 keypoints)
+        # Add gray vertical lines after each leg (every 6 keypoints)
         for leg_end in range(6, self.n_keypoints, 6):
-            ax.axvline(x=leg_end - 0.5, color='white', linewidth=2, alpha=0.8)
+            ax.axvline(x=leg_end - 0.5, color='gray', linewidth=2)
 
         # Set labels and ticks - same format as prediction plots
-        ax.set_xlabel("Keypoint Index")
-        ax.set_ylabel("Depth Bins")
-        ax.set_title("Label Depth Distribution")
+        ax.set_xlabel("Keypoints ")
+        ax.set_ylabel("Depth bins")
+        ax.set_title("Depth logits")
         
         # Show all keypoints as tick marks but no labels
         ax.set_xticks(range(self.n_keypoints))
@@ -517,12 +526,20 @@ class Keypoints3DVisualizer:
             ax.set_yticklabels([f"{depth_bin_centers[i]:.1f}" for i in tick_indices], 
                               fontsize=8)
         
-        # Add colorbar if there's space
-        try:
-            cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04, label='Probability')
-            cbar.ax.tick_params(labelsize=8)
-        except:
-            pass  # Skip colorbar if it causes issues
+        # # Add colorbar
+        # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04, label='Probability')
+        # cbar.ax.tick_params(labelsize=8)
+
+    def _get_keypoint_color(self, keypoint_name: str) -> np.ndarray:
+        """Get color for a keypoint based on kchain_plotting_colors dictionary"""
+        if keypoint_name in ["LPedicel", "RPedicel"]:
+            # Map antenna pedicels to antenna colors
+            antenna_key = "LAntenna" if keypoint_name.startswith("L") else "RAntenna"
+            return kchain_plotting_colors[antenna_key]
+        else:
+            # Use first two characters (leg identifier)
+            leg_key = keypoint_name[:2]
+            return kchain_plotting_colors.get(leg_key, np.array([0.5, 0.5, 0.5]))  # Default gray
 
     def _plot_3d_skeleton(
         self,
@@ -540,11 +557,7 @@ class Keypoints3DVisualizer:
             # Plot ground truth skeleton
             gt_points = self.label_world_xyz[frame_idx]  # (n_keypoints, 3)
             
-            # Always use black for labels (changed from red for column 0)
-            line_color = "black"
-            point_color = "black"
-            
-            # Plot leg connections (lines only, no scatter points for legs)
+            # Plot leg connections with colors from kchain_plotting_colors
             for connection in skeleton_connections:
                 if (
                     connection[0] < self.n_keypoints
@@ -552,26 +565,34 @@ class Keypoints3DVisualizer:
                 ):
                     start_point = gt_points[connection[0]]
                     end_point = gt_points[connection[1]]
+                    
+                    # Get color for this connection based on the keypoint
+                    keypoint_name = self.keypoints_order[connection[0]]
+                    line_color = self._get_keypoint_color(keypoint_name)
+                    
                     ax.plot3D(
                         [start_point[0], end_point[0]],
                         [start_point[1], end_point[1]],
                         [start_point[2], end_point[2]],
                         color=line_color,
                         linewidth=3,
-                        alpha=0.8,
                     )
 
             # Plot only antennae keypoints as scatter points (last 2 keypoints)
             if self.n_keypoints >= 2:
-                antennae_points = gt_points[-2:]  # Last 2 keypoints
-                ax.scatter(
-                    antennae_points[:, 0],
-                    antennae_points[:, 1],
-                    antennae_points[:, 2],
-                    color=point_color,
-                    s=30,
-                    alpha=0.8,
-                )
+                for i in range(2):  # Last 2 keypoints
+                    antenna_idx = self.n_keypoints - 2 + i
+                    antenna_point = gt_points[antenna_idx]
+                    keypoint_name = self.keypoints_order[antenna_idx]
+                    point_color = self._get_keypoint_color(keypoint_name)
+                    
+                    ax.scatter(
+                        antenna_point[0],
+                        antenna_point[1], 
+                        antenna_point[2],
+                        color=point_color,
+                        s=self.marker_size,
+                    )
 
         # Plot predictions on top (so they appear over ground truth when overlapping)
         if variant_idx is not None:
@@ -580,7 +601,7 @@ class Keypoints3DVisualizer:
                 variant_idx, frame_idx
             ]  # (n_keypoints, 3)
 
-            # Plot leg connections (lines only, no scatter points for legs)
+            # Plot leg connections with colors from kchain_plotting_colors
             for connection in skeleton_connections:
                 if (
                     connection[0] < self.n_keypoints
@@ -588,25 +609,35 @@ class Keypoints3DVisualizer:
                 ):
                     start_point = pred_points[connection[0]]
                     end_point = pred_points[connection[1]]
+                    
+                    # Get color for this connection based on the keypoint
+                    keypoint_name = self.keypoints_order[connection[0]]
+                    line_color = self._get_keypoint_color(keypoint_name)
+                    
                     ax.plot3D(
                         [start_point[0], end_point[0]],
                         [start_point[1], end_point[1]],
                         [start_point[2], end_point[2]],
-                        color="tab:blue",
+                        color=line_color,
                         linewidth=2,
                     )
 
             # Plot only antennae keypoints as scatter points (last 2 keypoints)
             if self.n_keypoints >= 2:
-                antennae_points = pred_points[-2:]  # Last 2 keypoints
-                ax.scatter(
-                    antennae_points[:, 0],
-                    antennae_points[:, 1],
-                    antennae_points[:, 2],
-                    color="tab:blue",
-                    s=30,
-                    label=f"Prediction {variant_idx}",
-                )
+                for i in range(2):  # Last 2 keypoints
+                    antenna_idx = self.n_keypoints - 2 + i
+                    antenna_point = pred_points[antenna_idx]
+                    keypoint_name = self.keypoints_order[antenna_idx]
+                    point_color = self._get_keypoint_color(keypoint_name)
+                    
+                    ax.scatter(
+                        antenna_point[0],
+                        antenna_point[1],
+                        antenna_point[2],
+                        color=point_color,
+                        s=self.marker_size,
+                        label=f"Prediction {variant_idx}" if i == 0 else "",  # Only label once
+                    )
 
         # Set labels and limits
         ax.set_xlabel("X (mm)")
