@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 AZIMUTH_ANIMATION_PERIOD = 300.0  # frames for one full rotation
 ELEVATION_ANGLE = 30.0
 AZIMUTH_AMPLITUDE = 30.0
-
+DEPTH_OFFSET = -100.0
 
 # Helper functions for parallel processing (must be pickle-able)
 def get_keypoint_color(keypoint_name: str) -> np.ndarray:
@@ -271,7 +271,7 @@ def setup_figure_and_axes(
                     fracs = (desired_depth_values - depth_min) / (depth_max - depth_min)
                     tick_indices = (fracs * (depth_n_bins - 1)).round().astype(int)
                     ax.set_yticks(tick_indices)
-                    ax.set_yticklabels([f"{-d - 100}" for d in desired_depth_values], fontsize=8)
+                    ax.set_yticklabels([f"{-d + DEPTH_OFFSET}" for d in desired_depth_values], fontsize=8)
             else:
                 ax.set_xticklabels([])
                 ax.set_yticklabels([])

@@ -38,7 +38,7 @@ def _setup_datasets(
     datasets = []
     for exp_trial, segment, subsegment in sorted(simulations_to_use):
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
-        if not sim_name.startswith("BO_Gal4_fly5_trial005/segment_001/"):
+        if not sim_name.startswith("BO_Gal4_fly5_trial005/segment_003/"):
             continue  # TODO: debugging, remove later
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
