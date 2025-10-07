@@ -284,7 +284,7 @@ class Keypoints3DVisualizer:
         This runs in a worker process so must create/close its own figure.
         """
         try:
-            fig = plt.figure(figsize=(24, 12))
+            fig = plt.figure(figsize=(20, 12))
             gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
 
             # Row 0: Videos
@@ -297,7 +297,7 @@ class Keypoints3DVisualizer:
                         video_frame = all_video_frames["original"][frame_idx]
                         if video_frame is not None:
                             ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
-                            ax.set_title("NeuroMechFly\nsimulation")
+                            ax.set_title("NeuroMechFly\nsimulation", fontweight="bold", pad=20)
                         else:
                             ax.text(
                                 0.5,
@@ -325,7 +325,11 @@ class Keypoints3DVisualizer:
                         video_frame = all_video_frames[model_key][frame_idx]
                         if video_frame is not None:
                             ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
-                            ax.set_title(f"Synthetic rendering\n(variant {model_idx})")
+                            ax.set_title(
+                                f"Synthetic rendering\n(variant {model_idx})",
+                                fontweight="bold",
+                                pad=20,
+                            )
                         else:
                             ax.text(
                                 0.5,
@@ -352,6 +356,19 @@ class Keypoints3DVisualizer:
                 ax = fig.add_subplot(gs[1, col_idx])
                 if col_idx == 0:
                     ax.axis("off")
+                    # Add vertical row label
+                    ax.text(
+                        0.7,
+                        0.5,
+                        "2D pose",
+                        transform=ax.transAxes,
+                        rotation=90,  # Vertical text
+                        va="center",
+                        ha="center",
+                        fontsize=12,  # Match default title size
+                        fontweight="bold",  # Make bold like titles
+                        color="black",
+                    )
                 else:
                     variant_idx = col_idx - 1
                     self._plot_merged_heatmaps(ax, frame_idx, variant_idx)
@@ -362,6 +379,19 @@ class Keypoints3DVisualizer:
                 ax = fig.add_subplot(gs[2, col_idx])
                 if col_idx == 0:
                     ax.axis("off")
+                    # Add vertical row label
+                    ax.text(
+                        0.7,
+                        0.5,
+                        "Distance from camera",
+                        transform=ax.transAxes,
+                        rotation=90,  # Vertical text
+                        va="center",
+                        ha="center",
+                        fontsize=12,  # Match default title size
+                        fontweight="bold",  # Make bold like titles
+                        color="black",
+                    )
                 else:
                     variant_idx = col_idx - 1
                     self._plot_depth_distributions(ax, frame_idx, variant_idx)
@@ -372,6 +402,19 @@ class Keypoints3DVisualizer:
                 ax = fig.add_subplot(gs[3, col_idx], projection="3d")
                 if col_idx == 0:
                     ax.axis("off")
+                    # Add vertical row label - use text2D for 3D axes
+                    ax.text2D(
+                        0.7,
+                        0.5,
+                        "3D reconstruction",
+                        transform=ax.transAxes,
+                        rotation=90,  # Vertical text
+                        va="center",
+                        ha="center",
+                        fontsize=12,  # Match default title size
+                        fontweight="bold",  # Make bold like titles
+                        color="black",
+                    )
                 else:
                     variant_idx = col_idx - 1
                     self._plot_3d_skeleton(
@@ -388,7 +431,7 @@ class Keypoints3DVisualizer:
             # plt.tight_layout()
             frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
             # Use fixed figure size instead of bbox_inches="tight" to ensure consistent frame dimensions
-            fig.savefig(frame_path, dpi=100, bbox_inches=None, pad_inches=0.1)
+            fig.savefig(frame_path, dpi=100, bbox_inches=0, pad_inches=0)
 
             # Debug: Check saved frame size for first few frames
             if frame_idx < 3:
@@ -648,7 +691,7 @@ class Keypoints3DVisualizer:
         if variant_idx == 0:
             ax.set_xlabel("ant.-post. (mm)")
             ax.set_ylabel("lateral (mm)")
-            ax.set_zlabel("dors.-vent. (mm)")
+            ax.set_zlabel("dors.-vent. (mm)", rotation=90)
         else:
             ax.set_xticklabels([])
             ax.set_yticklabels([])
