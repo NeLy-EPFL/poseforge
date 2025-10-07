@@ -547,6 +547,9 @@ class Keypoints3DVisualizer:
         frame_idx: int,
         variant_idx: int | None,
         show_ground_truth: bool = True,
+        camera_elevation: float = 30.0,
+        max_abs_azimuth: float = 30.0,
+        azimuth_rotation_period: float = 300.0,
     ):
         """Plot 3D skeleton with connections between keypoints"""
         # Define skeleton connections for legs only (excluding last 2 antennae)
@@ -673,8 +676,10 @@ class Keypoints3DVisualizer:
         ax.set_box_aspect([1,1,1])
         
         # Set viewing angle - rotate 90 degrees clockwise around z-axis
-        # Default elev=30, azim=45. Clockwise rotation around z-axis means azim -= 90
-        ax.view_init(elev=30, azim=45-90)  # azim=-45 for 90° clockwise rotation
+        azimuth = (
+            np.cos(2 * np.pi * frame_idx / azimuth_rotation_period) * max_abs_azimuth
+        )
+        ax.view_init(elev=camera_elevation, azim=azimuth)
 
     def _get_skeleton_connections(self):
         """Define skeleton connections between keypoints on the same leg (excluding antennae)"""
