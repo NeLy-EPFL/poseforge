@@ -1,21 +1,31 @@
+import matplotlib
+
+matplotlib.use("Agg")
+
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 import logging
 import cmasher
+import os
+from joblib import Parallel, delayed
 from pathlib import Path
 from matplotlib.animation import FuncAnimation
 import tempfile
 import shutil
+import imageio.v2 as imageio
 
-from biomechpose.util import configure_matplotlib_style
+from biomechpose.util import (
+    configure_matplotlib_style,
+    default_video_writing_ffmpeg_params,
+)
 from biomechpose.simulate_nmf.utils import kchain_plotting_colors
 
 
 configure_matplotlib_style()
 
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +46,7 @@ class Keypoints3DVisualizer:
         depth_min: float = -102.0,
         depth_max: float = -98.0,
         depth_n_bins: int = 64,
-        cmap = cmasher.cm.nuclear,
+        cmap=cmasher.cm.nuclear,
         marker_size: int = 30,
     ):
         self.preds = preds
@@ -152,14 +162,10 @@ class Keypoints3DVisualizer:
 
         # Pre-load all video frames for efficiency
         print("Loading video frames...")
-        all_video_frames = self._load_all_video_frames(sim_rendering_path, synthetic_videos_dir)
+        all_video_frames = self._load_all_video_frames(
+            sim_rendering_path, synthetic_videos_dir
+        )
         print(f"Loaded {len(all_video_frames)} video streams")
-
-        # Set up figure and subplots (4 rows now) with equal row heights
-        fig = plt.figure(figsize=(n_cols * 4, 4 * 4))
-        
-        # Set equal row heights using gridspec
-        gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
 
         # Create frames directory for debugging (no temp folder)
         frames_dir = Path("plot_frames")
@@ -167,101 +173,43 @@ class Keypoints3DVisualizer:
         print(f"DEBUG: Frames will be saved to: {frames_dir.absolute()}")
 
         try:
-            # Generate frames
-            for frame_idx in range(self.n_frames):
-                fig.clear()
-                
-                # Recreate gridspec after clearing
-                gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
+            # Parallelize frame rendering using joblib (processes). Each worker creates its own figure.
+            # Use fewer jobs to avoid overwhelming the system and threading issues
+            n_cpus = max(
+                1, int(os.environ.get("JOBLIB_NUM_THREADS", os.cpu_count() or 1)) - 1
+            )
+            n_jobs = min(self.n_frames, n_cpus, 15)  # Limit to max 8 parallel jobs
+            logger.debug(f"Rendering {self.n_frames} frames using {n_jobs} jobs")
 
-                # Row 0: Videos (original + synthetic)
-                for col_idx in range(n_cols):
-                    ax = fig.add_subplot(gs[0, col_idx])
-                    if col_idx == 0:
-                        # Original simulation video
-                        if 'original' in all_video_frames and frame_idx < len(all_video_frames['original']):
-                            video_frame = all_video_frames['original'][frame_idx]
-                            if video_frame is not None:
-                                ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
-                                ax.set_title("NeuroMechFly Simulation")
-                            else:
-                                ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
-                                       ha="center", va="center", transform=ax.transAxes)
-                        else:
-                            ax.text(0.5, 0.5, f"Original Video\nNot Found", 
-                                   ha="center", va="center", transform=ax.transAxes)
-                    else:
-                        # Synthetic video from style transfer model
-                        model_idx = col_idx - 1
-                        model_key = f'synthetic_{model_idx}'
-                        if model_key in all_video_frames and frame_idx < len(all_video_frames[model_key]):
-                            video_frame = all_video_frames[model_key][frame_idx]
-                            if video_frame is not None:
-                                ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
-                                ax.set_title(f"Style transfer variant {model_idx}")
-                            else:
-                                ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
-                                       ha="center", va="center", transform=ax.transAxes)
-                        else:
-                            ax.text(0.5, 0.5, f"Synthetic Video\nModel {model_idx}\nNot Found", 
-                                   ha="center", va="center", transform=ax.transAxes)
-                    ax.set_xticks([])
-                    ax.set_yticks([])
+            # Ensure frames_dir is empty
+            for f in frames_dir.glob("frame_*.png"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
-                # Row 1: Ground truth heatmap + predicted heatmaps
-                for col_idx in range(n_cols):
-                    ax = fig.add_subplot(gs[1, col_idx])
-                    if col_idx == 0:
-                        # # Show ground truth heatmap in first column
-                        # self._plot_ground_truth_heatmap(ax, frame_idx)
-                        # ax.set_title("Ground Truth Heatmap")
-                        ax.axis("off")
-                    else:
-                        # Show merged heatmaps for all keypoints
-                        variant_idx = col_idx - 1
-                        self._plot_merged_heatmaps(ax, frame_idx, variant_idx)
-                        ax.set_title(f"X-Y heatmaps - variant {variant_idx}")
+            # Dispatch parallel rendering with fallback to sequential
+            try:
+                Parallel(n_jobs=n_jobs, prefer="processes", verbose=5)(
+                    delayed(self._render_and_save_frame)(
+                        frame_idx, frames_dir, all_video_frames, n_cols
+                    )
+                    for frame_idx in range(self.n_frames)
+                )
+            except Exception as parallel_error:
+                logger.warning(f"Parallel processing failed: {parallel_error}")
+                logger.info("Falling back to sequential processing...")
 
-                # Row 2: Depth distributions
-                for col_idx in range(n_cols):
-                    ax = fig.add_subplot(gs[2, col_idx])
-                    if col_idx == 0:
-                        # # Show label depth distribution in first column
-                        # self._plot_label_depth_distribution(ax, frame_idx)
-                        # ax.set_title("Label Depth Distribution")
-                        ax.axis("off")
-                    else:
-                        # Show depth distributions as heatmaps
-                        variant_idx = col_idx - 1
-                        self._plot_depth_distributions(ax, frame_idx, variant_idx)
-                        ax.set_title(f"Depth logits - variant {variant_idx}")
-
-                # Row 3: 3D body skeleton
-                for col_idx in range(n_cols):
-                    ax = fig.add_subplot(gs[3, col_idx], projection="3d")
-                    if col_idx == 0:
-                        # # Show only ground truth skeleton
-                        # self._plot_3d_skeleton(
-                        #     ax, frame_idx, None, show_ground_truth=True
-                        # )
-                        # ax.set_title("Ground Truth 3D")
-                        ax.axis("off")
-                    else:
-                        # Show prediction + ground truth skeleton
-                        variant_idx = col_idx - 1
-                        self._plot_3d_skeleton(
-                            ax, frame_idx, variant_idx, show_ground_truth=True
+                # Fallback to sequential processing
+                for frame_idx in range(self.n_frames):
+                    try:
+                        self._render_and_save_frame(
+                            frame_idx, frames_dir, all_video_frames, n_cols
                         )
-                        ax.set_title(f"3D skeleton - variant {variant_idx}")
-
-                # plt.tight_layout()
-
-                # Save frame
-                frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
-                fig.savefig(frame_path, dpi=100, bbox_inches="tight")
-
-                if frame_idx % 10 == 0:
-                    print(f"Generated frame {frame_idx}/{self.n_frames}")
+                        if frame_idx % 50 == 0:
+                            logger.info(f"Rendered frame {frame_idx}/{self.n_frames}")
+                    except Exception as e:
+                        logger.error(f"Failed to render frame {frame_idx}: {e}")
 
             # Convert frames to video using OpenCV
             self._frames_to_video(frames_dir, output_path)
@@ -270,61 +218,192 @@ class Keypoints3DVisualizer:
             print(f"Error generating video: {e}")
             print(f"Frames saved in: {frames_dir.absolute()}")
             raise
-        
+
         print(f"DEBUG: Frames preserved in: {frames_dir.absolute()}")
-        plt.close(fig)
         print(f"Video saved to: {output_path}")
 
-    def _load_all_video_frames(self, sim_rendering_path: Path, synthetic_videos_dir: Path) -> dict:
+    def _load_all_video_frames(
+        self, sim_rendering_path: Path, synthetic_videos_dir: Path
+    ) -> dict:
         """Efficiently load all video frames into memory for fast access"""
         all_frames = {}
-        
+
         # Load original simulation video
         if sim_rendering_path.exists():
             print(f"Loading original video: {sim_rendering_path}")
-            all_frames['original'] = self._load_video_frames(sim_rendering_path)
+            all_frames["original"] = self._load_video_frames(sim_rendering_path)
         else:
             print(f"Warning: Original video not found at {sim_rendering_path}")
-            all_frames['original'] = []
-        
+            all_frames["original"] = []
+
         # Load synthetic videos for each style transfer model
         for model_idx, model_name in enumerate(self.style_transfer_models):
             synthetic_video_path = synthetic_videos_dir / f"translated_{model_name}.mp4"
-            model_key = f'synthetic_{model_idx}'
-            
+            model_key = f"synthetic_{model_idx}"
+
             if synthetic_video_path.exists():
                 print(f"Loading synthetic video {model_idx}: {synthetic_video_path}")
                 all_frames[model_key] = self._load_video_frames(synthetic_video_path)
             else:
                 print(f"Warning: Synthetic video not found at {synthetic_video_path}")
                 all_frames[model_key] = []
-        
+
         return all_frames
-    
+
     def _load_video_frames(self, video_path: Path) -> list:
         """Load all frames from a video file"""
         frames = []
         cap = cv2.VideoCapture(str(video_path))
-        
+
         if not cap.isOpened():
             print(f"Error: Could not open video {video_path}")
             return frames
-        
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frames.append(frame)
-            frame_count += 1
-            
-            # Limit to expected number of frames to avoid loading too much
-            if frame_count >= self.n_frames * 2:  # Allow some buffer
-                break
-        
-        cap.release()
+
+        try:
+            frame_count = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+                frame_count += 1
+
+                # Limit to expected number of frames to avoid loading too much
+                if frame_count >= self.n_frames * 2:  # Allow some buffer
+                    break
+        finally:
+            cap.release()
+
         print(f"Loaded {len(frames)} frames from {video_path}")
         return frames
+
+    def _render_and_save_frame(
+        self, frame_idx: int, frames_dir: Path, all_video_frames: dict, n_cols: int
+    ) -> None:
+        """Render a single frame (all subplots) and save to disk.
+        This runs in a worker process so must create/close its own figure.
+        """
+        try:
+            fig = plt.figure(figsize=(24, 12))
+            gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
+
+            # Row 0: Videos
+            for col_idx in range(n_cols):
+                ax = fig.add_subplot(gs[0, col_idx])
+                if col_idx == 0:
+                    if "original" in all_video_frames and frame_idx < len(
+                        all_video_frames["original"]
+                    ):
+                        video_frame = all_video_frames["original"][frame_idx]
+                        if video_frame is not None:
+                            ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                            ax.set_title("NeuroMechFly Simulation")
+                        else:
+                            ax.text(
+                                0.5,
+                                0.5,
+                                f"Frame {frame_idx}\nNot Available",
+                                ha="center",
+                                va="center",
+                                transform=ax.transAxes,
+                            )
+                    else:
+                        ax.text(
+                            0.5,
+                            0.5,
+                            f"Original Video\nNot Found",
+                            ha="center",
+                            va="center",
+                            transform=ax.transAxes,
+                        )
+                else:
+                    model_idx = col_idx - 1
+                    model_key = f"synthetic_{model_idx}"
+                    if model_key in all_video_frames and frame_idx < len(
+                        all_video_frames[model_key]
+                    ):
+                        video_frame = all_video_frames[model_key][frame_idx]
+                        if video_frame is not None:
+                            ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                            ax.set_title(f"Style transfer variant {model_idx}")
+                        else:
+                            ax.text(
+                                0.5,
+                                0.5,
+                                f"Frame {frame_idx}\nNot Available",
+                                ha="center",
+                                va="center",
+                                transform=ax.transAxes,
+                            )
+                    else:
+                        ax.text(
+                            0.5,
+                            0.5,
+                            f"Synthetic Video\nModel {model_idx}\nNot Found",
+                            ha="center",
+                            va="center",
+                            transform=ax.transAxes,
+                        )
+                ax.set_xticks([])
+                ax.set_yticks([])
+
+            # Row 1: Heatmaps
+            for col_idx in range(n_cols):
+                ax = fig.add_subplot(gs[1, col_idx])
+                if col_idx == 0:
+                    ax.axis("off")
+                else:
+                    variant_idx = col_idx - 1
+                    self._plot_merged_heatmaps(ax, frame_idx, variant_idx)
+                    ax.set_title(f"Row-column probabilities")
+
+            # Row 2: Depth
+            for col_idx in range(n_cols):
+                ax = fig.add_subplot(gs[2, col_idx])
+                if col_idx == 0:
+                    ax.axis("off")
+                else:
+                    variant_idx = col_idx - 1
+                    self._plot_depth_distributions(ax, frame_idx, variant_idx)
+                    ax.set_title(f"Depth probabilities")
+
+            # Row 3: 3D skeleton
+            for col_idx in range(n_cols):
+                ax = fig.add_subplot(gs[3, col_idx], projection="3d")
+                if col_idx == 0:
+                    ax.axis("off")
+                else:
+                    variant_idx = col_idx - 1
+                    self._plot_3d_skeleton(
+                        ax, frame_idx, variant_idx, show_ground_truth=True
+                    )
+                    ax.set_title(f"3D skeleton")
+
+            # plt.tight_layout()
+            frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
+            # Use fixed figure size instead of bbox_inches="tight" to ensure consistent frame dimensions
+            fig.savefig(frame_path, dpi=100, bbox_inches=None, pad_inches=0.1)
+
+            # Debug: Check saved frame size for first few frames
+            if frame_idx < 3:
+                try:
+                    import imageio.v2 as imageio_debug
+
+                    test_frame = imageio_debug.imread(str(frame_path))
+                    logger.debug(
+                        f"Frame {frame_idx} saved with size: {test_frame.shape}"
+                    )
+                except Exception:
+                    pass
+
+            plt.close(fig)
+        except Exception as e:
+            logger.exception(f"Failed to render frame {frame_idx}: {e}")
+            # Ensure figure is closed even on error
+            try:
+                plt.close(fig)
+            except:
+                pass
 
     def _plot_merged_heatmaps(self, ax, frame_idx: int, variant_idx: int):
         """Plot merged heatmaps for all keypoints with label dots"""
@@ -337,7 +416,9 @@ class Keypoints3DVisualizer:
             # Normalize each keypoint's heatmap to probabilities
             heatmap_flat = heatmaps[kp_idx].flatten()
             heatmap_flat_shifted = heatmap_flat - np.max(heatmap_flat)
-            probs_flat = np.exp(heatmap_flat_shifted) / np.sum(np.exp(heatmap_flat_shifted))
+            probs_flat = np.exp(heatmap_flat_shifted) / np.sum(
+                np.exp(heatmap_flat_shifted)
+            )
             heatmaps_prob[kp_idx] = probs_flat.reshape(heatmaps[kp_idx].shape)
 
         # Merge all keypoint heatmaps (take maximum across keypoints)
@@ -351,13 +432,23 @@ class Keypoints3DVisualizer:
             label_x = self.label_xy[frame_idx, kp_idx, 0] / self.stride_x
             label_y = self.label_xy[frame_idx, kp_idx, 1] / self.stride_y
             ax.scatter(
-                label_x, label_y, color="white", s=self.marker_size, edgecolors="black", linewidth=2
+                label_x,
+                label_y,
+                color="white",
+                s=self.marker_size,
+                edgecolors="black",
+                linewidth=2,
             )
 
-        ax.set_xlim(0, merged_heatmap_prob.shape[1])
-        ax.set_ylim(merged_heatmap_prob.shape[0], 0)  # Flip y-axis for image coordinates
+        # ax.set_xlim(0, merged_heatmap_prob.shape[1])
+        # ax.set_ylim(
+        #     merged_heatmap_prob.shape[0], 0
+        # )  # Flip y-axis for image coordinates
         ax.set_aspect("equal")
-        
+        ax.set_xlabel("Column (pixels)")
+        if variant_idx == 0:
+            ax.set_ylabel("Row (pixels)")
+
         # # Add colorbar
         # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
         # cbar.ax.tick_params(labelsize=8)
@@ -366,48 +457,60 @@ class Keypoints3DVisualizer:
         """Plot ground truth heatmap generated from label coordinates"""
         # Get the heatmap dimensions from predictions (assuming same size)
         heatmap_shape = self.pred_xy_heatmaps.shape[-2:]  # (H, W)
-        
+
         # Create ground truth heatmap by placing Gaussians at label positions
         gt_heatmap = np.zeros(heatmap_shape)
         sigma = 2.0  # Standard deviation for Gaussian blobs
-        
+
         for kp_idx in range(self.n_keypoints):
             # Get label position in heatmap coordinates
             label_x = self.label_xy[frame_idx, kp_idx, 0] / self.stride_x
             label_y = self.label_xy[frame_idx, kp_idx, 1] / self.stride_y
-            
+
             # Skip if coordinates are out of bounds
-            if (label_x < 0 or label_x >= heatmap_shape[1] or 
-                label_y < 0 or label_y >= heatmap_shape[0]):
+            if (
+                label_x < 0
+                or label_x >= heatmap_shape[1]
+                or label_y < 0
+                or label_y >= heatmap_shape[0]
+            ):
                 continue
-                
+
             # Create meshgrid for Gaussian
-            y_coords, x_coords = np.mgrid[0:heatmap_shape[0], 0:heatmap_shape[1]]
-            
+            y_coords, x_coords = np.mgrid[0 : heatmap_shape[0], 0 : heatmap_shape[1]]
+
             # Calculate Gaussian centered at label position
-            gaussian = np.exp(-((x_coords - label_x)**2 + (y_coords - label_y)**2) / (2 * sigma**2))
-            
+            gaussian = np.exp(
+                -((x_coords - label_x) ** 2 + (y_coords - label_y) ** 2)
+                / (2 * sigma**2)
+            )
+
             # Add to ground truth heatmap (take maximum to handle overlapping keypoints)
             gt_heatmap = np.maximum(gt_heatmap, gaussian)
-        
+
         # Display ground truth heatmap with dynamic vmax using viridis colormap
         vmax = gt_heatmap.max()  # Use dynamic vmax (removed the *2.0 multiplier)
         im = ax.imshow(gt_heatmap, cmap=self.cmap, vmax=vmax)
-        
+
         # Plot label points as cyan dots for reference
         for kp_idx in range(self.n_keypoints):
             label_x = self.label_xy[frame_idx, kp_idx, 0] / self.stride_x
             label_y = self.label_xy[frame_idx, kp_idx, 1] / self.stride_y
             # Only plot if within bounds
-            if (0 <= label_x < heatmap_shape[1] and 0 <= label_y < heatmap_shape[0]):
+            if 0 <= label_x < heatmap_shape[1] and 0 <= label_y < heatmap_shape[0]:
                 ax.scatter(
-                    label_x, label_y, color="white", s=self.marker_size, edgecolors="black", linewidth=2
+                    label_x,
+                    label_y,
+                    color="white",
+                    s=self.marker_size,
+                    edgecolors="black",
+                    linewidth=2,
                 )
 
         ax.set_xlim(0, heatmap_shape[1])
         ax.set_ylim(heatmap_shape[0], 0)  # Flip y-axis for image coordinates
         ax.set_aspect("equal")
-        
+
         # # Add colorbar
         # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
         # cbar.ax.tick_params(labelsize=8)
@@ -420,7 +523,9 @@ class Keypoints3DVisualizer:
         ]  # (n_keypoints, depth_bins)
 
         # Convert logits to probabilities using more stable computation
-        depth_logits_shifted = depth_logits - np.max(depth_logits, axis=1, keepdims=True)
+        depth_logits_shifted = depth_logits - np.max(
+            depth_logits, axis=1, keepdims=True
+        )
         depth_probs = np.exp(depth_logits_shifted) / np.sum(
             np.exp(depth_logits_shifted), axis=1, keepdims=True
         )
@@ -432,44 +537,65 @@ class Keypoints3DVisualizer:
         # print(f"  Keypoints with max prob < 0.1: {np.sum(depth_probs.max(axis=1) < 0.1)}/{self.n_keypoints}")
 
         # Use fixed vmin/vmax for depth distributions
-        
+
         # Show as heatmap: depth bins (y-axis) vs keypoints (x-axis) - SWAPPED AXES
-        im = ax.imshow(depth_probs.T, cmap=self.cmap, aspect='auto', 
-                      vmin=0, vmax=0.5)
-        
+        im = ax.imshow(depth_probs.T, cmap=self.cmap, aspect="auto", vmin=0, vmax=0.5)
+
         # Compute depth bin centers for proper mapping
-        depth_bin_centers = np.linspace(self.depth_min, self.depth_max, self.depth_n_bins)
-        
+        depth_bin_centers = np.linspace(
+            self.depth_min, self.depth_max, self.depth_n_bins
+        )
+
         # Add ground truth depth as white dots
         for kp_idx in range(self.n_keypoints):
             label_depth = self.label_depth[frame_idx, kp_idx]
             # Convert depth to bin index using proper mapping
             depth_bin = np.argmin(np.abs(depth_bin_centers - label_depth))
-            ax.scatter(kp_idx, depth_bin, color='white', s=self.marker_size, marker='o', 
-                      edgecolors='black', linewidth=1)
+            ax.scatter(
+                kp_idx,
+                depth_bin,
+                color="white",
+                s=self.marker_size,
+                marker="o",
+                edgecolors="black",
+                linewidth=1,
+            )
 
         # Add white vertical lines after each leg (every 6 keypoints)
         for leg_end in range(6, self.n_keypoints, 6):
-            ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
+            ax.axvline(x=leg_end - 0.5, color="white", linewidth=1)
 
         # Set labels and ticks
-        ax.set_xlabel("Keypoint Index")
-        ax.set_ylabel("Depth Bins")
-        ax.set_title(f"Depth logits - variant {variant_idx}")
-        
+        n_legs = 6
+        n_keypoints_per_leg = 5
+        n_antennae = 2
+        x_ticks = [
+            (n_keypoints_per_leg * i) + (n_keypoints_per_leg / 2) - 0.5
+            for i in range(n_legs)
+        ] + [self.n_legs * n_keypoints_per_leg + (n_antennae / 2) - 0.5]
+        k_ticklabels = [f"{side}{pos}" for side in "LR" for pos in "FMH"] + ["A"]
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(k_ticklabels)
+        ax.set_xlabel("Keypoints")
+        if variant_idx == 0:
+            ax.set_ylabel("Depth (mm)")
+        else:
+            ax.set_yticks([])
+
         # Show all keypoints as tick marks but no labels
         ax.set_xticks(range(self.n_keypoints))
         ax.set_xticklabels([])  # No keypoint names to avoid crowding
-        
+
         # Limit y-ticks (now for depth bins)
         n_depth_bins = depth_logits.shape[1]
         if n_depth_bins > 10:
             tick_indices = range(0, n_depth_bins, max(1, n_depth_bins // 5))
             ax.set_yticks(tick_indices)
             # Show actual depth values on y-axis
-            ax.set_yticklabels([f"{depth_bin_centers[i]:.1f}" for i in tick_indices], 
-                              fontsize=8)
-        
+            ax.set_yticklabels(
+                [f"{depth_bin_centers[i]:.1f}" for i in tick_indices], fontsize=8
+            )
+
         # # Add colorbar
         # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04, label='Probability')
         # cbar.ax.tick_params(labelsize=8)
@@ -478,54 +604,65 @@ class Keypoints3DVisualizer:
         """Plot label depth distribution in same format as prediction depth distributions"""
         # Get the label depths for this frame
         label_depths = self.label_depth[frame_idx]  # (n_keypoints,)
-        
+
         # Create a depth distribution matrix similar to predictions
         # Initialize with zeros: (n_keypoints, n_depth_bins)
         label_depth_probs = np.zeros((self.n_keypoints, self.depth_n_bins))
-        
+
         # Create depth bin centers for mapping
-        depth_bin_centers = np.linspace(self.depth_min, self.depth_max, self.depth_n_bins)
-        
+        depth_bin_centers = np.linspace(
+            self.depth_min, self.depth_max, self.depth_n_bins
+        )
+
         # For each keypoint, put probability 1.0 at the correct depth bin
         for kp_idx in range(self.n_keypoints):
             label_depth = label_depths[kp_idx]
             # Find nearest depth bin
             depth_bin = np.argmin(np.abs(depth_bin_centers - label_depth))
             label_depth_probs[kp_idx, depth_bin] = 1.0
-        
+
         # Use same format as prediction plots - show as heatmap with swapped axes
-        im = ax.imshow(label_depth_probs.T, cmap=self.cmap, aspect='auto', 
-                      vmin=0, vmax=1.0)
-        
+        im = ax.imshow(
+            label_depth_probs.T, cmap=self.cmap, aspect="auto", vmin=0, vmax=1.0
+        )
+
         # Add the same ground truth depth as white dots (which are the same as the data)
         for kp_idx in range(self.n_keypoints):
             label_depth = label_depths[kp_idx]
             # Convert depth to bin index using proper mapping
             depth_bin = np.argmin(np.abs(depth_bin_centers - label_depth))
-            ax.scatter(kp_idx, depth_bin, color='white', s=self.marker_size, marker='o', 
-                      edgecolors='black', linewidth=1)
+            ax.scatter(
+                kp_idx,
+                depth_bin,
+                color="white",
+                s=self.marker_size,
+                marker="o",
+                edgecolors="black",
+                linewidth=1,
+            )
 
         # Add gray vertical lines after each leg (every 6 keypoints)
         for leg_end in range(6, self.n_keypoints, 6):
-            ax.axvline(x=leg_end - 0.5, color='gray', linewidth=2)
+            ax.axvline(x=leg_end - 0.5, color="gray", linewidth=2)
 
         # Set labels and ticks - same format as prediction plots
         ax.set_xlabel("Keypoints ")
         ax.set_ylabel("Depth bins")
         ax.set_title("Depth logits")
-        
+
         # Show all keypoints as tick marks but no labels
         ax.set_xticks(range(self.n_keypoints))
         ax.set_xticklabels([])  # No keypoint names to avoid crowding
-        
+
         # Limit y-ticks (for depth bins)
         if self.depth_n_bins > 10:
             tick_indices = range(0, self.depth_n_bins, max(1, self.depth_n_bins // 5))
             ax.set_yticks(tick_indices)
             # Show actual depth values on y-axis
-            ax.set_yticklabels([f"{depth_bin_centers[i]:.1f}" for i in tick_indices], 
-                              fontsize=8)
-        
+            ax.set_yticklabels(
+                [f"{depth_bin_centers[i]:.1f}" for i in tick_indices], fontsize=8
+            )
+
         # # Add colorbar
         # cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04, label='Probability')
         # cbar.ax.tick_params(labelsize=8)
@@ -539,7 +676,9 @@ class Keypoints3DVisualizer:
         else:
             # Use first two characters (leg identifier)
             leg_key = keypoint_name[:2]
-            return kchain_plotting_colors.get(leg_key, np.array([0.5, 0.5, 0.5]))  # Default gray
+            return kchain_plotting_colors.get(
+                leg_key, np.array([0.5, 0.5, 0.5])
+            )  # Default gray
 
     def _plot_3d_skeleton(
         self,
@@ -559,7 +698,7 @@ class Keypoints3DVisualizer:
         if show_ground_truth:
             # Plot ground truth skeleton
             gt_points = self.label_world_xyz[frame_idx]  # (n_keypoints, 3)
-            
+
             # Plot leg connections with colors from kchain_plotting_colors
             for connection in skeleton_connections:
                 if (
@@ -568,16 +707,15 @@ class Keypoints3DVisualizer:
                 ):
                     start_point = gt_points[connection[0]]
                     end_point = gt_points[connection[1]]
-                    
+
                     # Get color for this connection based on the keypoint
                     keypoint_name = self.keypoints_order[connection[0]]
-                    line_color = self._get_keypoint_color(keypoint_name)
-                    
+
                     ax.plot3D(
                         [start_point[0], end_point[0]],
                         [start_point[1], end_point[1]],
                         [start_point[2], end_point[2]],
-                        color=line_color,
+                        color="gray",
                         linewidth=3,
                     )
 
@@ -587,13 +725,12 @@ class Keypoints3DVisualizer:
                     antenna_idx = self.n_keypoints - 2 + i
                     antenna_point = gt_points[antenna_idx]
                     keypoint_name = self.keypoints_order[antenna_idx]
-                    point_color = self._get_keypoint_color(keypoint_name)
-                    
+
                     ax.scatter(
                         antenna_point[0],
-                        antenna_point[1], 
+                        antenna_point[1],
                         antenna_point[2],
-                        color=point_color,
+                        color="gray",
                         s=self.marker_size,
                     )
 
@@ -612,11 +749,11 @@ class Keypoints3DVisualizer:
                 ):
                     start_point = pred_points[connection[0]]
                     end_point = pred_points[connection[1]]
-                    
+
                     # Get color for this connection based on the keypoint
                     keypoint_name = self.keypoints_order[connection[0]]
                     line_color = self._get_keypoint_color(keypoint_name)
-                    
+
                     ax.plot3D(
                         [start_point[0], end_point[0]],
                         [start_point[1], end_point[1]],
@@ -632,20 +769,22 @@ class Keypoints3DVisualizer:
                     antenna_point = pred_points[antenna_idx]
                     keypoint_name = self.keypoints_order[antenna_idx]
                     point_color = self._get_keypoint_color(keypoint_name)
-                    
+
                     ax.scatter(
                         antenna_point[0],
                         antenna_point[1],
                         antenna_point[2],
                         color=point_color,
                         s=self.marker_size,
-                        label=f"Prediction {variant_idx}" if i == 0 else "",  # Only label once
+                        label=(
+                            f"Prediction {variant_idx}" if i == 0 else ""
+                        ),  # Only label once
                     )
 
         # Set labels and limits
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_zlabel("Z (mm)")
+        ax.set_xlabel("anterior-posterior (mm)")
+        ax.set_ylabel("lateral (mm)")
+        ax.set_zlabel("dorsal-ventral (mm)")
 
         # Set equal aspect ratio and reasonable limits
         all_points = self.label_world_xyz[frame_idx]
@@ -658,10 +797,10 @@ class Keypoints3DVisualizer:
         x_range = np.ptp(all_points[:, 0])
         y_range = np.ptp(all_points[:, 1])
         z_range = np.ptp(all_points[:, 2])
-        
+
         # Use the maximum range to ensure equal scaling
         max_range = max(x_range, y_range, z_range) / 2.0
-        
+
         # Center points for each dimension
         mid_x = np.mean(all_points[:, 0])
         mid_y = np.mean(all_points[:, 1])
@@ -671,10 +810,10 @@ class Keypoints3DVisualizer:
         ax.set_xlim(mid_x - max_range, mid_x + max_range)
         ax.set_ylim(mid_y - max_range, mid_y + max_range)
         ax.set_zlim(mid_z - max_range, mid_z + max_range)
-        
+
         # Ensure equal aspect ratio
-        ax.set_box_aspect([1,1,1])
-        
+        ax.set_box_aspect([1, 1, 1])
+
         # Set viewing angle - rotate 90 degrees clockwise around z-axis
         azimuth = (
             np.cos(2 * np.pi * frame_idx / azimuth_rotation_period) * max_abs_azimuth
@@ -686,19 +825,19 @@ class Keypoints3DVisualizer:
         # Connect keypoints within the same leg based on first two characters of name
         # The keypoints are ordered from proximal to distal within each leg
         # Exclude the last 2 keypoints (antennae)
-        
+
         connections = []
-        
+
         # Group keypoints by leg (first two characters) - exclude last 2 antennae
         leg_groups = {}
         leg_keypoints = self.keypoints_order[:-2]  # Exclude last 2 antennae keypoints
-        
+
         for i, keypoint_name in enumerate(leg_keypoints):
             leg_id = keypoint_name[:2]  # First two characters identify the leg
             if leg_id not in leg_groups:
                 leg_groups[leg_id] = []
             leg_groups[leg_id].append(i)
-        
+
         # Connect consecutive keypoints within each leg
         for leg_id, keypoint_indices in leg_groups.items():
             # Sort indices to ensure proper proximal-to-distal order
@@ -706,26 +845,82 @@ class Keypoints3DVisualizer:
             # Connect consecutive keypoints in this leg
             for i in range(len(keypoint_indices) - 1):
                 connections.append((keypoint_indices[i], keypoint_indices[i + 1]))
-        
+
         return connections
 
     def _frames_to_video(self, frames_dir: Path, output_path: Path, fps: int = 30):
-        """Convert frame images to video using OpenCV"""
+        """Convert frame images to video using imageio"""
         frame_files = sorted(frames_dir.glob("frame_*.png"))
         if not frame_files:
             raise ValueError("No frame files found")
 
-        # Read first frame to get dimensions
-        first_frame = cv2.imread(str(frame_files[0]))
-        height, width, channels = first_frame.shape
+        logger.info(f"Converting {len(frame_files)} frames to video using imageio...")
 
-        # Define codec and create VideoWriter
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        # Check frame sizes first to detect inconsistencies
+        frame_sizes = {}
+        target_size = None
+        for i, frame_file in enumerate(frame_files[:5]):  # Check first 5 frames
+            try:
+                frame = imageio.imread(str(frame_file))
+                size = frame.shape[:2]  # (height, width)
+                frame_sizes[i] = size
+                if target_size is None:
+                    target_size = size
+                elif size != target_size:
+                    logger.warning(
+                        f"Frame size inconsistency detected: frame {i} has size {size}, expected {target_size}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not read frame {i} for size check: {e}")
 
-        for frame_file in frame_files:
-            frame = cv2.imread(str(frame_file))
-            out.write(frame)
+        logger.info(f"Target frame size: {target_size}")
 
-        out.release()
-        cv2.destroyAllWindows()
+        try:
+            with imageio.get_writer(
+                str(output_path),
+                "ffmpeg",
+                fps=fps,
+                codec="libx264",
+                quality=None,  # Use CRF instead of quality
+                ffmpeg_params=default_video_writing_ffmpeg_params,
+            ) as video_writer:
+                successful_frames = 0
+                for i, frame_file in enumerate(frame_files):
+                    try:
+                        # Read frame using imageio (supports more formats than cv2)
+                        frame = imageio.imread(str(frame_file))
+
+                        # Ensure consistent frame size
+                        if target_size and frame.shape[:2] != target_size:
+                            logger.debug(
+                                f"Resizing frame {i} from {frame.shape[:2]} to {target_size}"
+                            )
+                            # Use PIL for better quality resizing
+                            from PIL import Image
+
+                            pil_frame = Image.fromarray(frame)
+                            pil_frame = pil_frame.resize(
+                                (target_size[1], target_size[0]),
+                                Image.Resampling.LANCZOS,
+                            )
+                            frame = np.array(pil_frame)
+
+                        video_writer.append_data(frame)
+                        successful_frames += 1
+
+                        if i % 100 == 0:
+                            logger.debug(f"Processed frame {i}/{len(frame_files)}")
+
+                    except Exception as e:
+                        logger.warning(f"Failed to write frame {i} ({frame_file}): {e}")
+
+            logger.info(
+                f"Successfully wrote {successful_frames}/{len(frame_files)} frames to video"
+            )
+
+            if successful_frames == 0:
+                raise RuntimeError("Failed to write any frames to video")
+
+        except Exception as e:
+            logger.error(f"Video writing failed: {e}")
+            raise

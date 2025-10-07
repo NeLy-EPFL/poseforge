@@ -38,8 +38,8 @@ def _setup_datasets(
     datasets = []
     for exp_trial, segment, subsegment in sorted(simulations_to_use):
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
-        if sim_name != "BO_Gal4_fly5_trial005/segment_001/subsegment_000":
-            continue  # TODO: debugging, remove later 
+        if not sim_name.startswith("BO_Gal4_fly5_trial005/segment_001/"):
+            continue  # TODO: debugging, remove later
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
             for model in style_transfer_models
@@ -158,18 +158,30 @@ def test_keypoints3d_models(
 
     # Run inference for each dataset
     for dataset in datasets:
-        print(f"Running inference on dataset {dataset.sim_name}")
-        preds, labels = inference_on_dataset(dataset, pipeline, batch_size)
-        preds["pred_depth"] = preds["pred_depth"] - 100  # TODO: Remove this hack
-        preds["pred_world_xyz"] = cam_mapper(preds["pred_xy"], preds["pred_depth"])
-        labels["keypoint_pos_world_xyz"] = cam_mapper(
-            labels["keypoint_pos"][:, :, :2], labels["keypoint_pos"][:, :, 2]
-        )
         output_dir = Path(output_basedir) / dataset.sim_name.replace("/", "_")
         output_dir.mkdir(parents=True, exist_ok=True)
+        pred_path = output_dir / "predictions.npz"
+        label_path = output_dir / "labels.npz"
+        if pred_path.is_file() and label_path.is_file():
+            print(
+                f"Found existing predictions and labels "
+                f"for dataset {dataset.sim_name}; loading from disk."
+            )
+            preds = np.load(pred_path)
+            labels = np.load(label_path)
+        else:
+            print(f"Running inference on dataset {dataset.sim_name}")
+            preds, labels = inference_on_dataset(dataset, pipeline, batch_size)
+            preds["pred_depth"] = preds["pred_depth"] - 100  # TODO: Remove this hack
+            preds["pred_world_xyz"] = cam_mapper(preds["pred_xy"], preds["pred_depth"])
+            labels["keypoint_pos_world_xyz"] = cam_mapper(
+                labels["keypoint_pos"][:, :, :2], labels["keypoint_pos"][:, :, 2]
+            )
+            np.savez_compressed(pred_path, **preds)
+            np.savez_compressed(label_path, **labels)
+
         labels_metadata = dataset.get_sim_data_metadata()
         keypoints_order = labels_metadata["keypoint_pos"]["keys"]
-
         exp_trial, segment, subsegment = dataset.sim_name.split("/")
         visualizer = Keypoints3DVisualizer(
             preds,
