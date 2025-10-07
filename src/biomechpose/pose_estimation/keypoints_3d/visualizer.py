@@ -7,13 +7,9 @@ import matplotlib.pyplot as plt
 import cv2
 import logging
 import cmasher
-import os
-from joblib import Parallel, delayed
-from pathlib import Path
-from matplotlib.animation import FuncAnimation
-import tempfile
-import shutil
 import imageio.v2 as imageio
+from PIL import Image
+from pathlib import Path
 
 from biomechpose.util import (
     configure_matplotlib_style,
@@ -27,6 +23,318 @@ configure_matplotlib_style()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Standalone functions for parallel processing (must be pickle-able)
+def _get_keypoint_color_standalone(keypoint_name: str) -> np.ndarray:
+    """Get color for a keypoint based on kchain_plotting_colors dictionary"""
+    if keypoint_name in ["LPedicel", "RPedicel"]:
+        # Map antenna pedicels to antenna colors
+        antenna_key = "LAntenna" if keypoint_name.startswith("L") else "RAntenna"
+        return kchain_plotting_colors[antenna_key]
+    else:
+        # Use first two characters (leg identifier)
+        leg_key = keypoint_name[:2]
+        return kchain_plotting_colors.get(leg_key, np.array([0.5, 0.5, 0.5]))  # Default gray
+
+
+def _get_skeleton_connections_standalone(keypoints_order: list[str]) -> list[tuple[int, int]]:
+    """Define skeleton connections between keypoints on the same leg (excluding antennae)"""
+    connections = []
+    
+    # Group keypoints by leg (first two characters) - exclude last 2 antennae
+    leg_groups = {}
+    leg_keypoints = keypoints_order[:-2]  # Exclude last 2 antennae keypoints
+    
+    for i, keypoint_name in enumerate(leg_keypoints):
+        leg_id = keypoint_name[:2]  # First two characters identify the leg
+        if leg_id not in leg_groups:
+            leg_groups[leg_id] = []
+        leg_groups[leg_id].append(i)
+    
+    # Connect consecutive keypoints within each leg
+    for leg_id, keypoint_indices in leg_groups.items():
+        # Sort indices to ensure proper proximal-to-distal order
+        keypoint_indices.sort()
+        # Connect consecutive keypoints in this leg
+        for i in range(len(keypoint_indices) - 1):
+            connections.append((keypoint_indices[i], keypoint_indices[i + 1]))
+    
+    return connections
+
+
+def render_single_frame(
+    frame_idx: int,
+    frames_dir: Path,
+    all_video_frames: dict,
+    n_cols: int,
+    # Data needed for rendering
+    pred_xy_heatmaps: np.ndarray,
+    pred_depth_logits: np.ndarray,
+    pred_world_xyz: np.ndarray,
+    label_xy: np.ndarray,
+    label_depth: np.ndarray,
+    label_world_xyz: np.ndarray,
+    keypoints_order: list[str],
+    stride_x: int,
+    stride_y: int,
+    depth_min: float,
+    depth_max: float,
+    depth_n_bins: int,
+    marker_size: int,
+    cmap,
+    n_keypoints: int,
+    style_transfer_models: list[str],
+) -> None:
+    """Standalone function to render a single frame - can be pickled for multiprocessing"""
+    try:
+        fig = plt.figure(figsize=(20, 12))
+        gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
+
+        # Row 0: Videos
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[0, col_idx])
+            if col_idx == 0:
+                if "original" in all_video_frames and frame_idx < len(all_video_frames["original"]):
+                    video_frame = all_video_frames["original"][frame_idx]
+                    if video_frame is not None:
+                        ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                        ax.set_title("NeuroMechFly\nsimulation", fontweight="bold", pad=20)
+                    else:
+                        ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
+                               ha="center", va="center", transform=ax.transAxes)
+                else:
+                    ax.text(0.5, 0.5, f"Original Video\nNot Found", 
+                           ha="center", va="center", transform=ax.transAxes)
+            else:
+                model_idx = col_idx - 1
+                model_key = f"synthetic_{model_idx}"
+                if model_key in all_video_frames and frame_idx < len(all_video_frames[model_key]):
+                    video_frame = all_video_frames[model_key][frame_idx]
+                    if video_frame is not None:
+                        ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                        ax.set_title(f"Synthetic rendering\n(variant {model_idx})", 
+                                   fontweight="bold", pad=20)
+                    else:
+                        ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
+                               ha="center", va="center", transform=ax.transAxes)
+                else:
+                    ax.text(0.5, 0.5, f"Synthetic Video\nModel {model_idx}\nNot Found", 
+                           ha="center", va="center", transform=ax.transAxes)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        # Row 1: Heatmaps
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[1, col_idx])
+            if col_idx == 0:
+                ax.axis("off")
+                ax.text(0.6, 0.5, "2D pose", transform=ax.transAxes, rotation=90,
+                       va='center', ha='center', fontsize=12, fontweight='bold', color='black')
+            else:
+                variant_idx = col_idx - 1
+                _plot_merged_heatmaps_standalone(ax, frame_idx, variant_idx, pred_xy_heatmaps, 
+                                               label_xy, stride_x, stride_y, n_keypoints, 
+                                               marker_size, cmap)
+
+        # Row 2: Depth
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[2, col_idx])
+            if col_idx == 0:
+                ax.axis("off")
+                ax.text(0.6, 0.5, "Distance from camera", transform=ax.transAxes, rotation=90,
+                       va='center', ha='center', fontsize=12, fontweight='bold', color='black')
+            else:
+                variant_idx = col_idx - 1
+                _plot_depth_distributions_standalone(ax, frame_idx, variant_idx, pred_depth_logits,
+                                                    label_depth, depth_min, depth_max, depth_n_bins, 
+                                                    n_keypoints, marker_size, cmap)
+
+        # Row 3: 3D skeleton
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[3, col_idx], projection="3d")
+            if col_idx == 0:
+                ax.axis("off")
+                ax.text2D(0.6, 0.5, "3D reconstruction", transform=ax.transAxes, rotation=90,
+                         va='center', ha='center', fontsize=12, fontweight='bold', color='black')
+            else:
+                variant_idx = col_idx - 1
+                _plot_3d_skeleton_standalone(ax, frame_idx, variant_idx, pred_world_xyz,
+                                           label_world_xyz, keypoints_order, n_keypoints,
+                                           marker_size)
+
+        frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
+        fig.savefig(frame_path, dpi=100, bbox_inches=None, pad_inches=0.1)
+        plt.close(fig)
+        
+    except Exception as e:
+        logger.exception(f"Failed to render frame {frame_idx}: {e}")
+
+
+def _plot_merged_heatmaps_standalone(ax, frame_idx: int, variant_idx: int, pred_xy_heatmaps: np.ndarray,
+                                   label_xy: np.ndarray, stride_x: int, stride_y: int, 
+                                   n_keypoints: int, marker_size: int, cmap):
+    """Plot merged heatmaps for all keypoints with label dots"""
+    # Get heatmaps for this frame and variant
+    heatmaps = pred_xy_heatmaps[variant_idx, frame_idx]  # (n_keypoints, H, W)
+
+    # Convert each keypoint's heatmap to probabilities independently
+    heatmaps_prob = np.zeros_like(heatmaps)
+    for kp_idx in range(n_keypoints):
+        # Normalize each keypoint's heatmap to probabilities
+        heatmap_flat = heatmaps[kp_idx].flatten()
+        heatmap_flat_shifted = heatmap_flat - np.max(heatmap_flat)
+        probs_flat = np.exp(heatmap_flat_shifted) / np.sum(np.exp(heatmap_flat_shifted))
+        heatmaps_prob[kp_idx] = probs_flat.reshape(heatmaps[kp_idx].shape)
+
+    # Merge all keypoint heatmaps (take maximum across keypoints)
+    merged_heatmap_prob = np.max(heatmaps_prob, axis=0)  # (H, W)
+
+    # Display merged heatmap
+    im = ax.imshow(merged_heatmap_prob, cmap=cmap, vmin=0, vmax=0.04)
+
+    # Plot label points as prominent dots
+    for kp_idx in range(n_keypoints):
+        label_x = label_xy[frame_idx, kp_idx, 0] / stride_x
+        label_y = label_xy[frame_idx, kp_idx, 1] / stride_y
+        ax.scatter(label_x, label_y, color="white", s=marker_size, 
+                  edgecolors="black", linewidth=2)
+
+    ax.set_xlim(0, merged_heatmap_prob.shape[1])
+    ax.set_ylim(merged_heatmap_prob.shape[0], 0)  # Flip y-axis for image coordinates
+    ax.set_aspect("equal")
+
+
+def _plot_depth_distributions_standalone(ax, frame_idx: int, variant_idx: int, pred_depth_logits: np.ndarray,
+                                        label_depth: np.ndarray, depth_min: float, depth_max: float, 
+                                        depth_n_bins: int, n_keypoints: int, marker_size: int, cmap):
+    """Plot depth predictions as a heatmap"""
+    # Get depth logits for this frame and variant
+    depth_logits = pred_depth_logits[variant_idx, frame_idx]  # (n_keypoints, depth_bins)
+
+    # Convert logits to probabilities
+    depth_logits_shifted = depth_logits - np.max(depth_logits, axis=1, keepdims=True)
+    depth_probs = np.exp(depth_logits_shifted) / np.sum(np.exp(depth_logits_shifted), axis=1, keepdims=True)
+
+    # Show as heatmap: depth bins (y-axis) vs keypoints (x-axis)
+    im = ax.imshow(depth_probs.T, cmap=cmap, aspect='auto', vmin=0, vmax=0.5)
+    
+    # Add ground truth depth as white dots
+    depth_bin_centers = np.linspace(depth_min, depth_max, depth_n_bins)
+    for kp_idx in range(n_keypoints):
+        label_depth_val = label_depth[frame_idx, kp_idx]
+        # Convert depth to bin index using proper mapping
+        depth_bin = np.argmin(np.abs(depth_bin_centers - label_depth_val))
+        ax.scatter(kp_idx, depth_bin, color='white', s=marker_size, marker='o', 
+                  edgecolors='black', linewidth=1)
+
+    # Add white vertical lines after each leg (every 6 keypoints)
+    for leg_end in range(6, n_keypoints, 6):
+        ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
+
+    ax.set_xlabel("Keypoint Index")
+    ax.set_ylabel("Depth Bins")
+    ax.set_xticks(range(n_keypoints))
+    ax.set_xticklabels([])
+
+
+def _plot_3d_skeleton_standalone(ax, frame_idx: int, variant_idx: int, pred_world_xyz: np.ndarray,
+                                label_world_xyz: np.ndarray, keypoints_order: list[str],
+                                n_keypoints: int, marker_size: int):
+    """Plot 3D skeleton with connections between keypoints"""
+    skeleton_connections = _get_skeleton_connections_standalone(keypoints_order)
+
+    # Plot ground truth first
+    gt_points = label_world_xyz[frame_idx]  # (n_keypoints, 3)
+    
+    # Plot leg connections with colors
+    for connection in skeleton_connections:
+        if connection[0] < n_keypoints and connection[1] < n_keypoints:
+            start_point = gt_points[connection[0]]
+            end_point = gt_points[connection[1]]
+            
+            keypoint_name = keypoints_order[connection[0]]
+            line_color = _get_keypoint_color_standalone(keypoint_name)
+            
+            ax.plot3D([start_point[0], end_point[0]], [start_point[1], end_point[1]], 
+                     [start_point[2], end_point[2]], color=line_color, linewidth=3)
+
+    # Plot antennae keypoints as scatter points (last 2 keypoints)
+    if n_keypoints >= 2:
+        for i in range(2):
+            antenna_idx = n_keypoints - 2 + i
+            antenna_point = gt_points[antenna_idx]
+            keypoint_name = keypoints_order[antenna_idx]
+            point_color = _get_keypoint_color_standalone(keypoint_name)
+            ax.scatter(antenna_point[0], antenna_point[1], antenna_point[2], 
+                      color=point_color, s=marker_size)
+
+    # Plot predictions
+    if variant_idx is not None:
+        pred_points = pred_world_xyz[variant_idx, frame_idx]  # (n_keypoints, 3)
+
+        # Plot leg connections
+        for connection in skeleton_connections:
+            if connection[0] < n_keypoints and connection[1] < n_keypoints:
+                start_point = pred_points[connection[0]]
+                end_point = pred_points[connection[1]]
+                
+                keypoint_name = keypoints_order[connection[0]]
+                line_color = _get_keypoint_color_standalone(keypoint_name)
+                
+                ax.plot3D([start_point[0], end_point[0]], [start_point[1], end_point[1]], 
+                         [start_point[2], end_point[2]], color=line_color, linewidth=2)
+
+        # Plot antennae keypoints
+        if n_keypoints >= 2:
+            for i in range(2):
+                antenna_idx = n_keypoints - 2 + i
+                antenna_point = pred_points[antenna_idx]
+                keypoint_name = keypoints_order[antenna_idx]
+                point_color = _get_keypoint_color_standalone(keypoint_name)
+                ax.scatter(antenna_point[0], antenna_point[1], antenna_point[2], 
+                          color=point_color, s=marker_size)
+
+    # Set labels and limits
+    if variant_idx == 0:
+        ax.set_xlabel("ant.-post. (mm)")
+        ax.set_ylabel("lateral (mm)")
+        ax.set_zlabel("dors.-vent. (mm)")
+    else:
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_zticklabels([])
+
+    # Set equal aspect ratio and limits
+    all_points = label_world_xyz[frame_idx]
+    if variant_idx is not None:
+        all_points = np.vstack([all_points, pred_world_xyz[variant_idx, frame_idx]])
+
+    # Calculate ranges for each dimension
+    x_range = np.ptp(all_points[:, 0])
+    y_range = np.ptp(all_points[:, 1])
+    z_range = np.ptp(all_points[:, 2])
+    
+    # Use the maximum range to ensure equal scaling
+    max_range = max(x_range, y_range, z_range) / 2.0
+    
+    # Center points for each dimension
+    mid_x = np.mean(all_points[:, 0])
+    mid_y = np.mean(all_points[:, 1])
+    mid_z = np.mean(all_points[:, 2])
+
+    # Set equal limits for all axes
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(mid_z - max_range, mid_z + max_range)
+    
+    # Ensure equal aspect ratio
+    ax.set_box_aspect([1,1,1])
+    
+    # Set viewing angle
+    azimuth = np.cos(2 * np.pi * frame_idx / 300.0) * 30.0
+    ax.view_init(elev=30.0, azim=azimuth)
+
 
 
 class Keypoints3DVisualizer:
@@ -153,67 +461,31 @@ class Keypoints3DVisualizer:
             / self.segment
             / self.subsegment
         )
-        # video for each style transfer model can be found at
-        # synthetic_videos_dir / f"translated_{model_name}.mp4"
 
-        n_cols = (
-            1 + self.n_variants
-        )  # 1 for original + n_variants for style transfer models
+        n_cols = 1 + self.n_variants  # 1 for original + n_variants for style transfer models
 
         # Pre-load all video frames for efficiency
         print("Loading video frames...")
-        all_video_frames = self._load_all_video_frames(
-            sim_rendering_path, synthetic_videos_dir
-        )
+        all_video_frames = self._load_all_video_frames(sim_rendering_path, synthetic_videos_dir)
         print(f"Loaded {len(all_video_frames)} video streams")
 
-        # Create frames directory for debugging (no temp folder)
+        # Create frames directory
         frames_dir = Path("plot_frames")
         frames_dir.mkdir(exist_ok=True)
         print(f"DEBUG: Frames will be saved to: {frames_dir.absolute()}")
 
-        try:
-            # Parallelize frame rendering using joblib (processes). Each worker creates its own figure.
-            # Use fewer jobs to avoid overwhelming the system and threading issues
-            n_cpus = max(
-                1, int(os.environ.get("JOBLIB_NUM_THREADS", os.cpu_count() or 1)) - 1
-            )
-            n_jobs = min(self.n_frames, n_cpus, 15)  # Limit to max 8 parallel jobs
-            logger.debug(f"Rendering {self.n_frames} frames using {n_jobs} jobs")
-
-            # Ensure frames_dir is empty
-            for f in frames_dir.glob("frame_*.png"):
-                try:
-                    f.unlink()
-                except Exception:
-                    pass
-
-            # Dispatch parallel rendering with fallback to sequential
+        # Clear old frames
+        for f in frames_dir.glob("frame_*.png"):
             try:
-                Parallel(n_jobs=n_jobs, prefer="processes", verbose=5)(
-                    delayed(self._render_and_save_frame)(
-                        frame_idx, frames_dir, all_video_frames, n_cols
-                    )
-                    for frame_idx in range(self.n_frames)
-                )
-            except Exception as parallel_error:
-                logger.warning(f"Parallel processing failed: {parallel_error}")
-                logger.info("Falling back to sequential processing...")
+                f.unlink()
+            except Exception:
+                pass
 
-                # Fallback to sequential processing
-                for frame_idx in range(self.n_frames):
-                    try:
-                        self._render_and_save_frame(
-                            frame_idx, frames_dir, all_video_frames, n_cols
-                        )
-                        if frame_idx % 50 == 0:
-                            logger.info(f"Rendered frame {frame_idx}/{self.n_frames}")
-                    except Exception as e:
-                        logger.error(f"Failed to render frame {frame_idx}: {e}")
-
-            # Convert frames to video using OpenCV
+        # Use optimized sequential rendering with figure reuse
+        try:
+            self._render_frames_optimized(frames_dir, all_video_frames, n_cols)
+            # Convert frames to video
             self._frames_to_video(frames_dir, output_path)
-
         except Exception as e:
             print(f"Error generating video: {e}")
             print(f"Frames saved in: {frames_dir.absolute()}")
@@ -221,6 +493,182 @@ class Keypoints3DVisualizer:
 
         print(f"DEBUG: Frames preserved in: {frames_dir.absolute()}")
         print(f"Video saved to: {output_path}")
+
+    def _render_frames_optimized(self, frames_dir: Path, all_video_frames: dict, n_cols: int) -> None:
+        """Optimized frame rendering by reusing figure elements and only updating data"""
+        print("Setting up reusable figure...")
+        
+        # Create figure and axes once
+        fig = plt.figure(figsize=(20, 12))
+        gs = fig.add_gridspec(4, n_cols, height_ratios=[1, 1, 1, 1], hspace=0.3)
+        
+        # Store all axes for reuse
+        video_axes = []
+        heatmap_axes = []
+        depth_axes = []
+        skeleton_axes = []
+        
+        # Row 0: Video axes
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[0, col_idx])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if col_idx == 0:
+                ax.set_title("NeuroMechFly\nsimulation", fontweight="bold", pad=20)
+            else:
+                model_idx = col_idx - 1
+                ax.set_title(f"Synthetic rendering\n(variant {model_idx})", fontweight="bold", pad=20)
+            video_axes.append(ax)
+        
+        # Row 1: Heatmap axes
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[1, col_idx])
+            if col_idx == 0:
+                ax.axis("off")
+                ax.text(0.6, 0.5, "2D pose", transform=ax.transAxes, rotation=90,
+                       va='center', ha='center', fontsize=12, fontweight='bold', color='black')
+            else:
+                ax.set_aspect("equal")
+                if col_idx == 1:  # Only for first data column
+                    ax.set_ylabel("row (px)")
+                    ax.set_xlabel("column (px)")
+                else:
+                    ax.set_xticklabels([])
+                    ax.set_yticklabels([])
+            heatmap_axes.append(ax)
+        
+        # Row 2: Depth axes
+        depth_bin_centers = np.linspace(self.depth_min, self.depth_max, self.depth_n_bins)
+        for col_idx in range(n_cols):
+            ax = fig.add_subplot(gs[2, col_idx])
+            if col_idx == 0:
+                ax.axis("off")
+                ax.text(0.6, 0.5, "Distance from camera", transform=ax.transAxes, rotation=90,
+                       va='center', ha='center', fontsize=12, fontweight='bold', color='black')
+            else:
+                # Pre-setup depth plot formatting
+                for leg_end in range(6, self.n_keypoints, 6):
+                    ax.axvline(x=leg_end - 0.5, color='white', linewidth=1)
+                
+                n_legs = 6
+                n_keypoints_per_leg = 5
+                n_antennae = 2
+                x_ticks = [
+                    (n_keypoints_per_leg * i) + (n_keypoints_per_leg / 2) - 0.5
+                    for i in range(n_legs)
+                ] + [n_legs * n_keypoints_per_leg + (n_antennae / 2) - 0.5]
+                k_ticklabels = [f"{side}{pos}" for side in "LR" for pos in "FMH"] + ["A"]
+                ax.set_xticks(x_ticks)
+                
+                if col_idx == 1:  # Only for first data column
+                    ax.set_xticklabels(k_ticklabels)
+                    ax.set_ylabel("depth (mm)")
+                    if self.depth_n_bins > 10:
+                        tick_indices = range(0, self.depth_n_bins, max(1, self.depth_n_bins // 5))
+                        ax.set_yticks(tick_indices)
+                        ax.set_yticklabels([f"{depth_bin_centers[i]:.1f}" for i in tick_indices], fontsize=8)
+                else:
+                    ax.set_xticklabels([])
+                    ax.set_yticklabels([])
+            depth_axes.append(ax)
+        
+        # Row 3: 3D skeleton axes
+        for col_idx in range(n_cols):
+            if col_idx == 0:
+                ax = fig.add_subplot(gs[3, col_idx], projection="3d")
+                ax.axis("off")
+                ax.text2D(0.6, 0.5, "3D reconstruction", transform=ax.transAxes, rotation=90,
+                         va='center', ha='center', fontsize=12, fontweight='bold', color='black')
+            else:
+                ax = fig.add_subplot(gs[3, col_idx], projection="3d")
+                variant_idx = col_idx - 1
+                if variant_idx == 0:
+                    ax.set_xlabel("ant.-post. (mm)")
+                    ax.set_ylabel("lateral (mm)")
+                    ax.set_zlabel("dors.-vent. (mm)", rotation=90)
+                else:
+                    ax.set_xticklabels([])
+                    ax.set_yticklabels([])
+                    ax.set_zticklabels([])
+                ax.set_box_aspect([1, 1, 1])
+            skeleton_axes.append(ax)
+        
+        # Pre-compute skeleton connections
+        skeleton_connections = self._get_skeleton_connections()
+        
+        print(f"Rendering {self.n_frames} frames with optimized approach...")
+        
+        # Render each frame by updating data only
+        for frame_idx in range(self.n_frames):
+            try:
+                # Update video frames
+                for col_idx in range(n_cols):
+                    ax = video_axes[col_idx]
+                    ax.clear()
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    
+                    if col_idx == 0:
+                        ax.set_title("NeuroMechFly\nsimulation", fontweight="bold", pad=20)
+                        if "original" in all_video_frames and frame_idx < len(all_video_frames["original"]):
+                            video_frame = all_video_frames["original"][frame_idx]
+                            if video_frame is not None:
+                                ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                            else:
+                                ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
+                                       ha="center", va="center", transform=ax.transAxes)
+                        else:
+                            ax.text(0.5, 0.5, f"Original Video\nNot Found", 
+                                   ha="center", va="center", transform=ax.transAxes)
+                    else:
+                        model_idx = col_idx - 1
+                        ax.set_title(f"Synthetic rendering\n(variant {model_idx})", fontweight="bold", pad=20)
+                        model_key = f"synthetic_{model_idx}"
+                        if model_key in all_video_frames and frame_idx < len(all_video_frames[model_key]):
+                            video_frame = all_video_frames[model_key][frame_idx]
+                            if video_frame is not None:
+                                ax.imshow(cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB))
+                            else:
+                                ax.text(0.5, 0.5, f"Frame {frame_idx}\nNot Available", 
+                                       ha="center", va="center", transform=ax.transAxes)
+                        else:
+                            ax.text(0.5, 0.5, f"Synthetic Video\nModel {model_idx}\nNot Found", 
+                                   ha="center", va="center", transform=ax.transAxes)
+                
+                # Update heatmaps (only data columns)
+                for col_idx in range(1, n_cols):
+                    ax = heatmap_axes[col_idx]
+                    ax.clear()
+                    variant_idx = col_idx - 1
+                    self._plot_merged_heatmaps(ax, frame_idx, variant_idx)
+                
+                # Update depth plots (only data columns)
+                for col_idx in range(1, n_cols):
+                    ax = depth_axes[col_idx]
+                    ax.clear()
+                    variant_idx = col_idx - 1
+                    self._plot_depth_distributions(ax, frame_idx, variant_idx)
+                
+                # Update 3D skeletons (only data columns)
+                for col_idx in range(1, n_cols):
+                    ax = skeleton_axes[col_idx]
+                    ax.clear()
+                    variant_idx = col_idx - 1
+                    self._plot_3d_skeleton(ax, frame_idx, variant_idx, show_ground_truth=True)
+                
+                # Save frame
+                frame_path = frames_dir / f"frame_{frame_idx:04d}.png"
+                fig.savefig(frame_path, dpi=100, bbox_inches=None, pad_inches=0.1)
+                
+                # Progress reporting
+                if frame_idx % 50 == 0:
+                    print(f"Rendered frame {frame_idx}/{self.n_frames}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to render frame {frame_idx}: {e}")
+        
+        plt.close(fig)
+        print("Frame rendering completed!")
 
     def _load_all_video_frames(
         self, sim_rendering_path: Path, synthetic_videos_dir: Path
@@ -281,7 +729,7 @@ class Keypoints3DVisualizer:
         self, frame_idx: int, frames_dir: Path, all_video_frames: dict, n_cols: int
     ) -> None:
         """Render a single frame (all subplots) and save to disk.
-        This runs in a worker process so must create/close its own figure.
+        This runs in a worker thread and shares data in memory.
         """
         try:
             fig = plt.figure(figsize=(20, 12))
@@ -436,9 +884,7 @@ class Keypoints3DVisualizer:
             # Debug: Check saved frame size for first few frames
             if frame_idx < 3:
                 try:
-                    import imageio.v2 as imageio_debug
-
-                    test_frame = imageio_debug.imread(str(frame_path))
+                    test_frame = imageio.imread(str(frame_path))
                     logger.debug(
                         f"Frame {frame_idx} saved with size: {test_frame.shape}"
                     )
@@ -806,9 +1252,6 @@ class Keypoints3DVisualizer:
                             logger.debug(
                                 f"Resizing frame {i} from {frame.shape[:2]} to {target_size}"
                             )
-                            # Use PIL for better quality resizing
-                            from PIL import Image
-
                             pil_frame = Image.fromarray(frame)
                             pil_frame = pil_frame.resize(
                                 (target_size[1], target_size[0]),
