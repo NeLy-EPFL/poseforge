@@ -14,7 +14,9 @@ from biomechpose.pose_estimation.keypoints_3d import (
     Pose2p5DPipeline,
 )
 from biomechpose.pose_estimation.camera import CameraToWorldMapper
-from biomechpose.pose_estimation.keypoints_3d.visualizer import Keypoints3DVisualizer
+from biomechpose.pose_estimation.keypoints_3d.visualizer import (
+    SynthDataKeypoints3DVisualizer,
+)
 
 
 logging.basicConfig(
@@ -181,7 +183,7 @@ def test_keypoints3d_models(
         labels_metadata = dataset.get_sim_data_metadata()
         keypoints_order = labels_metadata["keypoint_pos"]["keys"]
         exp_trial, segment, subsegment = dataset.sim_name.split("/")
-        visualizer = Keypoints3DVisualizer(
+        visualizer = SynthDataKeypoints3DVisualizer(
             preds,
             labels,
             keypoints_order,

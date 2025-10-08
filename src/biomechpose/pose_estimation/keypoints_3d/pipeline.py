@@ -26,7 +26,7 @@ class Pose2p5DPipeline:
     def __init__(
         self,
         model: Pose2p5DModel,
-        loss_func: Pose2p5DLoss | None,
+        loss_func: Pose2p5DLoss | None = None,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
@@ -39,7 +39,7 @@ class Pose2p5DPipeline:
             use_float16 (bool): Whether to use mixed-precision in training.
         """
         self.model = model.to(device)
-        self.loss_func = loss_func.to(device)
+        self.loss_func = loss_func.to(device) if loss_func else None
         self.device = device
         if torch.cuda.is_available() and "cuda" in str(self.device):
             self.device_type = "cuda"

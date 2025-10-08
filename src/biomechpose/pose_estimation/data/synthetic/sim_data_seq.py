@@ -2,11 +2,11 @@ import torch
 import numpy as np
 import h5py
 import cv2
-import json
 from pathlib import Path
 from typing import Iterator
 
-from biomechpose.util import check_num_frames, read_frames_from_video
+from biomechpose.util import read_frames_from_video
+from biomechpose.pose_estimation.data import get_video_metadata
 
 
 class SimulatedDataSequence:
@@ -39,7 +39,7 @@ class SimulatedDataSequence:
         self.n_variants = len(synthetic_video_paths)
         assert self.n_variants > 0, "At least one synthetic video required"
 
-        metadata = self.get_video_metadata(
+        metadata = get_video_metadata(
             synthetic_video_paths[0], cache_metadata, use_cached_metadata
         )
         self.n_frames = metadata["n_frames"]
@@ -53,39 +53,6 @@ class SimulatedDataSequence:
         else:
             zoom_factor = np.array([1.0, 1.0])
         self.image_zoom_factor = zoom_factor
-
-    def get_video_metadata(
-        self, sample_video_path, cache_metadata, use_cached_metadata
-    ):
-        # Already checked that all videos are under the same directory, so just save the
-        # cache there
-        cache_path = sample_video_path.parent / "cached_sim_metadata.json"
-        if use_cached_metadata and cache_path.is_file():
-            try:
-                with open(cache_path, "r") as f:
-                    metadata = json.load(f)
-                n_frames = metadata["n_frames"]
-                frame_size = tuple(metadata["frame_size"])
-                fps = metadata["fps"]
-            except Exception as e:
-                print(f"Corrupted metadata cache file {cache_path}")
-                raise e
-        else:
-            n_frames = check_num_frames(sample_video_path)
-            sample_frames, fps = read_frames_from_video(
-                sample_video_path, frame_indices=[0]
-            )
-            frame_size = sample_frames[0].shape[:2]
-
-            if cache_metadata:
-                metadata = {
-                    "n_frames": n_frames,
-                    "frame_size": list(frame_size),
-                    "fps": fps,
-                }
-                with open(cache_path, "w") as f:
-                    json.dump(metadata, f, indent=2)
-        return {"n_frames": n_frames, "frame_size": frame_size, "fps": fps}
 
     def get_sim_data_metadata(self) -> dict:
         metadata = {}

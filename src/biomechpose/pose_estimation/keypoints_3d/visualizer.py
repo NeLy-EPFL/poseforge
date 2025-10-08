@@ -17,7 +17,7 @@ from biomechpose.util import (
     default_video_writing_ffmpeg_params,
     read_frames_from_video,
 )
-from biomechpose.simulate_nmf.utils import kchain_plotting_colors
+from biomechpose.simulate_nmf.constants import kchain_plotting_colors
 
 
 configure_matplotlib_style()
@@ -34,7 +34,7 @@ AZIMUTH_AMPLITUDE = 30.0
 DEPTH_OFFSET = -100.0
 
 
-class Keypoints3DVisualizer:
+class SynthDataKeypoints3DVisualizer:
     def __init__(
         self,
         preds: dict[str, np.ndarray],
@@ -298,8 +298,7 @@ class Keypoints3DVisualizer:
                     )
                     pil_frame = Image.fromarray(frame)
                     pil_frame = pil_frame.resize(
-                        (target_size[1], target_size[0]),
-                        Image.Resampling.LANCZOS,
+                        (target_size[1], target_size[0]), Image.Resampling.LANCZOS
                     )
                     frame = np.array(pil_frame)
 

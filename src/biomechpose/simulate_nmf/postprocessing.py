@@ -14,22 +14,16 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 
 import biomechpose.simulate_nmf.simulate as simulate
-from biomechpose.simulate_nmf.utils import (
+from biomechpose.simulate_nmf.constants import (
     keypoint_name_lookup_canonical_to_nmf,
     kchain_plotting_colors,
+    keypoint_segments_nmf,
+    legs,
+    leg_keypoints_canonical,
 )
 from biomechpose.util import configure_matplotlib_style
 
 configure_matplotlib_style()
-
-keypoint_segments = [
-    f"{side}{pos}{keypoint_name_lookup_canonical_to_nmf[link]}"
-    for side in "LR"
-    for pos in "FMH"
-    for link in ["ThC", "CTr", "FTi", "TiTa", "Claw"]
-] + ["LPedicel", "RPedicel"]
-legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
-leg_keypoints = ["ThC", "CTr", "FTi", "TiTa", "Claw"]
 
 
 class SegmentLabelParser:
@@ -293,7 +287,7 @@ def process_single_frame(
         # Gather keypoint positions in coordinates and rotate/center-crop accordingly
         keypoints_pos_dict_world_raw, keypoints_pos_dict_camera_raw = (
             extract_body_segment_positions(
-                h5_file, frame_idx, "pos_atparent", keypoint_segments
+                h5_file, frame_idx, "pos_atparent", keypoint_segments_nmf
             )
         )
         keypoints_pos_dict_world_rotated = rotate_keypoint_positions_world(
@@ -451,9 +445,9 @@ def process_subsegment(
             keypoint_pos_group = postprocessed_group.create_group("keypoint_pos")
             for ref_frame in ["camera", "world"]:
                 data_block = np.empty(
-                    (num_frames, len(keypoint_segments), 3), dtype="float32"
+                    (num_frames, len(keypoint_segments_nmf), 3), dtype="float32"
                 )
-                for seg_id, body_segment in enumerate(keypoint_segments):
+                for seg_id, body_segment in enumerate(keypoint_segments_nmf):
                     key = f"keypoint_pos_{ref_frame}_{body_segment}"
                     values = np.array(derived_variables_by_key[key])
                     data_block[:, seg_id, :] = values
@@ -461,13 +455,13 @@ def process_subsegment(
                 pos_ds = keypoint_pos_group.create_dataset(
                     f"{ref_frame}_coords", data=data_block, dtype="float32"
                 )
-                pos_ds.attrs["keys"] = keypoint_segments
+                pos_ds.attrs["keys"] = keypoint_segments_nmf
                 pos_ds.attrs["description"] = (
                     f"Keypoint positions in {ref_frame} coordinates. Shape is "
                     "(num_frames, num_keypoints, 3). See the `.attrs['keys']` for the "
                     "order of keypoints."
                 )
-            keypoint_pos_group.attrs["keys"] = keypoint_segments
+            keypoint_pos_group.attrs["keys"] = keypoint_segments_nmf
             keypoint_pos_group.attrs["description"] = (
                 "This group contains positions of joint keypoints in the rotated image "
                 "centered around the fly, cropped, and rotated so that the fly faces "
@@ -525,7 +519,7 @@ def _draw_pose_2d_and_3d(
         for leg in legs:
             color = kchain_plotting_colors[leg]
             all_positions = []
-            for kpt in leg_keypoints:
+            for kpt in leg_keypoints_canonical:
                 segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
                 keypoint_idx = keypoints.index(f"{leg}{segment_name}")
                 pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
@@ -548,7 +542,7 @@ def _draw_pose_2d_and_3d(
         for leg in legs:
             color = kchain_plotting_colors[leg]
             all_positions = []
-            for kpt in leg_keypoints:
+            for kpt in leg_keypoints_canonical:
                 segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
                 keypoint_idx = keypoints.index(f"{leg}{segment_name}")
                 pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
@@ -880,4 +874,3 @@ def read_videos(recording_dir, num_color_codings):
             ), "number of frames mismatch between videos of different color codings"
 
     return frames_by_color_coding, fps, num_frames
-
