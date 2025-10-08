@@ -216,7 +216,7 @@ def setup_figure_and_axes(
             im = ax.imshow(dummy_image)
         else:
             model_idx = col_idx - 1
-            ax.set_title(f"Synthetic rendering\n(variant {model_idx})", fontweight="bold", pad=20)
+            ax.set_title(f"Synthetic rendering\n(variant {model_idx + 1})", fontweight="bold", pad=20)
             # Create placeholder image
             dummy_image = np.zeros((100, 100, 3), dtype=np.uint8)
             im = ax.imshow(dummy_image)
@@ -304,6 +304,8 @@ def setup_figure_and_axes(
                 ax.set_xticklabels([])
                 ax.set_yticklabels([])
                 ax.set_zticklabels([])
+            
+            ax.set_aspect("equal")
         skeleton_axes.append(ax)
     
     return fig, video_axes, video_images, heatmap_axes, depth_axes, skeleton_axes

@@ -93,7 +93,7 @@ def inference_on_dataset(
     for key in all_labels.keys():
         all_labels[key] = np.concatenate(all_labels[key], axis=0)
 
-    all_preds["pred_depth"] = all_preds["pred_depth"] + 100  # TODO: Remove this hack
+    all_preds["pred_depth"] = all_preds["pred_depth"]
 
     return all_preds, all_labels
 
@@ -124,13 +124,9 @@ def test_keypoints3d_models(
     model = Pose2p5DModel.create_architecture_from_config(
         model_architecture_config_path
     )
-    # model.load_weights_from_config(
-    #     config.ModelWeightsConfig(model_weights=model_checkpoint_path)
-    # )
-    # Temporary hack: previously trained model has a different checkpoint format, but
-    # shares the same neural architecture. In the future we will use the loading method
-    # above. TODO
-    model.load_state_dict(torch.load(model_checkpoint_path)["model"])
+    model.load_weights_from_config(
+        config.ModelWeightsConfig(model_weights=model_checkpoint_path)
+    )
     if loss_config_path:
         loss_func = Pose2p5DLoss.create_from_config(loss_config_path)
     else:
@@ -173,7 +169,7 @@ def test_keypoints3d_models(
         else:
             print(f"Running inference on dataset {dataset.sim_name}")
             preds, labels = inference_on_dataset(dataset, pipeline, batch_size)
-            preds["pred_depth"] = preds["pred_depth"] - 100  # TODO: Remove this hack
+            preds["pred_depth"] = preds["pred_depth"]
             preds["pred_world_xyz"] = cam_mapper(preds["pred_xy"], preds["pred_depth"])
             labels["keypoint_pos_world_xyz"] = cam_mapper(
                 labels["keypoint_pos"][:, :, :2], labels["keypoint_pos"][:, :, 2]
@@ -219,14 +215,14 @@ if __name__ == "__main__":
     synthetic_videos_subdirs = [
         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005"
     ]
-    model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/model_architecture_config.yaml"
-    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20250103a/checkpoints/epoch9_step50000.pt"
+    model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/configs/model_architecture_config.yaml"
+    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/checkpoints/epoch13_step9167.model.pth"
     loss_config_path = (
-        "bulk_data/pose_estimation/keypoints3d/trial_20250105a/configs/loss_config.yaml"
+        "bulk_data/pose_estimation/keypoints3d/trial_20251007a/configs/loss_config.yaml"
     )
     batch_size = 32
     original_image_size = (464, 464)
-    output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20250105a/inference/"
+    output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/inference/"
     # n_workers options:
     # -2: Use all CPU cores except 1 (recommended, default)
     # -1: Use all CPU cores  
