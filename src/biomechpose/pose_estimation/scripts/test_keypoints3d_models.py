@@ -1,7 +1,9 @@
 import torch
+import logging
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
+from typing import Callable
 
 import biomechpose.pose_estimation.keypoints_3d.config as config
 from biomechpose.util import get_hardware_availability
@@ -15,31 +17,32 @@ from biomechpose.pose_estimation.camera import CameraToWorldMapper
 from biomechpose.pose_estimation.keypoints_3d.visualizer import Keypoints3DVisualizer
 
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+
 def _setup_datasets(
     style_transfer_models: list[str],
     simulation_data_basedir: Path,
     synthetic_videos_basedir: Path,
-    synthetic_videos_subdirs: list[Path | str] | None,
     original_image_size: tuple[int, int] | None,
+    filter_func: Callable[[str, str, str], bool] = lambda trial, seg, subseg: True,
 ):
     # Find all simulations to use based on available style transfer videos
-    if synthetic_videos_subdirs is None:
-        synthetic_videos_subdirs = list(synthetic_videos_basedir.glob("*"))
-    else:
-        synthetic_videos_subdirs = [Path(subdir) for subdir in synthetic_videos_subdirs]
     simulations_to_use = []
-    for subdir in synthetic_videos_subdirs:
-        for path in subdir.rglob(f"translated_{style_transfer_models[0]}.mp4"):
-            # sim_info: (exp_trial, segment, subsegment)
-            sim_info = path.absolute().parent.parts[-3:]
-            simulations_to_use.append(sim_info)
+    for path in synthetic_videos_basedir.rglob(
+        f"translated_{style_transfer_models[0]}.mp4"
+    ):
+        exp_trial, segment, subsegment = path.absolute().parent.parts[-3:]
+        if not filter_func(exp_trial, segment, subsegment):
+            continue  # skip if not in filter
+        simulations_to_use.append((exp_trial, segment, subsegment))
 
     # Create dataset objects based on identified files
     datasets = []
     for exp_trial, segment, subsegment in sorted(simulations_to_use):
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
-        if not sim_name.startswith("BO_Gal4_fly5_trial005/segment_003/"):
-            continue  # TODO: debugging, remove later
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
             for model in style_transfer_models
@@ -55,6 +58,7 @@ def _setup_datasets(
         )
         datasets.append(dataset)
 
+    logging.info(f"Found {len(datasets)} datasets for testing.")
     return datasets
 
 
@@ -100,7 +104,6 @@ def test_keypoints3d_models(
     style_transfer_models: list[str],
     simulation_data_basedir: str,
     synthetic_videos_basedir: str,
-    synthetic_videos_subdirs: list[str] | None,
     model_architecture_config_path: str,
     model_checkpoint_path: str,
     loss_config_path: str | None,
@@ -110,7 +113,8 @@ def test_keypoints3d_models(
     camera_distance: float = 100.0,
     camera_rotation_euler: tuple[float, float, float] = (0, np.pi, -np.pi / 2),
     camera_fov_deg: float = 5.0,
-    n_workers: int = -2,
+    plotting_n_workers: int = -2,
+    filter_func: Callable[[str, str, str], bool] = lambda trial, seg, subseg: True,
 ):
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
@@ -136,8 +140,8 @@ def test_keypoints3d_models(
         style_transfer_models,
         Path(simulation_data_basedir),
         Path(synthetic_videos_basedir),
-        synthetic_videos_subdirs,
         original_image_size=original_image_size,
+        filter_func=filter_func,
     )
     if len(datasets) == 0:
         raise RuntimeError("No datasets found for testing")
@@ -188,10 +192,10 @@ def test_keypoints3d_models(
             exp_trial=exp_trial,
             segment=segment,
             subsegment=subsegment,
-            n_workers=n_workers,
+            n_workers=plotting_n_workers,
         )
-        # visualizer.plot_keypoints_over_time(output_dir / "keypoint_pos_timeseries.png")
-        # print(output_dir / "keypoint_pos_timeseries.png")
+        visualizer.plot_keypoints_over_time(output_dir / "keypoint_pos_timeseries.png")
+        print(output_dir / "keypoint_pos_timeseries.png")
         visualizer.make_summary_video(output_dir / "keypoint_3d_visualization.mp4")
         print(output_dir / "keypoint_3d_visualization.mp4")
 
@@ -209,9 +213,6 @@ if __name__ == "__main__":
     ]
     simulation_data_basedir = "bulk_data/nmf_rendering"
     synthetic_videos_basedir = "bulk_data/style_transfer/production/translated_videos/"
-    synthetic_videos_subdirs = [
-        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005"
-    ]
     model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/configs/model_architecture_config.yaml"
     model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/checkpoints/epoch13_step9167.model.pth"
     loss_config_path = (
@@ -220,21 +221,19 @@ if __name__ == "__main__":
     batch_size = 32
     original_image_size = (464, 464)
     output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/inference/"
-    # n_workers options:
-    # -2: Use all CPU cores except 1 (recommended, default)
-    # -1: Use all CPU cores  
-    # 1: Sequential processing (no parallelization)
-    # N > 1: Use exactly N workers
+    simulations = {
+        ("BO_Gal4_fly5_trial005", "segment_003", "subsegment_002"),
+    }
     test_keypoints3d_models(
         style_transfer_models=style_transfer_models,
         simulation_data_basedir=simulation_data_basedir,
         synthetic_videos_basedir=synthetic_videos_basedir,
-        synthetic_videos_subdirs=synthetic_videos_subdirs,
         model_architecture_config_path=model_architecture_config_path,
         model_checkpoint_path=model_checkpoint_path,
         loss_config_path=loss_config_path,
         batch_size=batch_size,
         original_image_size=original_image_size,
         output_basedir=output_basedir,
-        n_workers=-2,  # Use all cores except 1 for parallel processing
+        plotting_n_workers=-2,  # Use all cores except 1 for parallel processing
+        filter_func=lambda trial, seg, subseg: (trial, seg, subseg) in simulations,
     )
