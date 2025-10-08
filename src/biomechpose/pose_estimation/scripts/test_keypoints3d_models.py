@@ -93,8 +93,6 @@ def inference_on_dataset(
     for key in all_labels.keys():
         all_labels[key] = np.concatenate(all_labels[key], axis=0)
 
-    all_preds["pred_depth"] = all_preds["pred_depth"]
-
     return all_preds, all_labels
 
 
@@ -169,7 +167,6 @@ def test_keypoints3d_models(
         else:
             print(f"Running inference on dataset {dataset.sim_name}")
             preds, labels = inference_on_dataset(dataset, pipeline, batch_size)
-            preds["pred_depth"] = preds["pred_depth"]
             preds["pred_world_xyz"] = cam_mapper(preds["pred_xy"], preds["pred_depth"])
             labels["keypoint_pos_world_xyz"] = cam_mapper(
                 labels["keypoint_pos"][:, :, :2], labels["keypoint_pos"][:, :, 2]
