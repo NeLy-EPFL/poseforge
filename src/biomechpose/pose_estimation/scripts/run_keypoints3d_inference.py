@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import h5py
+from torchvision.transforms import Resize
 from pathlib import Path
 from collections import defaultdict
 from tqdm import tqdm
@@ -22,13 +23,16 @@ if __name__ == "__main__":
     checkpoint_path = model_dir / "checkpoints/epoch13_step9167.model.pth"
     batch_size = 40
     n_workers = 4
+    inference_image_size = (256, 256)
     camera_pos = (0.0, 0.0, -100.0)  # mm
     camera_fov_deg = 5.0  # degrees
     camera_rendering_size = (464, 464)  # pixels
     camera_rotation_euler = (0, np.pi, -np.pi / 2)  # radians
 
     # Find all trials to process
-    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
+    input_trials = list(
+        input_basedir.glob("20250613-fly1b-013/model_prediction/not_flipped/")
+    )
     print(f"Found {len(list(input_trials))} trials to process")
 
     # System setup
@@ -38,10 +42,14 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
 
     # Create dataset and dataloader
-    dataset = VideoCollectionDataset(input_trials, as_image_dirs=True)
+    transform = Resize(inference_image_size)
+    dataset = VideoCollectionDataset(
+        input_trials, as_image_dirs=True, transform=transform
+    )
     dataloader = VideoCollectionDataLoader(
         dataset, batch_size=batch_size, num_workers=n_workers
     )
+
     print(f"Found {len(dataset)} frames to process")
     print(
         f"Using batch size {dataloader.batch_size} with {dataloader.num_workers} "
@@ -65,10 +73,12 @@ if __name__ == "__main__":
         pred_dict = pipeline.inference(batch["frames"])
         pred_world_xyz = cam_mapper(pred_dict["pred_xy"], pred_dict["pred_depth"])
         for i in range(pred_world_xyz.shape[0]):
-            xyz = pred_world_xyz[i, :, :]
+            world_xyz = pred_world_xyz[i, :, :]
+            camera_xy = pred_dict["pred_xy"][i, :, :]
+            camera_depth = pred_dict["pred_depth"][i, :]
             video_path = batch["video_paths"][i]
             frame_idx = batch["frame_indices"][i]
-            results[video_path][frame_idx] = xyz
+            results[video_path][frame_idx] = (world_xyz, camera_xy, camera_depth)
     print("Inference complete")
 
     # Save results
@@ -77,13 +87,31 @@ if __name__ == "__main__":
         output_dir = output_basedir / trial_name
         output_dir.mkdir(parents=True, exist_ok=True)
         results_li = [result_by_frame[i] for i in range(len(result_by_frame))]
-        results_stack = np.stack(results_li)
         frame_ids = [
             int(p.stem.split("_")[1]) for p in dataset.frame_sortings[video_path]
         ]
         with h5py.File(output_dir / "keypoints3d.h5", "w") as f:
             f.create_dataset("frame_ids", data=frame_ids, dtype=np.int32)
-            ds = f.create_dataset("keypoints_pos", data=results_stack, dtype=np.float16)
-            ds.attrs["keypoints"] = keypoint_segments_canonical
-            ds.attrs["units"] = "mm"
+
+            world_xyz_stack = np.stack([x[0] for x in results_li])
+            world_xyz_ds = f.create_dataset(
+                "keypoints_world_xyz", data=world_xyz_stack, dtype=np.float16
+            )
+            world_xyz_ds.attrs["keypoints"] = keypoint_segments_canonical
+            world_xyz_ds.attrs["units"] = "mm"
+
+            camera_xy_stack = np.stack([x[1] for x in results_li])
+            camera_xy_ds = f.create_dataset(
+                "keypoints_camera_xy", data=camera_xy_stack, dtype=np.float16
+            )
+            camera_xy_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_xy_ds.attrs["units"] = "pixels"
+
+            camera_depth_stack = np.stack([x[2] for x in results_li])
+            camera_depth_ds = f.create_dataset(
+                "keypoints_camera_depth", data=camera_depth_stack, dtype=np.float16
+            )
+            camera_depth_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_depth_ds.attrs["units"] = "mm"
+
         print(f"Wrote results to {output_dir / 'keypoints3d.h5'}")
