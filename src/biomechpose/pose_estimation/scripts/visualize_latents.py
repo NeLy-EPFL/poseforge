@@ -16,7 +16,7 @@ def visualize_simulation(
 ):
     output_dir.mkdir(parents=True, exist_ok=True)
     with h5py.File(inferred_latents_path, "r") as f:
-        for feature in ["h_features", "z_features"]:
+        for feature in ["h_features_pooled", "z_features"]:
             for stage in training_stages:
                 latent_space_data = f[f"{feature}/{stage}"][:]
                 visualize_latent_trajectory(
@@ -32,10 +32,10 @@ def visualize_simulation(
 
 if __name__ == "__main__":
     inference_output_basedir = Path(
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20250926a/inference/"
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/inference/"
     )
     output_basedir = Path(
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20250926a/latents_viz/"
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/latents_viz/"
     )
     example_sims = [
         "BO_Gal4_fly5_trial005/segment_003/subsegment_000",  # walking

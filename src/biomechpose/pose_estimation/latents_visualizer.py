@@ -53,7 +53,7 @@ class LatentSpaceTrajectoryVisualizer:
         self.plotter.camera.focal_point = self.data_center
 
         # Add XYZ grid and axes with data-appropriate bounds
-        self.plotter.show_axes()
+        # self.plotter.show_axes()
         self.plotter.show_grid(
             color="gray",
             show_xlabels=False,

@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import time
 import logging
 from tqdm import tqdm
@@ -8,12 +9,13 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from biomechpose.pose_estimation.contrast_representation.model import (
-    ResNetFeatureExtractor,
+from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
+from biomechpose.pose_estimation.data import concat_atomic_batches, collapse_batch
+from biomechpose.pose_estimation.contrast.model import (
     ContrastiveProjectionHead,
+    info_nce_loss,
 )
-from biomechpose.pose_estimation.contrast_representation.loss import info_nce_loss
-from biomechpose.util import clear_memory_cache
+from biomechpose.util import clear_memory_cache, check_mixed_precision_status
 
 
 class ContrastivePretrainingPipeline:
@@ -27,64 +29,11 @@ class ContrastivePretrainingPipeline:
         self.feature_extractor = feature_extractor.to(device)
         self.projection_head = projection_head.to(device)
         self.device = device
+        if torch.cuda.is_available() and "cuda" in str(self.device):
+            self.device_type = "cuda"
+        else:
+            self.device_type = "cpu"
         self.use_float16 = use_float16
-
-    def _check_float16_status(self, print_results: bool = False) -> dict:
-        """Check if the pipeline is configured for float16 and get current status.
-
-        Args:
-            print_results (bool): Whether to print the status information.
-
-        Returns:
-            dict: Status information about float16 usage.
-        """
-        status = {
-            "use_float16_flag": self.use_float16,
-            "device": str(self.device),
-            "device_supports_half": torch.cuda.is_available()
-            and torch.cuda.get_device_capability()[0] >= 7,
-        }
-
-        # Check model parameter dtypes
-        fe_dtypes = set(p.dtype for p in self.feature_extractor.parameters())
-        ph_dtypes = set(p.dtype for p in self.projection_head.parameters())
-        status["feature_extractor_param_dtypes"] = [str(dt) for dt in fe_dtypes]
-        status["projection_head_param_dtypes"] = [str(dt) for dt in ph_dtypes]
-
-        # Print out results if requested
-        if print_results:
-            print("==================== Float16 Status ====================")
-            for key, value in status.items():
-                print(f"{key}: {value}")
-            print("========================================================")
-
-        return status
-
-    def _check_float16_usage(
-        self,
-        batch,
-        h_features,
-        z_features,
-        loss,
-        amp_scaler,
-        print_results: bool = False,
-    ) -> dict:
-        status = {
-            "batch_dtype": batch.dtype,
-            "h_features_dtype": h_features.dtype,
-            "z_features_dtype": z_features.dtype,
-            "loss_dtype": loss.dtype,
-            "amp_enabled": self.use_float16,
-            "amp_scaler_enabled": amp_scaler.is_enabled(),
-        }
-
-        if print_results:
-            print("==================== Float16 Usage ====================")
-            for key, value in status.items():
-                print(f"{key}: {value}")
-            print("=======================================================")
-
-        return status
 
     def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
         return torch.optim.Adam(
@@ -138,36 +87,6 @@ class ContrastivePretrainingPipeline:
             checkpoint_path_stem.with_suffix(".projection_head.pth"),
         )
 
-    @staticmethod
-    def _concat_atomic_batches(atomic_batches: torch.Tensor) -> torch.Tensor:
-        n_atomic_batches = atomic_batches.shape[0]
-        concatenated_batch = torch.cat(
-            [atomic_batches[i] for i in range(n_atomic_batches)],
-            dim=1,
-        ).to(atomic_batches.device)
-        return concatenated_batch
-
-    @staticmethod
-    def _collapse_batch(batch: torch.Tensor) -> tuple[torch.Tensor, int, int]:
-        """Reshape a group of atomic batches into a single batch, and
-        collapse the n_variants and n_samples dimensions.
-
-        Args:
-            batch (torch.Tensor): Tensor of shape
-                (n_variants, n_atomic_batches * n_samples, C, H, W)
-
-        Returns:
-            torch.Tensor: Collapsed batch of shape
-                (n_variants * n_atomic_batches * n_samples, C, H, W)
-        """
-        n_variants, n_samples_all_atomic_batches, n_channels, nrows, ncols = batch.shape
-        # collapsed_batch:
-        #     (n_variants * n_atomic_batches * atomic_batch_nsamples, C, H, W)
-        collapsed_batch = batch.view(
-            n_variants * n_samples_all_atomic_batches, n_channels, nrows, ncols
-        )
-        return collapsed_batch
-
     def train(
         self,
         training_data_loader: DataLoader,
@@ -194,9 +113,19 @@ class ContrastivePretrainingPipeline:
         # Set up optimizer
         optimizer = self._create_optimizer(adam_kwargs)
 
-        # Set up mixed-point training
-        amp_scaler = torch.amp.GradScaler(self.device, enabled=self.use_float16)
-        self._check_float16_status(print_results=True)
+        # Set up mixed-precision training
+        amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
+        check_mixed_precision_status(
+            self.use_float16,
+            self.device,
+            print_results=True,
+            tensors={
+                "feature_extractor_params": self.feature_extractor.parameters(),
+                "projection_head_params": self.projection_head.parameters(),
+            },
+            grad_scaler=amp_scaler,
+            subtitle="Initial model parameter dtypes",
+        )
 
         # Training loop
         for epoch_idx in range(num_epochs):
@@ -209,14 +138,17 @@ class ContrastivePretrainingPipeline:
             for step_idx, (atomic_batches, _) in enumerate(training_data_loader):
                 # Merge atomic batches into a single batch
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
-                concatenated_batch = self._concat_atomic_batches(atomic_batches)
+                concatenated_batch = concat_atomic_batches(atomic_batches)
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
-                collapsed_batch = self._collapse_batch(concatenated_batch)
+                collapsed_batch = collapse_batch(concatenated_batch)
 
                 # Run models
-                with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+                with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
-                    z_features = self.projection_head(h_features)
+                    h_features_pooled = F.adaptive_avg_pool2d(
+                        h_features, (1, 1)
+                    ).flatten(start_dim=1)
+                    z_features = self.projection_head(h_features_pooled)
                     loss = info_nce_loss(
                         z_features,
                         temperature,
@@ -227,17 +159,23 @@ class ContrastivePretrainingPipeline:
 
                     # Check if float16 is actually being used
                     if epoch_idx == 0 and step_idx == 0:
-                        self._check_float16_usage(
-                            collapsed_batch,
-                            h_features,
-                            z_features,
-                            loss,
-                            amp_scaler,
+                        check_mixed_precision_status(
+                            self.use_float16,
+                            self.device,
+                            tensors={
+                                "collapsed_batch": collapsed_batch,
+                                "h_features": h_features,
+                                "h_features_pooled": h_features_pooled,
+                                "z_features": z_features,
+                                "loss": loss,
+                            },
+                            grad_scaler=amp_scaler,
                             print_results=True,
+                            subtitle="First training step",
                         )
 
                 # Backpropagate and optimize
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)  # set_to_none saves memory
                 amp_scaler.scale(loss).backward()
                 amp_scaler.step(optimizer)
                 amp_scaler.update()
@@ -261,7 +199,7 @@ class ContrastivePretrainingPipeline:
                     running_start_time = time.time()
 
                 # Save checkpoint
-                if (step_idx) % checkpoint_interval == 0:
+                if step_idx % checkpoint_interval == 0:
                     checkpoint_path_stem = (
                         checkpoint_dir
                         / f"checkpoint_epoch{epoch_idx:03d}_step{step_idx:06d}"
@@ -270,7 +208,7 @@ class ContrastivePretrainingPipeline:
                     logging.info(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
 
                 # Run validation
-                if (step_idx) % validation_interval == 0 and step_idx > 0:
+                if step_idx % validation_interval == 0 and step_idx > 0:
                     logging.info(
                         f"Running validation over the first {nbatches_per_validation} "
                         "batches in the validation set"
@@ -283,6 +221,7 @@ class ContrastivePretrainingPipeline:
                         concatenated_batch,
                         collapsed_batch,
                         h_features,
+                        h_features_pooled,
                         z_features,
                         loss,
                     )
@@ -305,6 +244,8 @@ class ContrastivePretrainingPipeline:
             end = time.time()
             epoch_walltime = end - epoch_start_time
             logging.info(f"Epoch {epoch_idx} completed in {epoch_walltime:.2f} seconds")
+
+        writer.close()
 
     def validate(
         self,
@@ -339,14 +280,17 @@ class ContrastivePretrainingPipeline:
 
                 # Merge atomic batches into a single batch (same as training)
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
-                concatenated_batch = self._concat_atomic_batches(atomic_batches)
+                concatenated_batch = concat_atomic_batches(atomic_batches)
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
-                collapsed_batch = self._collapse_batch(concatenated_batch)
+                collapsed_batch = collapse_batch(concatenated_batch)
 
                 # Forward pass with mixed precision
-                with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+                with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     h_features = self.feature_extractor(collapsed_batch)
-                    z_features = self.projection_head(h_features)
+                    h_features_pooled = F.adaptive_avg_pool2d(
+                        h_features, (1, 1)
+                    ).flatten(start_dim=1)
+                    z_features = self.projection_head(h_features_pooled)
                     loss = info_nce_loss(
                         z_features,
                         temperature,
@@ -387,6 +331,8 @@ class ContrastivePretrainingPipeline:
 
         Returns:
             h_features (torch.Tensor): Features from the feature extractor
+            h_features_pooled (torch.Tensor): Globally pooled features from
+                the feature extractor.
             z_features (torch.Tensor): Features from the projection head
         """
         # batch: (batch_size, C, H, W)
@@ -401,8 +347,15 @@ class ContrastivePretrainingPipeline:
         # Run models
         with torch.no_grad():
             batch = batch.to(self.device, non_blocking=True)
-            with torch.amp.autocast(str(self.device), enabled=self.use_float16):
+            with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                 h_features = self.feature_extractor(batch)
-                z_features = self.projection_head(h_features)
+                h_features_pooled = F.adaptive_avg_pool2d(h_features, (1, 1)).flatten(
+                    start_dim=1
+                )
+                z_features = self.projection_head(h_features_pooled)
 
-        return h_features.to(input_device), z_features.to(input_device)
+        return (
+            h_features.to(input_device),
+            h_features_pooled.to(input_device),
+            z_features.to(input_device),
+        )

@@ -4,11 +4,10 @@ from pathlib import Path
 from tqdm import trange
 from time import time
 
-from biomechpose.pose_estimation import (
+from biomechpose.pose_estimation.data.synthetic import (
     SimulatedDataSequence,
     SyntheticFramesSampler,
-    save_atomic_batch_frames,
-    save_atomic_batch_sim_data,
+    AtomicBatchDataset,
 )
 
 
@@ -19,6 +18,7 @@ def extract_atomic_batches(
     input_basedir: Path | str,
     nmf_sim_rendering_basedir: Path | str,
     output_dir: Path | str,
+    original_image_size: tuple[int, int] | None,
     n_jobs: int = -1,
     logging_interval: int = 100,
     cache_metadata: bool = True,
@@ -54,6 +54,11 @@ def extract_atomic_batches(
         nmf_sim_rendering_basedir (Path | str): The base directory for NMF
             simulation rendering.
         output_dir (Path | str): The output directory for atomic batches.
+        original_image_size (tuple[int, int] | None): The original image
+            size (H, W) before the images were downsampled in the style
+            transfer model (i.e. MuJoCo camera resolution). If specified,
+            2D keypoint positions will be scaled to match the output image
+            size.
         n_jobs (int, optional): The number of jobs to run in parallel. 0 =
             run in a plain loop; -1 = use all available cores. Defaults to
             -1.
@@ -109,6 +114,7 @@ def extract_atomic_batches(
             synthetic_video_paths,
             simulated_labels_path,
             sim_name=f"{exp_trial}/{segment}/{subsegment}",
+            original_image_size=original_image_size,
             cache_metadata=cache_metadata,
             use_cached_metadata=use_cached_metadata,
         )
@@ -160,13 +166,13 @@ def extract_atomic_batches(
                 batch_idx * n_atomic_batches_per_batch + atomic_batch_group_idx
             )
             filename_stem = f"atomicbatch{global_atomic_batch_idx:08d}_batch{batch_idx:05d}_variantsgroup{variant_idx_start:02d}"
-            save_atomic_batch_frames(
+            AtomicBatchDataset.save_atomic_batch_frames(
                 atomic_batch_frames,
                 output_dir / f"{filename_stem}_frames.mp4",
                 fps=sampler.fps,
                 spacing=video_spacing,
             )
-            save_atomic_batch_sim_data(
+            AtomicBatchDataset.save_atomic_batch_sim_data(
                 labels, output_dir / f"{filename_stem}_labels.h5"
             )
         if batch_idx % logging_interval == 0:
@@ -198,7 +204,11 @@ if __name__ == "__main__":
     # CLI
     import tyro
 
-    tyro.cli(extract_atomic_batches)
+    tyro.cli(
+        extract_atomic_batches,
+        prog=f"python {Path(__file__).name}",
+        description="Extract atomic batches from synthetic videos and simulation data.",
+    )
     # CLI example:
     # python src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py \
     #     --atomic-batch-nframes 32 \
@@ -215,7 +225,8 @@ if __name__ == "__main__":
     #     minimum_time_diff_frames=60,
     #     input_basedir="bulk_data/style_transfer/production/translated_videos",
     #     nmf_sim_rendering_basedir="bulk_data/nmf_rendering/",
-    #     output_dir="bulk_data/pose_estimation/atomic_batches",
+    #     output_dir="bulk_data/pose_estimation/atomic_batches_test",
+    #     original_image_size=(464, 464),
     #     n_jobs=-1,
     #     logging_interval=100,
     #     cache_metadata=True,

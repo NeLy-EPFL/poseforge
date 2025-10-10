@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from time import time
 from pathlib import Path
 
-from biomechpose.pose_estimation import SimulatedDataSequence
-from biomechpose.pose_estimation.contrast_representation import (
+from biomechpose.pose_estimation import SimulatedDataSequence, ResNetFeatureExtractor
+from biomechpose.pose_estimation.contrast import (
     ContrastivePretrainingPipeline,
-    ResNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
 from biomechpose.util import get_hardware_availability
@@ -49,21 +48,25 @@ def predict_for_dataset(
     dataset: SimulatedDataSequence,
     batch_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    h_features_all, z_features_all = [], []
+    h_features_pooled_all, z_features_all = [], []
 
     n_batches = 0
     start_time = time()
-    for batch in dataset.generate_batches(batch_size):
+    for frames, _ in dataset.generate_batches(batch_size):
         # batch: (n_variants * n_frames, n_channels=3, n_rows, n_cols)
-        # h_feature, z_features: (n_variants * n_frames, feature_dim)
-        h_features, z_features = pipeline.inference(batch)
+        # h_features: (n_variants * n_frames, n_channels=512, *output_feature_map_size)
+        # h_features_pooled: (n_variants * n_frames, feature_dim)
+        # z_features: (n_variants * n_frames, feature_dim)
+        h_features, h_features_pooled, z_features = pipeline.inference(frames)
 
         # Reshape back to separate variants and frames
-        n_samples_this_batch = batch.shape[0] // dataset.n_variants
-        h_features = h_features.view(dataset.n_variants, n_samples_this_batch, -1)
+        n_samples_this_batch = frames.shape[0] // dataset.n_variants
+        h_features_pooled = h_features_pooled.view(
+            dataset.n_variants, n_samples_this_batch, -1
+        )
         z_features = z_features.view(dataset.n_variants, n_samples_this_batch, -1)
 
-        h_features_all.append(h_features)
+        h_features_pooled_all.append(h_features_pooled)
         z_features_all.append(z_features)
         n_batches += 1
 
@@ -72,13 +75,13 @@ def predict_for_dataset(
         f"Processed dataset {dataset.sim_name} in {n_batches} batches. "
         f"Time taken: {walltime:.2f} seconds."
     )
-    return torch.cat(h_features_all, dim=1), torch.cat(z_features_all, dim=1)
+    return torch.cat(h_features_pooled_all, dim=1), torch.cat(z_features_all, dim=1)
 
 
 def initialize_output_hdf_file(output_path: Path, n_variants: int, n_frames: int):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(output_path, "w") as f:
-        f.create_group("h_features")
+        f.create_group("h_features_pooled")
         f.create_group("z_features")
         f.attrs["n_variants"] = n_variants
         f.attrs["n_frames"] = n_frames
@@ -167,9 +170,11 @@ def run_feature_extractor_inference(
 
     # Initialize models (feature extractor & projection head) and load trained weights
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    feature_extractor = ResNetFeatureExtractor(pretrained=False).to(device)
+    # Extractor output is global-pooled to 1x1 (see ContrastivePretrainingPipeline)
+    feature_extractor = ResNetFeatureExtractor(weights=None).to(device)
+    projection_head_input_dim = feature_extractor.output_channels * 1 * 1
     projection_head = ContrastiveProjectionHead(
-        input_dim=feature_extractor.output_dim,
+        input_dim=projection_head_input_dim,
         hidden_dim=model.projection_head_hidden_dim,
         output_dim=model.projection_head_output_dim,
     ).to(device)
@@ -208,7 +213,7 @@ def run_feature_extractor_inference(
 
         for dataset in datasets:
             # h/z_features: (n_variants, n_frames, feature_dim)
-            h_features, z_features = predict_for_dataset(
+            h_features_pooled, z_features = predict_for_dataset(
                 contrastive_pipeline, dataset, batch_size=sampling.batch_size
             )
             # Save to h5
@@ -216,8 +221,9 @@ def run_feature_extractor_inference(
                 inference_output_dir / dataset.sim_name / "contrastive_latents.h5"
             )
             with h5py.File(output_path, "a") as f:
-                f["h_features"].create_dataset(
-                    training_stage, data=h_features.cpu().numpy().astype(np.float16)
+                f["h_features_pooled"].create_dataset(
+                    training_stage,
+                    data=h_features_pooled.cpu().numpy().astype(np.float16),
                 )
                 f["z_features"].create_dataset(
                     training_stage, data=z_features.cpu().numpy().astype(np.float16)
@@ -227,7 +233,11 @@ def run_feature_extractor_inference(
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(run_feature_extractor_inference)
+    tyro.cli(
+        run_feature_extractor_inference,
+        prog=f"python {Path(__file__).name}",
+        description="Run inference using a contrastively pretrained feature extractor.",
+    )
 
     # Example CLI command to run this script:
     # python -u src/biomechpose/pose_estimation/scripts/run_feature_extractor_inference.py \
@@ -270,8 +280,10 @@ if __name__ == "__main__":
     # Example call using function directly (no CLI)
     # sampling_config = SamplingConfig(batch_size=1024)
     # training_stages = [
-    #     f"epoch{epoch:03d}_step{step:06d}" for epoch in range(5) for step in (0, 15000)
-    # ] + ["epoch005_step000000"]
+    #     "epoch000_step000000",
+    #     "epoch000_step000050",
+    #     "epoch000_step000100",
+    # ]
     # model_config = ModelConfig(
     #     training_stages=training_stages,
     #     checkpoint_dir="bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/checkpoints",
@@ -298,7 +310,7 @@ if __name__ == "__main__":
     #     num_channels=3,
     # )
     # output_config = OutputConfig(
-    #     inference_output_dir="bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/inference"
+    #     inference_output_dir="bulk_data/pose_estimation/contrastive_pretraining/trial0/inference"
     # )
     # run_feature_extractor_inference(
     #     sampling=sampling_config,

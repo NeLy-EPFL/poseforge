@@ -5,14 +5,14 @@ logging.basicConfig(
     level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+import torch
 from dataclasses import dataclass
-from torch.utils.data import DataLoader
 from pathlib import Path
 
-from biomechpose.pose_estimation import AtomicBatchDataset
-from biomechpose.pose_estimation.contrast_representation import (
+from biomechpose.pose_estimation.data import init_atomic_dataset_and_dataloader
+from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
+from biomechpose.pose_estimation.contrast import (
     ContrastivePretrainingPipeline,
-    ResNetFeatureExtractor,
     ContrastiveProjectionHead,
 )
 from biomechpose.util import set_random_seed, get_hardware_availability
@@ -106,63 +106,42 @@ def pretrain_contrastive_model(
     # System setup
     set_random_seed(training.seed)
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
+    if len(hardware_avail["gpus"]) == 0:
+        raise RuntimeError("No GPU available for training")
+    torch.backends.cudnn.benchmark = True
 
     # Initialize datasets and dataloaders
-    # Set up atomic datasets
-    train_ds = AtomicBatchDataset(
-        data_dirs=[Path(path) for path in data.train_data_dirs],
-        n_variants=sampling.atomic_batch_nvariants,
+    train_ds, train_loader = init_atomic_dataset_and_dataloader(
+        data_dirs=data.train_data_dirs,
+        atomic_batch_nsamples=sampling.atomic_batch_nsamples,
+        atomic_batch_nvariants=sampling.atomic_batch_nvariants,
         image_size=data.image_size,
-        n_channels=data.num_channels,
-    )
-    val_ds = AtomicBatchDataset(
-        data_dirs=[Path(path) for path in data.val_data_dirs],
-        n_variants=sampling.atomic_batch_nvariants,
-        image_size=data.image_size,
-        n_channels=data.num_channels,
-    )
-    # Check if batch size is valid
-    train_n_atomic_batches_per_batch = (
-        sampling.train_batch_size // sampling.atomic_batch_nsamples
-    )
-    val_n_atomic_batches_per_batch = (
-        sampling.val_batch_size // sampling.atomic_batch_nsamples
-    )
-    assert (
-        sampling.train_batch_size % sampling.atomic_batch_nsamples == 0
-    ), "`train_batch_size` must be a multiple of `atomic_batch_nsamples`"
-    assert (
-        sampling.val_batch_size % sampling.atomic_batch_nsamples == 0
-    ), "`val_batch_size` must be a multiple of `atomic_batch_nsamples`"
-    # Create parallel dataloaders
-    num_workers = sampling.num_workers
-    if num_workers is None:
-        num_workers = hardware_avail["num_cpu_cores_available"]
-        logging.info(f"Using {num_workers} data loading workers")
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=train_n_atomic_batches_per_batch,
-        shuffle=True,
+        batch_size=sampling.train_batch_size,
         num_workers=sampling.num_workers,
-        pin_memory=True,
-        drop_last=True,
+        num_channels=3,
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=val_n_atomic_batches_per_batch,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+    val_ds, val_loader = init_atomic_dataset_and_dataloader(
+        data_dirs=data.val_data_dirs,
+        atomic_batch_nsamples=sampling.atomic_batch_nsamples,
+        atomic_batch_nvariants=sampling.atomic_batch_nvariants,
+        image_size=data.image_size,
+        batch_size=sampling.val_batch_size,
+        num_workers=sampling.num_workers,
+        num_channels=3,
     )
 
     # Initialize models
-    feature_extractor = ResNetFeatureExtractor(pretrained=model.use_pretrained_backbone)
-    logging.info(
-        f"Created feature extractor with output dim {feature_extractor.output_dim}"
+    feature_extractor = ResNetFeatureExtractor(
+        weights="IMAGENET1K_V1" if model.use_pretrained_backbone else None
     )
+    logging.info(
+        "Created feature extractor "
+        "(output_dim not initialized until data_dependent_init() is called)"
+    )
+    # Extractor output is global-pooled to 1x1 (see ContrastivePretrainingPipeline)
+    projection_head_input_dim = feature_extractor.output_channels * 1 * 1
     projection_head = ContrastiveProjectionHead(
-        input_dim=feature_extractor.output_dim,
+        input_dim=projection_head_input_dim,
         hidden_dim=model.projection_head_hidden_dim,
         output_dim=model.projection_head_output_dim,
     )
@@ -200,7 +179,11 @@ def pretrain_contrastive_model(
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(pretrain_contrastive_model)
+    tyro.cli(
+        pretrain_contrastive_model,
+        prog=f"python {Path(__file__).name}",
+        description="Pretrain a ResNet feature extractor using a contrastive loss on synthetic videos.",
+    )
 
     # Example CLI command to run this script:
     # python -u src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py \
@@ -261,15 +244,13 @@ if __name__ == "__main__":
     #     projection_head_hidden_dim=512,
     #     projection_head_output_dim=256,
     # )
-    # data_base_dir = Path("bulk_data/pose_estimation/atomic_batches")
+    # data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
     # train_data_dirs = [
-    #     data_base_dir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+    #     data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
     #     for fly in range(1, 5)  # flies 1-4
     #     for trial in range(1, 6)  # trials 1-5
     # ]
-    # val_data_dirs = [data_base_dir / f"BO_Gal4_fly1_trial001"]
-    # for d in train_data_dirs + val_data_dirs:
-    #     print(f"\"{d}\"")
+    # val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
     # data_config = DataConfig(
     #     train_data_dirs=[str(path) for path in train_data_dirs],
     #     val_data_dirs=[str(path) for path in val_data_dirs],
@@ -285,9 +266,9 @@ if __name__ == "__main__":
     # output_config = OutputConfig(
     #     output_basedir="bulk_data/pose_estimation/contrastive_pretraining/trial0",
     #     logging_interval=10,
-    #     checkpoint_interval=500,
-    #     validation_interval=500,
-    #     nbatches_per_validation=300,
+    #     checkpoint_interval=50,
+    #     validation_interval=50,
+    #     nbatches_per_validation=30,
     # )
     # pretrain_contrastive_model(
     #     sampling=sampling_config,

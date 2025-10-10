@@ -2,19 +2,34 @@
 
 Pose estimation guided by a biomechanical model.
 
+## Installation
+This package used Poetry for package management. First, [install Poetry](https://python-poetry.org/docs/#installation) and optionally create a virtual environment (either through Poetry or through Conda). Then,
+```bash
+git clone git@github.com:NeLy-EPFL/simupose.git
+cd simupose
+poetry install
+```
 
-## Complete pipeline and code structure
-
-> [!IMPORTANT]  
-> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of the original [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) repository.
-> To install it:
+> [!IMPORTANT]
+> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) for Contrastive Unpaired Translation [(Park et al., 2020)](https://taesung.me/ContrastiveUnpairedTranslation/) and Sibo's [parallel-video-io](https://github.com/sibocw/parallel-video-io) package.
+>
+> These dependencies are already specified from in `pyproject.toml` via Github URLs. When you run the command above, these should be installed automatically. However, if these projects get updates pushed to Github, you might need to run `poetry update contrastive-unpaired-translation` and `poetry update parallel-video-io` manually.
+>
+> Alternatively, you can install the packages above in "edit mode" to gain better control:
 >
 > ```bash
 > git clone https://github.com/sibocw/contrastive-unpaired-translation.git
 > cd contrastive-unpaired-translation
 > pip install -e .
+> cd ..
+> git clone https://github.com/sibocw/parallel-video-io.git
+> cd parallel-video-io
+> pip install -e .
 > ```
+> (Do not try to run `pip install -e package-name` directly without `cd`ing into `package-name`. The current directory matters with `pip install -e`.)
 
+
+## Complete pipeline and code structure
 ### Part I: Simulate motion priors in NeuroMechFly and generate renderings
 1. Run `python src/biomechpose/simulate_nmf/scripts/copy_kinematic_recording.py`
     - This script scans data from Aymanns et al. (2022) from the NeLy lab server (also publicly available on Harvard Dataverse: https://doi.org/10.7910/DVN/QQMNQK), extracts key kinematic data, and saves them as pickle files.
@@ -66,5 +81,38 @@ Pose estimation guided by a biomechanical model.
     - This script uses a selected trained style transfer model to translate all NeuroMechFly rendering data into the domain of Spotlight behavior recordings.
 
 
-### Part IV: Generalized pose estimation
+### Part IV: Contrastive pretraining on synthetic data
+1. Pre-shuffle the synthetic (and experimental) dataset using `src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py`. This will save small "atomic batches" of data that are always used together during training.
+    - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, one can import the `extract_atomic_batches` function from this file and use it natively within Python (an example is included in the `__main__` section).
+    - To run this on the SCITAS cluster (Jed), see `scripts_on_cluster/atomic_batch_extraction`.
+
+> [!NOTE]
+> The following step are only for pretraining the feature extractor with contrastive pretraining. It does not need to be rerun during production.
+> 
+> 2. Pretrain a ResNet18 feature extractor using `src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py`.
+>     - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, invoke training natively within Python by uncommenting example code in the `__main__` section.
+>     - To train the model on the SCITAS cluster (Kuma), see `scripts_on_cluster/contrastive_pretraining_training`
+
+> [!NOTE]
+> The following steps are only for sanity-checking and visualizing the outcome of the constrastive pretraining step above. They do not need to be rerun during production. In inference time, the feature extractor will be used as a part of the pose estimation model.
+>
+> 3. Run inference using `src/biomechpose/pose_estimation/scripts/run_feature_extractor_inference.py`.
+>      - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, invoke inference natively within Python by uncommenting example code in the `__main__` section.
+>      - To run inference on the SCITAS cluster (Kuma), see `scripts_on_cluster/contrastive_pretraining_inference`. Note that running inference on all data will produce 200–300 GB of data. For quick inspection, it probably suffice to run inference only for one trial, one fly (e.g. `fly5_trial005` reserved for testing).
+> 4. Run `python src/biomechpose/pose_estimation/scripts/visualize_latents.py` to generate videos showing the latent-space trajectories of selected behavior snippets.
+
+### Part V: Generalized pose estimation
+#### Predicting 3D keypoint positions
+> [!NOTE]
+> The following steps are only for training the model and visualizing its performance on synthetic data. They do not need to be rerun during production.
+>
+> 1. Train 3D keypoint detection model using `python src/biomechpose/pose_estimation/scripts/run_keypoints3d_training.py`.
+>     - This is a CLI (run `python run_keypoints3d_training.py -h` to see usage). However, the `__main__` section of this script also includes a commented-out example of how to run training directly within Python.
+>     - See `scripts_on_cluster/keypoints3d_training/` for script(s) used to train the model on the SCITAS cluster. 
+> 2. Visualize the performance of the model on synthetic data using `src/biomechpose/pose_estimation/scripts/test_keypoints3d_models.py`. Note that you must select a particular model checkpoint file, and it doesn't necessarily have to be final model after the last epoch (observe validation loss to help decide which epoch to use).
+
+3. Run inference on Spotlight data using `python src/biomechpose/pose_estimation/scripts/run_keypoints3d_inference.py`. This script actually runs prediction using the model state at the end of every other epoch. Combined with the next step, this is meant to help select the best checkpoint to use in production.
+4. Optionally, if you wish to visualize the output of the 3D keypoint detection model, run `python src/biomechpose/pose_estimation/scripts/visualize_production_keypoints3d.py`. Use the output to decide which checkpoint to use for production-time inference.
+
+#### Predicting 2D body segmentation map
 TODO

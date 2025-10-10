@@ -33,12 +33,17 @@ dependencies = [
     "pytest>=8.4.2,<9",
     "h5py>=3.14,<4",
     "scikit-image==0.25.2",
-    # "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",
+    "scikit-learn>=1.7.2,<2",
+    "PyYAML>=6.0.3,<7",
+    "cmasher>=1.3.3,<2",
+    "torchcodec==0.7.0",
+    "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
+    "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",
+    "parallel-video-io @ git+https://github.com/sibocw/parallel-video-io.git",
 ]
 
 [tool.poetry]
 packages = [{include = "biomechpose", from = "src"}]
-
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -26,6 +26,18 @@ keypoint_name_lookup_canonical_to_nmf = {
     v: k for k, v in keypoint_name_lookup_nmf_to_canonical.items()
 }
 
+legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
+leg_keypoints_canonical = ["ThC", "CTr", "FTi", "TiTa", "Claw"]
+leg_keypoints_nmf = [
+    keypoint_name_lookup_canonical_to_nmf[link] for link in leg_keypoints_canonical
+]
+keypoint_segments_canonical = [
+    f"{leg}{link}" for leg in legs for link in leg_keypoints_canonical
+] + ["LPedicel", "RPedicel"]
+keypoint_segments_nmf = [
+    f"{leg}{link}" for leg in legs for link in leg_keypoints_nmf
+] + ["LPedicel", "RPedicel"]
+
 kchain_plotting_colors = {
     "LF": np.array([15, 115, 153]) / 255,
     "LM": np.array([26, 141, 175]) / 255,
