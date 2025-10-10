@@ -1,10 +1,10 @@
 import sys
 from pathlib import Path
-from biomechpose.style_transfer import parse_hyperparameters_from_trial_name
+from poseforge.style_transfer import parse_hyperparameters_from_trial_name
 
 
 # Paths related to Slurm job configs
-project_dir = Path("~/biomechpose").expanduser()
+project_dir = Path("~/poseforge").expanduser()
 template_path = project_dir / "scripts_on_cluster/style_transfer_inference/template.run"
 script_output_dir = project_dir / "scripts_on_cluster/style_transfer_inference/batch_scripts"
 log_dir = project_dir / "scripts_on_cluster/style_transfer_inference/logs"

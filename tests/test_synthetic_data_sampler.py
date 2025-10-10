@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from pathlib import Path
 
-from biomechpose.pose_estimation import SimulatedDataSequence, SyntheticFramesSampler
+from poseforge.pose_estimation import SimulatedDataSequence, SyntheticFramesSampler
 
 
 def test_sampling_contrastive_pretraining_dataset_sampling():

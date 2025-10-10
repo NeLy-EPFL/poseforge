@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-project_dir = Path("~/biomechpose").expanduser()
+project_dir = Path("~/poseforge").expanduser()
 template_path = project_dir / "scripts_on_cluster/atomic_batch_extraction/template.run"
 script_output_dir = project_dir / "scripts_on_cluster/atomic_batch_extraction/batch_scripts"
 log_dir = project_dir / "scripts_on_cluster/atomic_batch_extraction/logs"

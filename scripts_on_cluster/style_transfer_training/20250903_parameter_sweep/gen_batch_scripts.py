@@ -1,7 +1,10 @@
 from pathlib import Path
+from os import getenv
 
-campaign_dir = Path("/home/sibwang/biomechpose/scripts_on_cluster/style_transfer_training/20250903_parameter_sweep")
-data_output_dir = Path("/scratch/sibwang/biomechpose/bulk_data/style_transfer/20250903_parameter_sweep/")
+username = getenv("USER")
+assert username is not None and username != "", "USER environment variable not set"
+campaign_dir = Path(f"/home/{username}/poseforge/scripts_on_cluster/style_transfer_training/20250903_parameter_sweep")
+data_output_dir = Path(f"/scratch/{username}/poseforge/bulk_data/style_transfer/20250903_parameter_sweep/")
 template_path = campaign_dir / "template.run"
 script_output_dir = campaign_dir / "batch_scripts/"
 checkpoint_basedir = data_output_dir / "checkpoints/"

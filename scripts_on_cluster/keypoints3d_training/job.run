@@ -9,14 +9,14 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/biomechpose/scripts_on_cluster/keypoints3d_training/output.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/keypoints3d_training/output.log
 
 echo "Hello from $(hostname)"
 
-conda activate biomechpose
-cd $HOME/biomechpose
+conda activate poseforge
+cd $HOME/poseforge
 
-training_cli_path="src/biomechpose/pose_estimation/scripts/run_keypoints3d_training.py"
+training_cli_path="src/poseforge/pose_estimation/scripts/run_keypoints3d_training.py"
 training_trial_name="trial_20251007a"
 
 echo "Training starting at $(date)"

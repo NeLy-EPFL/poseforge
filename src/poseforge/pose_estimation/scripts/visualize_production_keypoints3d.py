@@ -1,4 +1,4 @@
-s#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Script to create visualization videos for production 3D keypoint inference results.
 This script takes inference results and creates two-panel videos showing:

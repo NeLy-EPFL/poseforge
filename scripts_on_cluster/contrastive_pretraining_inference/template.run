@@ -14,10 +14,10 @@
 echo "Hello from $(hostname)"
 
 # Set up environment and package
-conda activate biomechpose
+conda activate poseforge
 
 # Define paths
-project_root="/home/sibwang/biomechpose"
+project_root="/home/$USER/poseforge"
 contrastive_pretraining_trial="trial_20250926a"
 
 # Setup
@@ -26,7 +26,7 @@ cd $project_root
 # Training
 echo "Start running inference at $(date)"
 
-python -u src/biomechpose/pose_estimation/scripts/run_feature_extractor_inference.py \
+python -u src/poseforge/pose_estimation/scripts/run_feature_extractor_inference.py \
     --sampling.batch-size 4096 \
     --model.training-stages \
         "epoch000_step000000" \

@@ -13,15 +13,15 @@
 echo "Hello from $(hostname)"
 
 # Set up environment and package
-conda activate biomechpose
+conda activate poseforge
 
 # Set up FlyGym rendering for headless machines
 export MUJOCO_GL="egl"
 export PYOPENGL_PLATFORM="egl"
 
 # Define paths
-project_root="/home/sibwang/biomechpose"
-simulation_cli_path="src/biomechpose/simulate_nmf/scripts/run_simulation.py"
+project_root="/home/$USER/poseforge"
+simulation_cli_path="src/poseforge/simulate_nmf/scripts/run_simulation.py"
 
 # Setup
 cd $project_root
