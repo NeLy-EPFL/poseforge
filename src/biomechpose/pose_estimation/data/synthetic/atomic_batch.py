@@ -363,7 +363,7 @@ def init_atomic_dataset_and_dataloader(
     data_dirs: list[str | Path],
     atomic_batch_n_samples: int,
     atomic_batch_n_variants: int,
-    image_size: tuple[int, int],
+    input_image_size: tuple[int, int],
     batch_size: int,
     load_dof_angles: bool = False,
     load_keypoint_positions: bool = False,
@@ -387,7 +387,7 @@ def init_atomic_dataset_and_dataloader(
             batch.
         image_size (tuple[int, int]): Size of the images (height, width).
         batch_size (int): Desired batch size. Must be a multiple of
-            atomic_batch_n_samples.  TODO: further divide by n_variants?
+            atomic_batch_n_samples.
         load_dof_angles (bool, optional): Whether to load degree-of-freedom
             angles. Defaults to False.
         load_keypoint_positions (bool, optional): Whether to load keypoint
@@ -414,7 +414,7 @@ def init_atomic_dataset_and_dataloader(
     dataset = AtomicBatchDataset(
         data_dirs=[Path(path) for path in data_dirs],
         n_variants=atomic_batch_n_variants,
-        image_size=image_size,
+        image_size=input_image_size,
         n_channels=num_channels,
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,

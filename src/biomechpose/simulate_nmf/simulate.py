@@ -13,7 +13,7 @@ from flygym.arena import BaseArena, FlatTerrain
 from flygym.preprogrammed import all_leg_dofs
 
 from biomechpose.simulate_nmf.data import interpolate_trajectories
-from biomechpose.simulate_nmf.utils import parse_nmf_joint_name
+from biomechpose.simulate_nmf.constants import parse_nmf_joint_name
 
 
 # Define color combo by body segment

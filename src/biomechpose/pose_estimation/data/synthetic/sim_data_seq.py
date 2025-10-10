@@ -2,11 +2,11 @@ import torch
 import numpy as np
 import h5py
 import cv2
-import json
 from pathlib import Path
 from typing import Iterator
+from pvio.video_io import get_video_metadata
 
-from biomechpose.util import check_num_frames, read_frames_from_video
+from biomechpose.util import read_frames_from_video
 
 
 class SimulatedDataSequence:
@@ -39,9 +39,12 @@ class SimulatedDataSequence:
         self.n_variants = len(synthetic_video_paths)
         assert self.n_variants > 0, "At least one synthetic video required"
 
-        self.n_frames, self.frame_size, self.fps = self._get_metadata(
+        metadata = get_video_metadata(
             synthetic_video_paths[0], cache_metadata, use_cached_metadata
         )
+        self.n_frames = metadata["n_frames"]
+        self.frame_size = metadata["frame_size"]
+        self.fps = metadata["fps"]
 
         # If image has been downsampled from the original, compute the zoom factor and
         # return keypoint positions converted to the scale of output images.
@@ -51,36 +54,16 @@ class SimulatedDataSequence:
             zoom_factor = np.array([1.0, 1.0])
         self.image_zoom_factor = zoom_factor
 
-    def _get_metadata(self, sample_video_path, cache_metadata, use_cached_metadata):
-        # Already checked that all videos are under the same directory, so just save the
-        # cache there
-        cache_path = sample_video_path.parent / "cached_sim_metadata.json"
-        if use_cached_metadata and cache_path.is_file():
-            try:
-                with open(cache_path, "r") as f:
-                    metadata = json.load(f)
-                n_frames = metadata["n_frames"]
-                frame_size = tuple(metadata["frame_size"])
-                fps = metadata["fps"]
-            except Exception as e:
-                print(f"Corrupted metadata cache file {cache_path}")
-                raise e
-        else:
-            n_frames = check_num_frames(sample_video_path)
-            sample_frames, fps = read_frames_from_video(
-                sample_video_path, frame_indices=[0]
+    def get_sim_data_metadata(self) -> dict:
+        metadata = {}
+        with h5py.File(self.simulated_labels_path, "r") as ds:
+            postprocessed_ds = ds["postprocessed"]
+            metadata["dof_angles"] = dict(postprocessed_ds["dof_angles"].attrs)
+            metadata["keypoint_pos"] = dict(postprocessed_ds["keypoint_pos"].attrs)
+            metadata["segmentation_labels"] = dict(
+                postprocessed_ds["segmentation_labels"].attrs
             )
-            frame_size = sample_frames[0].shape[:2]
-
-            if cache_metadata:
-                metadata = {
-                    "n_frames": n_frames,
-                    "frame_size": list(frame_size),
-                    "fps": fps,
-                }
-                with open(cache_path, "w") as f:
-                    json.dump(metadata, f, indent=2)
-        return n_frames, frame_size, fps
+        return metadata
 
     def __len__(self) -> int:
         return self.n_frames

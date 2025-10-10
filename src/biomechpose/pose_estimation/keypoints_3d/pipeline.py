@@ -26,19 +26,20 @@ class Pose2p5DPipeline:
     def __init__(
         self,
         model: Pose2p5DModel,
-        loss_func: Pose2p5DLoss,
+        loss_func: Pose2p5DLoss | None = None,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
         """
         Args:
             model (Pose2p5DModel): Model to train.
-            loss_func (Pose2p5DLoss): Loss function.
+            loss_func (Pose2p5DLoss | None): Loss function. Not required if
+                performing inference only.
             device (torch.device | str): Device to use for training.
             use_float16 (bool): Whether to use mixed-precision in training.
         """
         self.model = model.to(device)
-        self.loss_func = loss_func.to(device)
+        self.loss_func = loss_func.to(device) if loss_func else None
         self.device = device
         if torch.cuda.is_available() and "cuda" in str(self.device):
             self.device_type = "cuda"
@@ -79,6 +80,10 @@ class Pose2p5DPipeline:
         self._check_amp_status_for_model_params(
             amp_scaler, subtitle="Model parameters before training"
         )
+
+        # Check if loss function is provided
+        if self.loss_func is None:
+            raise ValueError("Loss function must be provided for training")
 
         # Training loop
         self.model.train()
@@ -167,6 +172,19 @@ class Pose2p5DPipeline:
                     step_idx % artifacts_config.validation_interval == 0
                     and step_idx > 0
                 ):
+                    del (
+                        atomic_batches_frames,
+                        atomic_batches_sim_data,
+                        frames_concat,
+                        sim_data_concat,
+                        frames_collapsed,
+                        sim_data_collapsed,
+                        pred_dict,
+                        xy_labels,
+                        depth_labels,
+                    )
+                    clear_memory_cache()
+                    
                     val_loss_dict = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
@@ -178,6 +196,8 @@ class Pose2p5DPipeline:
                         n_batches_per_epoch=n_batches_per_epoch,
                         val_loss_dict=val_loss_dict,
                     )
+
+                    clear_memory_cache()
 
                 # Save checkpoint
                 # (every log_interval steps and last step of each epoch)
@@ -224,6 +244,9 @@ class Pose2p5DPipeline:
         if max_batches <= 0:
             raise ValueError("max_batches must be positive or None")
         total_loss_dict = defaultdict(lambda: 0.0)
+
+        if self.loss_func is None:
+            raise ValueError("Loss function must be provided for validation")
 
         self.model.eval()
         clear_memory_cache()
@@ -286,7 +309,6 @@ class Pose2p5DPipeline:
             frames = frames.to(self.device)
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                 pred_dict = self.model(frames)
-                pred_dict["pred_depth_adjusted"] = pred_dict["pred_depth"]
         self.model.train()
         return {
             k: v.to(input_device) if isinstance(v, torch.Tensor) else v
@@ -308,7 +330,7 @@ class Pose2p5DPipeline:
             data_dirs=data_config.train_data_dirs,
             atomic_batch_n_samples=data_config.atomic_batch_n_samples,
             atomic_batch_n_variants=data_config.atomic_batch_n_variants,
-            image_size=data_config.image_size,
+            input_image_size=data_config.input_image_size,
             batch_size=data_config.train_batch_size,
             load_dof_angles=False,
             load_keypoint_positions=True,
@@ -326,7 +348,7 @@ class Pose2p5DPipeline:
             data_dirs=data_config.val_data_dirs,
             atomic_batch_n_samples=data_config.atomic_batch_n_samples,
             atomic_batch_n_variants=data_config.atomic_batch_n_variants,
-            image_size=data_config.image_size,
+            input_image_size=data_config.input_image_size,
             batch_size=data_config.val_batch_size,
             load_dof_angles=False,
             load_keypoint_positions=True,
@@ -437,3 +459,4 @@ class Pose2p5DPipeline:
             grad_scaler=grad_scaler,
             subtitle=subtitle,
         )
+

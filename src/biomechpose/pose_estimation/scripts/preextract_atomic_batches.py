@@ -4,11 +4,10 @@ from pathlib import Path
 from tqdm import trange
 from time import time
 
-from biomechpose.pose_estimation import (
+from biomechpose.pose_estimation.data.synthetic import (
     SimulatedDataSequence,
     SyntheticFramesSampler,
-    save_atomic_batch_frames,
-    save_atomic_batch_sim_data,
+    AtomicBatchDataset,
 )
 
 
@@ -167,13 +166,13 @@ def extract_atomic_batches(
                 batch_idx * n_atomic_batches_per_batch + atomic_batch_group_idx
             )
             filename_stem = f"atomicbatch{global_atomic_batch_idx:08d}_batch{batch_idx:05d}_variantsgroup{variant_idx_start:02d}"
-            save_atomic_batch_frames(
+            AtomicBatchDataset.save_atomic_batch_frames(
                 atomic_batch_frames,
                 output_dir / f"{filename_stem}_frames.mp4",
                 fps=sampler.fps,
                 spacing=video_spacing,
             )
-            save_atomic_batch_sim_data(
+            AtomicBatchDataset.save_atomic_batch_sim_data(
                 labels, output_dir / f"{filename_stem}_labels.h5"
             )
         if batch_idx % logging_interval == 0:
@@ -226,7 +225,7 @@ if __name__ == "__main__":
     #     minimum_time_diff_frames=60,
     #     input_basedir="bulk_data/style_transfer/production/translated_videos",
     #     nmf_sim_rendering_basedir="bulk_data/nmf_rendering/",
-    #     output_dir="bulk_data/pose_estimation/atomic_batches",
+    #     output_dir="bulk_data/pose_estimation/atomic_batches_test",
     #     original_image_size=(464, 464),
     #     n_jobs=-1,
     #     logging_interval=100,
@@ -234,4 +233,3 @@ if __name__ == "__main__":
     #     use_cached_metadata=True,
     #     video_spacing=10,
     # )
-

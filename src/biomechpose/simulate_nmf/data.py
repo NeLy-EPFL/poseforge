@@ -3,7 +3,7 @@ import pandas as pd
 from pathlib import Path
 from flygym.preprogrammed import all_leg_dofs
 
-from biomechpose.simulate_nmf.utils import parse_nmf_joint_name
+from biomechpose.simulate_nmf.constants import parse_nmf_joint_name
 
 
 def extract_joint_angles_trajectory(
