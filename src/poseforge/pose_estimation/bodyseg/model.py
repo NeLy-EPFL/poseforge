@@ -1,10 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import logging
-from pathlib import Path
 
-import poseforge.pose_estimation.bodyseg.config as config
 from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
 
@@ -34,14 +31,12 @@ class DecoderBlock(nn.Module):
         return x
 
 
-class BodySegModel(nn.Module):
+class BodySegmentationModel(nn.Module):
     def __init__(
         self,
         n_classes: int,
         feature_extractor: ResNetFeatureExtractor,
         temperature: float,
-        upsample_n_layers: int = 3,
-        final_upsample_n_hidden_channels: int = 32,
         confidence_method: str = "entropy",
     ):
         """
@@ -50,20 +45,16 @@ class BodySegModel(nn.Module):
             feature_extractor (ResNetFeatureExtractor): (Pretrained)
                 feature extractor.
             temperature (float): Temperature for soft-argmax in heatmaps.
-            upsample_n_layers (int): Number of upsampling layers (deconvs).
-            upsample_n_hidden_channels (int): Number of hidden channels in
-                upsampling layers.
             confidence_method (str): Method to compute confidence scores in
                 soft argmax of x-y heatmaps and depth logits. Options:
                 "entropy" (1 - normalized entropy in predicted
                 distribution, default) or "peak" (max probability).
         """
-        super(BodySegModel, self).__init__()
+        super(BodySegmentationModel, self).__init__()
         self.n_classes = n_classes
         self.feature_extractor = feature_extractor
         self.temperature = temperature
-        self.upsample_n_layers = upsample_n_layers
-        self.final_upsample_n_hidden_channels = final_upsample_n_hidden_channels
+        self.final_upsampler_n_hidden_channels = 32  # fixed for now
         self.confidence_method = confidence_method
 
         if confidence_method not in ["entropy", "peak"]:
@@ -74,23 +65,23 @@ class BodySegModel(nn.Module):
 
         # Create decoder (decoder1/2/3/4 mirror encoder layers 1/2/3/4)
         # Note that when upsampling, we actually run decoder4 first, decoder1 last
-        self.decoder4 = DecoderBlock(512, 256, 256)  # 512ch   8x8 -> 256ch   16x16
-        self.decoder3 = DecoderBlock(256, 128, 128)  # 256ch 16x16 -> 128ch   32x32
-        self.decoder2 = DecoderBlock(128, 64, 64)  #   128ch 32x32 ->  64ch   64x64
-        self.decoder1 = DecoderBlock(64, 64, 64)  #     64ch 64x64 ->  64ch 128x128
+        self.decoder4 = DecoderBlock(512, 256, 256)  # 512ch 8x8 -> 256ch 16x16
+        self.decoder3 = DecoderBlock(256, 128, 128)  # 256ch 16x16 -> 128ch 32x32
+        self.decoder2 = DecoderBlock(128, 64, 64)  # 128ch 32x32 -> 64ch 64x64
+        self.decoder1 = DecoderBlock(64, 64, 64)  # 64ch 64x64 -> 64ch 128x128
 
         # Final upsampling layer to reach input size
-        self.final_upsample = nn.Sequential(
+        self.final_upsampler = nn.Sequential(
             nn.ConvTranspose2d(
-                64, self.final_upsample_n_hidden_channels, kernel_size=2, stride=2
-            ),  # c=64, 128x128 -> c=final_upsample_n_hidden_channels, 256x256
-            nn.BatchNorm2d(self.final_upsample_n_hidden_channels),
+                64, self.final_upsampler_n_hidden_channels, kernel_size=2, stride=2
+            ),  # c=64, 128x128 -> c=final_upsampler_n_hidden_channels, 256x256
+            nn.BatchNorm2d(self.final_upsampler_n_hidden_channels),
             nn.ReLU(inplace=True),
         )
 
         # Final classification layer
         self.classifier = nn.Conv2d(
-            self.final_upsample_n_hidden_channels, self.n_classes, kernel_size=1
+            self.final_upsampler_n_hidden_channels, self.n_classes, kernel_size=1
         )
 
     def forward(self, x):
@@ -137,7 +128,7 @@ class BodySegModel(nn.Module):
         d0 = self.decoder1(d1, e0)
 
         # Final upsampling and classification
-        upsampled = self.final_upsample(d0)
+        upsampled = self.final_upsampler(d0)
         segmentation_logits = self.classifier(upsampled)
 
         return segmentation_logits
@@ -216,4 +207,5 @@ class CombinedLoss(nn.Module):
         """
         ce = self.ce_loss(pred_logits, target_indices)
         dice = self.dice_loss(pred_logits, target_indices)
-        return self.weight_ce * ce + self.weight_dice * dice
+        total_loss = self.weight_ce * ce + self.weight_dice * dice
+        return {"total_loss": total_loss, "ce_loss": ce, "dice_loss": dice}
