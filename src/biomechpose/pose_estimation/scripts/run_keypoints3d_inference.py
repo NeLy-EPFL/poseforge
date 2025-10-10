@@ -14,25 +14,47 @@ from biomechpose.simulate_nmf.constants import keypoint_segments_canonical
 from biomechpose.util import get_hardware_availability
 
 
-if __name__ == "__main__":
-    input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model = "trial_20251007a"
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d") / model
-    output_basedir = model_dir / "production"
-    architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
-    checkpoint_path = model_dir / "checkpoints/epoch13_step9167.model.pth"
-    batch_size = 512
-    n_workers = 16
-    inference_image_size = (256, 256)
-    camera_pos = (0.0, 0.0, -100.0)  # mm
-    camera_fov_deg = 5.0  # degrees
-    camera_rendering_size = (464, 464)  # pixels
-    camera_rotation_euler = (0, np.pi, -np.pi / 2)  # radians
+def run_keypoints3d_inference(
+    input_basedir: Path,
+    model_dir: Path,
+    model_checkpoint_path: Path,
+    output_basedir: Path | None = None,
+    batch_size: int = 512,
+    n_workers: int = 16,
+    inference_image_size: tuple[int, int] = (256, 256),
+    camera_pos: tuple[float, float, float] = (0.0, 0.0, -100.0),
+    camera_fov_deg: float = 5.0,
+    camera_rendering_size: tuple[int, int] = (464, 464),
+    camera_rotation_euler: tuple[float, float, float] = (0, np.pi, -np.pi / 2),
+):
+    """Run 3D keypoint detection model on all real Spotlight videos and
+    save results.
 
+    Args:
+        input_basedir: Directory containing subdirectories for each trial,
+            each of which should contain a "model_prediction/not_flipped"
+            subdirectory with the aligned and cropped images.
+        model_dir: Directory containing model architecture and weights
+            configuration files.
+        model_checkpoint_path: Path to model checkpoint file.
+        output_basedir: Directory to save results. If None, will save to
+            "production" subdirectory of model_dir.
+        batch_size: Batch size to use for inference.
+        n_workers: Number of workers to use for data loading.
+        inference_image_size: (width, height) to resize input images to
+            for inference.
+        camera_pos: (x, y, z) position of the camera in world coordinates
+            (in mm).
+        camera_fov_deg: Camera field of view in degrees (assumed to be the
+            same horizontally and vertically).
+        camera_rendering_size: (width, height) of the rendered image in
+            pixels. Must be square (width == height).
+        camera_rotation_euler: (roll, pitch, yaw) rotation of the camera
+            in radians. These should be the exact same values that were
+            used to create the camera during simulation.
+    """
     # Find all trials to process
-    input_trials = list(
-        input_basedir.glob("*/model_prediction/not_flipped/")
-    )
+    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
     print(f"Found {len(list(input_trials))} trials to process")
 
     # System setup
@@ -57,8 +79,10 @@ if __name__ == "__main__":
     )
 
     # Create model and learning pipeline
+    architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
+    model_weights = ModelWeightsConfig(model_weights=model_checkpoint_path)
     model = Pose2p5DModel.create_architecture_from_config(architecture_config_path)
-    model.load_weights_from_config(ModelWeightsConfig(model_weights=checkpoint_path))
+    model.load_weights_from_config(model_weights)
     pipeline = Pose2p5DPipeline(model, device="cuda", use_float16=True)
 
     # Set up camera mapper
@@ -82,6 +106,8 @@ if __name__ == "__main__":
     print("Inference complete")
 
     # Save results
+    if output_basedir is None:
+        output_basedir = model_dir / "production"
     for video_path, result_by_frame in results.items():
         trial_name = video_path.parent.parent.name
         output_dir = output_basedir / trial_name
@@ -116,3 +142,17 @@ if __name__ == "__main__":
             camera_depth_ds.attrs["units"] = "mm"
 
         print(f"Wrote results to {output_dir / 'keypoints3d.h5'}")
+
+
+if __name__ == "__main__":
+    input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251007a")
+    epochs_to_try = list(range(0, 21, 2))
+
+    for epoch in epochs_to_try:
+        print(f"Running inference for epoch {epoch}")
+        checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step9167.model.pth"
+        output_basedir = model_dir / f"production/epoch{epoch}"
+        run_keypoints3d_inference(
+            input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
+        )
