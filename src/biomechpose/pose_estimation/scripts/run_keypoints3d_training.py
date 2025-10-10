@@ -37,13 +37,30 @@ def _setup_loss_func(loss_config: config.LossConfig) -> Pose2p5DLoss:
 def train_keypoints3d_model(
     n_epochs: int,
     model_architecture_config: config.ModelArchitectureConfig,
-    model_weights_config: config.ModelWeightsConfig,
+    model_weights_config: config.ModelWeightsConfig | None,
     loss_config: config.LossConfig,
     training_data_config: config.TrainingDataConfig,
     optimizer_config: config.OptimizerConfig,
     training_artifacts_config: config.TrainingArtifactsConfig,
     seed: int = 42,
 ) -> None:
+    """Train a 3D keypoint detection model, typically using a pretrained
+    feature extractor.
+
+    Args:
+        n_epochs: Number of epochs to train for.
+        model_architecture_config: Configuration for model architecture.
+        model_weights_config: Configuration for model weights to load.
+            If None, will initialize model weights randomly.
+        loss_config: Configuration for loss function.
+        training_data_config: Configuration for training and validation
+            data.
+        optimizer_config: Configuration for optimizer and learning rate
+            schedule.
+        training_artifacts_config: Configuration for saving training
+            artifacts.
+        seed: Random seed for reproducibility.
+    """
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
     if len(hardware_avail["gpus"]) == 0:
