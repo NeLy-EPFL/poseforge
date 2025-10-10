@@ -69,10 +69,6 @@ class ResNetFeatureExtractor(nn.Module):
 
         # Find out the output size of the ResNet feature extractor
         self.output_channels = 512  # ResNet-18 layer4 output channels
-        # These need to be determined based on input data size. Call
-        # `data_dependent_init(x)` with a sample input to set them.
-        self.output_feature_map_size = (None, None)
-        self.output_dim = None
 
         # Load weights for this very nn.Module if provided
         if my_module_weights is not None:
@@ -121,8 +117,8 @@ class ResNetFeatureExtractor(nn.Module):
         Returns:
             If return_intermediates is False:
                 features (torch.Tensor): Extracted features. The shape is
-                    (batch_size, out_channels, *self.output_feature_map_size)
-                    where self.output_feature_map_size depends on the input
+                    (batch_size, out_channels, *output_feature_map_size)
+                    where output_feature_map_size depends on the input
                     image size.
             If return_intermediates is True:
                 A tuple of 5 torch.Tensors:
@@ -154,25 +150,3 @@ class ResNetFeatureExtractor(nn.Module):
             return x0, x1, x2, x3, x4
         else:
             return x4
-
-    def data_dependent_init(self, x: torch.Tensor):
-        """Initialize data-dependent parameters based on a sample input.
-        Specifically, determine the feature map size in the last layer
-        right before global adaptive pooling. When `global_pool` is False,
-        this is useful to determine the spatial dimensions of the output.
-
-        This method only needs to be called once and only if `global_pool`
-        is False.
-
-        Args:
-            x (torch.Tensor): Input image tensor of shape (batch_size, 3,
-                height, width), with pixel values in [0, 1].
-        """
-        with torch.no_grad():
-            _, _, n_rows_in, n_cols_in = x.shape
-            dummy_batch_size = 1
-            dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
-            feature_map = self.resnet_feature_extractor(dummy_input)
-            _, _, n_rows_out, n_cols_out = feature_map.shape
-        self.output_feature_map_size = (n_rows_out, n_cols_out)
-        self.output_dim = self.output_channels * n_rows_out * n_cols_out
