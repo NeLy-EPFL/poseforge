@@ -184,7 +184,7 @@ class Pose2p5DPipeline:
                         depth_labels,
                     )
                     clear_memory_cache()
-                    
+
                     val_loss_dict = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
@@ -196,7 +196,6 @@ class Pose2p5DPipeline:
                         n_batches_per_epoch=n_batches_per_epoch,
                         val_loss_dict=val_loss_dict,
                     )
-
                     clear_memory_cache()
 
                 # Save checkpoint
@@ -459,4 +458,3 @@ class Pose2p5DPipeline:
             grad_scaler=grad_scaler,
             subtitle=subtitle,
         )
-

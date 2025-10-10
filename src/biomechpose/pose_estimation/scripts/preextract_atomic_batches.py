@@ -55,10 +55,10 @@ def extract_atomic_batches(
             simulation rendering.
         output_dir (Path | str): The output directory for atomic batches.
         original_image_size (tuple[int, int] | None): The original image
-            size (H, W) before the images were downsampled in
-
-            . If not None, 2D keypoint positions
-            will be scaled to match the output image size.
+            size (H, W) before the images were downsampled in the style
+            transfer model (i.e. MuJoCo camera resolution). If specified,
+            2D keypoint positions will be scaled to match the output image
+            size.
         n_jobs (int, optional): The number of jobs to run in parallel. 0 =
             run in a plain loop; -1 = use all available cores. Defaults to
             -1.
