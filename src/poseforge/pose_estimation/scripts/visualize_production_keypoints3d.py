@@ -6,28 +6,25 @@ This script takes inference results and creates two-panel videos showing:
 - Right panel: 3D skeleton animation with camera movement
 """
 
-import numpy as np
-import h5py
 import matplotlib
 
 matplotlib.use("Agg")
+
+import numpy as np
+import h5py
 import matplotlib.pyplot as plt
 from pathlib import Path
 from PIL import Image
 import imageio.v2 as imageio
 from joblib import Parallel, delayed
 import logging
-import shutil
 import tempfile
 
 from poseforge.pose_estimation.keypoints3d.visualizer import (
     get_keypoint_color,
     get_skeleton_connections,
 )
-from poseforge.simulate_nmf.constants import (
-    keypoint_segments_canonical,
-    kchain_plotting_colors,
-)
+from poseforge.simulate_nmf.constants import kchain_plotting_colors
 from poseforge.util import (
     configure_matplotlib_style,
     default_video_writing_ffmpeg_params,
