@@ -18,6 +18,7 @@ import imageio.v2 as imageio
 from joblib import Parallel, delayed
 import logging
 import shutil
+import tempfile
 
 from biomechpose.pose_estimation.keypoints_3d.visualizer import (
     get_keypoint_color,
@@ -63,16 +64,25 @@ def setup_two_panel_figure(
     # Use origin='upper' so plotted 2D keypoints (pixel coordinates) match image coords
     if is_grayscale:
         img_plot = ax_img.imshow(
-            np.zeros(img_shape), aspect="auto", vmin=0, vmax=1, cmap="gray", origin="upper"
+            np.zeros(img_shape),
+            aspect="auto",
+            vmin=0,
+            vmax=1,
+            cmap="gray",
+            origin="upper",
         )
     else:
         # For color images (H, W, 3) use RGB plotting without a colormap
-        img_plot = ax_img.imshow(np.zeros(img_shape), aspect="auto", vmin=0, vmax=1, origin="upper")
+        img_plot = ax_img.imshow(
+            np.zeros(img_shape), aspect="auto", vmin=0, vmax=1, origin="upper"
+        )
 
     # Prepare 2D skeleton overlay artists on the image axis
     # Helper to detect leg vs antennae
     def _is_leg(name: str) -> bool:
-        return name[:2] in {"LF", "LM", "LH", "RF", "RM", "RH"} and "Pedicel" not in name
+        return (
+            name[:2] in {"LF", "LM", "LH", "RF", "RM", "RH"} and "Pedicel" not in name
+        )
 
     def _is_antenna(name: str) -> bool:
         return "Pedicel" in name or "Antenna" in name
@@ -151,14 +161,14 @@ def render_frame_chunk_worker(
         start_name = keypoints_order[start_idx]
         leg_id = start_name[:2] if len(start_name) >= 2 else None
         color = kchain_plotting_colors.get(leg_id, np.array([0.5, 0.5, 0.5]))
-        (line,) = ax_3d.plot3D(
-            [0, 0], [0, 0], [0, 0], color=color, linewidth=3
-        )
+        (line,) = ax_3d.plot3D([0, 0], [0, 0], [0, 0], color=color, linewidth=3)
         skeleton_lines.append(line)
 
     # For 3D: only create scatter markers for antennae and non-leg keypoints
     def _is_leg(name: str) -> bool:
-        return name[:2] in {"LF", "LM", "LH", "RF", "RM", "RH"} and "Pedicel" not in name
+        return (
+            name[:2] in {"LF", "LM", "LH", "RF", "RM", "RH"} and "Pedicel" not in name
+        )
 
     def _is_antenna(name: str) -> bool:
         return "Pedicel" in name or "Antenna" in name
@@ -237,6 +247,7 @@ def render_frame_chunk_worker(
                 keypoints_2d_frame = keypoints_2d_frame.copy()
                 keypoints_2d_frame[:, 0] = keypoints_2d_frame[:, 0] * sx
                 keypoints_2d_frame[:, 1] = keypoints_2d_frame[:, 1] * sy
+
             # Heuristic detection for coordinate ordering/origin issues.
             # Try four transforms: none, swap (x<->y), flip (y -> H - y), swap+flip.
             def count_in_bounds(kps):
@@ -320,7 +331,9 @@ def render_frames_parallel(
     # Split frame indices into chunks for workers
     frame_indices = list(range(n_frames))
     chunk_size = max(1, n_frames // n_workers)
-    frame_chunks = [frame_indices[i : i + chunk_size] for i in range(0, n_frames, chunk_size)]
+    frame_chunks = [
+        frame_indices[i : i + chunk_size] for i in range(0, n_frames, chunk_size)
+    ]
 
     # Render chunks in parallel
     Parallel(n_jobs=n_workers)(
@@ -343,10 +356,10 @@ def render_frames_parallel(
     )
 
 
-def create_production_visualization(
-    trial_name: str,
-    output_basedir: Path,
-    input_basedir: Path,
+def visualize_predictions(
+    inference_output_path: Path,
+    input_images_dir: Path,
+    output_video_path: Path,
     fps: int = 30,
     n_workers: int = -2,
 ):
@@ -359,14 +372,10 @@ def create_production_visualization(
         fps: Frames per second for output video
         n_workers: Number of parallel workers (-2 = all cores except 1)
     """
-    logger.info(f"Creating visualization for trial: {trial_name}")
+    logger.info(f"Creating visualization for: {inference_output_path}")
 
     # Load inference results
-    results_path = output_basedir / trial_name / "keypoints3d.h5"
-    if not results_path.exists():
-        raise FileNotFoundError(f"Inference results not found: {results_path}")
-
-    with h5py.File(results_path, "r") as f:
+    with h5py.File(inference_output_path, "r") as f:
         frame_ids = f["frame_ids"][:]
         # 3D world coordinates (n_frames, n_kp, 3)
         # Upstream inference currently writes this as 'keypoints_world_xyz' in run_keypoints3d_inference
@@ -388,7 +397,10 @@ def create_production_visualization(
             cam_img_size_attr = f["keypoints_camera_xy"].attrs.get("image_size", None)
             if cam_img_size_attr is not None:
                 try:
-                    camera_image_size = (int(cam_img_size_attr[0]), int(cam_img_size_attr[1]))
+                    camera_image_size = (
+                        int(cam_img_size_attr[0]),
+                        int(cam_img_size_attr[1]),
+                    )
                 except Exception:
                     camera_image_size = None
             else:
@@ -401,28 +413,15 @@ def create_production_visualization(
             camera_image_size = None
         else:
             # Explicitly require 2D camera coordinates for visualization overlays
-            raise RuntimeError("No 2D camera pixel coordinates (keypoints_camera_xy) found in results HDF5")
+            raise RuntimeError(
+                "No 2D camera pixel coordinates (keypoints_camera_xy) found in results HDF5"
+            )
 
     logger.info(f"Loaded {len(frame_ids)} frames of keypoint data")
 
-    # Load image directory
-    img_dir = input_basedir / trial_name / "model_prediction" / "not_flipped"
-    if not img_dir.exists():
-        raise FileNotFoundError(f"Image directory not found: {img_dir}")
-
-    # We'll display images resized to 256x256
+    # Load input images and resize to resolution at which inference was run
     display_size = (256, 256)  # (W, H)
     img_shape = (display_size[1], display_size[0], 3)  # H, W, C
-
-    # Create output directory for video
-    video_output_dir = output_basedir / trial_name / "visualization"
-    video_output_dir.mkdir(exist_ok=True)
-
-    # Create a fresh temporary frames directory (remove if it exists)
-    frames_dir = video_output_dir / "temp_frames"
-    if frames_dir.exists():
-        shutil.rmtree(frames_dir)
-    frames_dir.mkdir(parents=True, exist_ok=False)
 
     # Determine coordinate ranges for proper axis scaling
     x_coords = keypoints_pos[:, :, 0].flatten()
@@ -447,100 +446,96 @@ def create_production_visualization(
     # Get skeleton connections once
     skeleton_connections = get_skeleton_connections(keypoints_order)
 
-    # Render frames in parallel
-    # camera_image_size was set while reading the HDF5 (may be None)
-    # it represents (W, H) of the original camera images used during inference
+    # Create a temporary frames directory using tempfile
+    with tempfile.TemporaryDirectory(prefix="keypoints3d_frames_") as temp_dir:
+        frames_dir = Path(temp_dir)
 
-    render_frames_parallel(
-        frames_dir=frames_dir,
-        frame_ids=frame_ids,
-        img_dir=img_dir,
-        keypoints_pos=keypoints_pos,
-        keypoints_order=keypoints_order,
-        skeleton_connections=skeleton_connections,
-        img_shape=img_shape,
-        x_lim=x_lim,
-        y_lim=y_lim,
-        z_lim=z_lim,
-        n_workers=n_workers,
-        keypoints_pos_2d=keypoints_pos_2d,
-        camera_image_size=camera_image_size,
-    )
+        # Render frames in parallel
+        # camera_image_size was set while reading the HDF5 (may be None)
+        # it represents (W, H) of the original camera images used during inference
+        render_frames_parallel(
+            frames_dir=frames_dir,
+            frame_ids=frame_ids,
+            img_dir=input_images_dir,
+            keypoints_pos=keypoints_pos,
+            keypoints_order=keypoints_order,
+            skeleton_connections=skeleton_connections,
+            img_shape=img_shape,
+            x_lim=x_lim,
+            y_lim=y_lim,
+            z_lim=z_lim,
+            n_workers=n_workers,
+            keypoints_pos_2d=keypoints_pos_2d,
+            camera_image_size=camera_image_size,
+        )
 
-    # Convert frames to video
-    logger.info("Converting frames to video...")
-    video_path = video_output_dir / "keypoints3d_visualization.mp4"
+        # Convert frames to video
+        logger.info("Converting frames to video...")
+        frame_files = sorted(frames_dir.glob("frame_*.png"))
+        if not frame_files:
+            raise RuntimeError("No frame files were created")
 
-    frame_files = sorted(frames_dir.glob("frame_*.png"))
-
-    if not frame_files:
-        raise RuntimeError("No frame files were created")
-
-    # Ensure consistent frame sizes (resize any mismatches) before writing video
-    # Detect target size from first few frames
-    frame_sizes = {}
-    target_size = None
-    for i, frame_file in enumerate(frame_files[:5]):
-        frame = imageio.imread(frame_file)
-        size = frame.shape[:2]  # (height, width)
-        frame_sizes[i] = size
-        if target_size is None:
-            target_size = size
-        elif size != target_size:
-            logger.warning(
-                f"Frame size inconsistency detected: frame {i} has size {size}, expected {target_size}"
-            )
-
-    with imageio.get_writer(
-        str(video_path),
-        "ffmpeg",
-        fps=fps,
-        codec="libx264",
-        quality=None,
-        ffmpeg_params=default_video_writing_ffmpeg_params,
-    ) as video_writer:
-        for frame_file in frame_files:
+        # Ensure consistent frame sizes (resize any mismatches) before writing video
+        # Detect target size from first few frames
+        frame_sizes = {}
+        target_size = None
+        for i, frame_file in enumerate(frame_files[:5]):
             frame = imageio.imread(frame_file)
-            # Resize if needed to match target
-            if target_size and frame.shape[:2] != target_size:
-                pil_frame = Image.fromarray(frame)
-                pil_frame = pil_frame.resize((target_size[1], target_size[0]), Image.Resampling.LANCZOS)
-                frame = np.array(pil_frame)
-            video_writer.append_data(frame)
+            size = frame.shape[:2]  # (height, width)
+            frame_sizes[i] = size
+            if target_size is None:
+                target_size = size
+            elif size != target_size:
+                logger.warning(
+                    f"Frame size inconsistency detected: frame {i} has size {size}, expected {target_size}"
+                )
 
-    # Clean up temporary frames
-    for frame_file in frame_files:
-        frame_file.unlink()
-    frames_dir.rmdir()
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        with imageio.get_writer(
+            str(output_video_path),
+            "ffmpeg",
+            fps=fps,
+            codec="libx264",
+            quality=None,
+            ffmpeg_params=default_video_writing_ffmpeg_params,
+        ) as video_writer:
+            for frame_file in frame_files:
+                frame = imageio.imread(frame_file)
+                # Resize if needed to match target
+                if target_size and frame.shape[:2] != target_size:
+                    pil_frame = Image.fromarray(frame)
+                    pil_frame = pil_frame.resize(
+                        (target_size[1], target_size[0]), Image.Resampling.LANCZOS
+                    )
+                    frame = np.array(pil_frame)
+                video_writer.append_data(frame)
 
-    logger.info(f"Visualization video saved to: {video_path}")
-    return video_path
+        # Temporary directory and all frames are automatically cleaned up when exiting the context
 
-
-def main():
-    """Main function to run visualization for specific trials"""
-    # Configuration
-    input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model = "trial_20251007a"
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d") / model
-    output_basedir = model_dir / "production"
-
-    # Target trial to visualize
-    target_trial = "20250613-fly1b-013"
-
-    # Check if inference results exist
-    results_path = output_basedir / target_trial / "keypoints3d.h5"
-    if not results_path.exists():
-        print(f"Error: No inference results found for trial {target_trial}")
-        print(f"Expected path: {results_path}")
-        print("Please run the inference script first.")
-        return
-
-    # Create visualization
-    print(f"Creating visualization video for trial {target_trial}...")
-    create_production_visualization(target_trial, output_basedir, input_basedir, fps=30)
-    print("Visualization complete!")
+    logger.info(f"Visualization video saved to: {output_video_path}")
 
 
 if __name__ == "__main__":
-    main()
+    input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251007a")
+    epochs_to_try = list(range(0, 21, 2))
+    recordings = ["20250613-fly1b-013"]
+
+    for recording in recordings:
+        for epoch in epochs_to_try:
+            print(
+                f"Creating visualization for recording {recording} "
+                f"using model at the end of epoch {epoch}"
+            )
+            recording_dir = input_basedir / recording / "model_prediction/not_flipped"
+            keypoints3d_data_dir = model_dir / f"production/epoch{epoch}" / recording
+            inference_output_path = keypoints3d_data_dir / "keypoints3d.h5"
+            output_video_path = keypoints3d_data_dir / "predictions.mp4"
+            visualize_predictions(
+                inference_output_path,
+                recording_dir,
+                output_video_path,
+                fps=30,
+                n_workers=-2,
+            )
+            print(f"Visualization complete for recording {recording}, epoch {epoch}.")
