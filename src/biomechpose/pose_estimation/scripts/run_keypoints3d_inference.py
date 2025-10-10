@@ -21,8 +21,8 @@ if __name__ == "__main__":
     output_basedir = model_dir / "production"
     architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
     checkpoint_path = model_dir / "checkpoints/epoch13_step9167.model.pth"
-    batch_size = 40
-    n_workers = 4
+    batch_size = 512
+    n_workers = 16
     inference_image_size = (256, 256)
     camera_pos = (0.0, 0.0, -100.0)  # mm
     camera_fov_deg = 5.0  # degrees
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     # Find all trials to process
     input_trials = list(
-        input_basedir.glob("20250613-fly1b-013/model_prediction/not_flipped/")
+        input_basedir.glob("*/model_prediction/not_flipped/")
     )
     print(f"Found {len(list(input_trials))} trials to process")
 
@@ -106,6 +106,7 @@ if __name__ == "__main__":
             )
             camera_xy_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_xy_ds.attrs["units"] = "pixels"
+            camera_xy_ds.attrs["image_size"] = list(inference_image_size)
 
             camera_depth_stack = np.stack([x[2] for x in results_li])
             camera_depth_ds = f.create_dataset(
