@@ -167,7 +167,7 @@ class DiceLoss(nn.Module):
 
         # Compute Dice loss
         spatial_dims = (2, 3)  # height and width
-        intersection = probs * targets_1hot.sum(dim=spatial_dims)
+        intersection = (probs * targets_1hot).sum(dim=spatial_dims)
         union = probs.sum(dim=spatial_dims) + targets_1hot.sum(dim=spatial_dims)
         dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
         loss = 1.0 - dice.mean()  # average over classes and batch

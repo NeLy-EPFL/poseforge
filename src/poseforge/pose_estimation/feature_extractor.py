@@ -137,14 +137,14 @@ class ResNetFeatureExtractor(nn.Module):
         """
         x_norm = self._apply_imagenet_normalization(x)
 
-        conv1_out = self.model_elements["conv1"](x_norm)
-        bn1_out = self.model_elements["bn1"](conv1_out)
-        x0 = self.model_elements["relu"](bn1_out)
-        x0_maxpool_out = self.model_elements["maxpool"](x0)
-        x1 = self.model_elements["layer1"](x0_maxpool_out)
-        x2 = self.model_elements["layer2"](x1)
-        x3 = self.model_elements["layer3"](x2)
-        x4 = self.model_elements["layer4"](x3)
+        conv1_out = self.resnet.conv1(x_norm)
+        bn1_out = self.resnet.bn1(conv1_out)
+        x0 = self.resnet.relu(bn1_out)
+        x0_maxpool_out = self.resnet.maxpool(x0)
+        x1 = self.resnet.layer1(x0_maxpool_out)
+        x2 = self.resnet.layer2(x1)
+        x3 = self.resnet.layer3(x2)
+        x4 = self.resnet.layer4(x3)
 
         if return_intermediates:
             return x0, x1, x2, x3, x4
