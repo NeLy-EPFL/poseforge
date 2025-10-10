@@ -27,6 +27,8 @@ poetry install
 > pip install -e .
 > ```
 > (Do not try to run `pip install -e package-name` directly without `cd`ing into `package-name`. The current directory matters with `pip install -e`.)
+>
+> **Important:** This package also depends on spotlight-tools from [spotlight-control](https://github.com/NeLy-EPFL/spotlight-control) (TODO).
 
 
 ## Complete pipeline and code structure
