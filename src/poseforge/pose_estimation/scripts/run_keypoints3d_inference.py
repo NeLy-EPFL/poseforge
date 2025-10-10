@@ -100,9 +100,17 @@ def run_keypoints3d_inference(
             world_xyz = pred_world_xyz[i, :, :]
             camera_xy = pred_dict["pred_xy"][i, :, :]
             camera_depth = pred_dict["pred_depth"][i, :]
+            camera_xy_conf = pred_dict["conf_xy"][i, :]
+            camera_depth_conf = pred_dict["conf_depth"][i, :]
             video_path = batch["video_paths"][i]
             frame_idx = batch["frame_indices"][i]
-            results[video_path][frame_idx] = (world_xyz, camera_xy, camera_depth)
+            results[video_path][frame_idx] = (
+                world_xyz,
+                camera_xy,
+                camera_depth,
+                camera_xy_conf,
+                camera_depth_conf,
+            )
     print("Inference complete")
 
     # Save results
@@ -140,6 +148,22 @@ def run_keypoints3d_inference(
             )
             camera_depth_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_depth_ds.attrs["units"] = "mm"
+
+            camera_xy_conf_stack = np.stack([x[3] for x in results_li])
+            camera_xy_conf_ds = f.create_dataset(
+                "keypoints_camera_xy_conf", data=camera_xy_conf_stack, dtype=np.float16
+            )
+            camera_xy_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_xy_conf_ds.attrs["method"] = model.confidence_method
+
+            camera_depth_conf_stack = np.stack([x[4] for x in results_li])
+            camera_depth_conf_ds = f.create_dataset(
+                "keypoints_camera_depth_conf",
+                data=camera_depth_conf_stack,
+                dtype=np.float16,
+            )
+            camera_depth_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_depth_conf_ds.attrs["method"] = model.confidence_method
 
         print(f"Wrote results to {output_dir / 'keypoints3d.h5'}")
 
