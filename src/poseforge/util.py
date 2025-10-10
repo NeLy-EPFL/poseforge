@@ -139,6 +139,13 @@ def clear_memory_cache(logging_level=logging.DEBUG):
         )
 
 
+def force_clear_variables(*args):
+    """Force clear variables and free up memory"""
+    for var in args:
+        del var
+    clear_memory_cache(logging_level=logging.INFO)
+
+
 def check_num_frames(video_path: Path) -> int:
     """Check number of frames in a video file using imageio.v2"""
     try:
@@ -225,3 +232,27 @@ class SerializableDataClass:
         with open(path, "r") as f:
             data = yaml.safe_load(f)
         return cls(**data)
+
+
+def count_optimizer_parameters(
+    optimizer: torch.optim.Optimizer, trainable_only: bool = True
+) -> int:
+    """Counts the number of parameters handled by a PyTorch optimizer,
+    optionally limited to trainable parameters (requires_grad==True)."""
+    total_params = 0
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if not trainable_only or p.requires_grad:
+                total_params += p.numel()
+    return total_params
+
+
+def count_module_parameters(model: torch.nn.Module, trainable_only: bool = True) -> int:
+    """
+    Counts the total number of parameters in a PyTorch nn.Module,
+    optionally limited to trainable parameters (requires_grad==True)."""
+    total_params = 0
+    for p in model.parameters():
+        if not trainable_only or p.requires_grad:
+            total_params += p.numel()
+    return total_params

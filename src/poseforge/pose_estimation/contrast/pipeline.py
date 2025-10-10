@@ -15,7 +15,7 @@ from poseforge.pose_estimation.contrast.model import (
     ContrastiveProjectionHead,
     info_nce_loss,
 )
-from poseforge.util import clear_memory_cache, check_mixed_precision_status
+from poseforge.util import force_clear_variables, check_mixed_precision_status
 
 
 class ContrastivePretrainingPipeline:
@@ -216,7 +216,7 @@ class ContrastivePretrainingPipeline:
 
                     # Free GPU memory before validation
                     # Delete training batch tensors
-                    del (
+                    force_clear_variables(
                         atomic_batches,
                         concatenated_batch,
                         collapsed_batch,
@@ -225,7 +225,6 @@ class ContrastivePretrainingPipeline:
                         z_features,
                         loss,
                     )
-                    clear_memory_cache()
 
                     avg_val_loss = self.validate(
                         validation_data_loader,
@@ -305,7 +304,7 @@ class ContrastivePretrainingPipeline:
         avg_validation_loss = total_loss / max_nbatches
 
         # Clean up all validation tensors at the end
-        del (
+        force_clear_variables(
             atomic_batches,
             concatenated_batch,
             collapsed_batch,
@@ -313,7 +312,6 @@ class ContrastivePretrainingPipeline:
             z_features,
             loss,
         )
-        clear_memory_cache()
 
         # Set models back to training mode
         self.feature_extractor.train()
