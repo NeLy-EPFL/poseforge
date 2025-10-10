@@ -7,8 +7,8 @@ from collections import defaultdict
 from tqdm import tqdm
 from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
 
-from biomechpose.pose_estimation.keypoints_3d import Pose2p5DModel, Pose2p5DPipeline
-from biomechpose.pose_estimation.keypoints_3d.config import ModelWeightsConfig
+from biomechpose.pose_estimation.keypoints3d import Pose2p5DModel, Pose2p5DPipeline
+from biomechpose.pose_estimation.keypoints3d.config import ModelWeightsConfig
 from biomechpose.pose_estimation.camera import CameraToWorldMapper
 from biomechpose.simulate_nmf.constants import keypoint_segments_canonical
 from biomechpose.util import get_hardware_availability

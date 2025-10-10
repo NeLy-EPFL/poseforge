@@ -8,8 +8,8 @@ logging.basicConfig(
 import torch
 from pathlib import Path
 
-import biomechpose.pose_estimation.keypoints_3d.config as config
-from biomechpose.pose_estimation.keypoints_3d import (
+import biomechpose.pose_estimation.keypoints3d.config as config
+from biomechpose.pose_estimation.keypoints3d import (
     Pose2p5DModel,
     Pose2p5DLoss,
     Pose2p5DPipeline,

@@ -20,7 +20,7 @@ import logging
 import shutil
 import tempfile
 
-from biomechpose.pose_estimation.keypoints_3d.visualizer import (
+from biomechpose.pose_estimation.keypoints3d.visualizer import (
     get_keypoint_color,
     get_skeleton_connections,
 )

@@ -5,16 +5,16 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Callable
 
-import biomechpose.pose_estimation.keypoints_3d.config as config
+import biomechpose.pose_estimation.keypoints3d.config as config
 from biomechpose.util import get_hardware_availability
 from biomechpose.pose_estimation.data.synthetic import SimulatedDataSequence
-from biomechpose.pose_estimation.keypoints_3d import (
+from biomechpose.pose_estimation.keypoints3d import (
     Pose2p5DModel,
     Pose2p5DLoss,
     Pose2p5DPipeline,
 )
 from biomechpose.pose_estimation.camera import CameraToWorldMapper
-from biomechpose.pose_estimation.keypoints_3d.visualizer import (
+from biomechpose.pose_estimation.keypoints3d.visualizer import (
     SynthDataKeypoints3DVisualizer,
 )
 

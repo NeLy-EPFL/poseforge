@@ -8,13 +8,13 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-import biomechpose.pose_estimation.keypoints_3d.config as config
+import biomechpose.pose_estimation.keypoints3d.config as config
 from biomechpose.pose_estimation.data.synthetic import (
     init_atomic_dataset_and_dataloader,
     concat_atomic_batches,
     collapse_batch,
 )
-from biomechpose.pose_estimation.keypoints_3d import Pose2p5DModel, Pose2p5DLoss
+from biomechpose.pose_estimation.keypoints3d import Pose2p5DModel, Pose2p5DLoss
 from biomechpose.util import (
     clear_memory_cache,
     check_mixed_precision_status,

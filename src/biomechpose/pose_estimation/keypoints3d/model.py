@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import logging
 from pathlib import Path
 
-import biomechpose.pose_estimation.keypoints_3d.config as config
+import biomechpose.pose_estimation.keypoints3d.config as config
 from biomechpose.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
 
