@@ -1,0 +1,64 @@
+#!/bin/bash -l
+
+#SBATCH --job-name keypoints3d
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 75GB
+#SBATCH --time 48:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /home/sibwang/biomechpose/scripts_on_cluster/keypoints3d_training/output.log
+
+echo "Hello from $(hostname)"
+
+conda activate biomechpose
+cd $HOME/biomechpose
+
+training_cli_path="src/biomechpose/pose_estimation/scripts/run_keypoints3d_training.py"
+training_trial_name="trial_20251007a"
+
+echo "Training starting at $(date)"
+
+python -u $training_cli_path \
+    --n-epochs 30 \
+    --model-weights-config.feature-extractor-weights \
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/checkpoints/checkpoint_epoch009_step003000.feature_extractor.pth" \
+    --training-data-config.train-data-dirs \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial005" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial005" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial005" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial005" \
+    --training-data-config.val-data-dirs \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly5_trial001" \
+    --training-data-config.input-image-size 256 256 \
+    --training-data-config.atomic-batch-n-samples 32 \
+    --training-data-config.atomic-batch-n-variants 4 \
+    --training-data-config.train-batch-size 320 \
+    --training-data-config.val-batch-size 64 \
+    --training-data-config.num-workers 16 \
+    --training-artifacts-config.output-basedir \
+        "bulk_data/pose_estimation/keypoints3d/$training_trial_name/" \
+    --training-artifacts-config.logging-interval 10 \
+    --training-artifacts-config.checkpoint-interval 1000 \
+    --training-artifacts-config.validation-interval 1000 \
+    --training-artifacts-config.n-batches-per-validation 150
+
+echo "Training ends at $(date)"
