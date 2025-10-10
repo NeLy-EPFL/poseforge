@@ -13,11 +13,11 @@
 echo "Hello from $(hostname)"
 
 # Set up environment and package
-conda activate biomechpose
+conda activate poseforge
 
 # Define paths
-project_root="/home/sibwang/biomechpose"
-extraction_cli_path="src/biomechpose/pose_estimation/scripts/preextract_atomic_batches.py"
+project_root="/home/$USER/poseforge"
+extraction_cli_path="src/poseforge/pose_estimation/scripts/preextract_atomic_batches.py"
 
 # Setup
 cd $project_root

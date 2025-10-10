@@ -1,7 +1,7 @@
 from pathlib import Path
 from tqdm import tqdm
 
-from biomechpose.simulate_nmf.data import load_kinematic_recording
+from poseforge.simulate_nmf.data import load_kinematic_recording
 
 
 # Job execution parameters
@@ -13,7 +13,7 @@ filter_size = 5
 filtered_frac_threshold = 0.5
 
 # Define paths relevant to execution
-project_dir = Path("~/biomechpose").expanduser()
+project_dir = Path("~/poseforge").expanduser()
 template_path = project_dir / "scripts_on_cluster/nmf_simulation/template.run"
 script_output_dir = project_dir / "scripts_on_cluster/nmf_simulation/batch_scripts"
 log_dir = project_dir / "scripts_on_cluster/nmf_simulation/logs"

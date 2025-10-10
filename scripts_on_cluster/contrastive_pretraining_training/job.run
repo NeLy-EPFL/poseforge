@@ -9,18 +9,18 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/biomechpose/scripts_on_cluster/contrastive_pretraining_training/output.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/contrastive_pretraining_training/output.log
 
 echo "Hello from $(hostname)"
 
-conda activate biomechpose
+conda activate poseforge
 
-cd /home/sibwang/biomechpose
+cd /home/sibwang/poseforge
 echo "Training starting at $(date)"
 
 trial_name="trial_20251001a"
 
-python -u src/biomechpose/pose_estimation/scripts/run_contrastive_pretraining.py \
+python -u src/poseforge/pose_estimation/scripts/run_contrastive_pretraining.py \
     --sampling.atomic-batch-nsamples 32 \
     --sampling.atomic-batch-nvariants 4 \
     --sampling.train-batch-size 960 \

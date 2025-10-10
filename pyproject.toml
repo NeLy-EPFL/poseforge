@@ -1,5 +1,5 @@
 [project]
-name = "biomechpose"
+name = "poseforge"
 version = "0.2.0"
 description = "Pose estimation guided by a biomechanical model."
 authors = [
@@ -43,7 +43,7 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{include = "biomechpose", from = "src"}]
+packages = [{include = "poseforge", from = "src"}]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

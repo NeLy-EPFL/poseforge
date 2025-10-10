@@ -14,11 +14,11 @@
 echo "Hello from $(hostname)"
 
 # Set up environment and package
-conda activate biomechpose
+conda activate poseforge
 
 # Define paths
-project_root="/home/sibwang/biomechpose"
-inference_script_path="src/biomechpose/style_transfer/scripts/run_inference.py"
+project_root="/home/$USER/poseforge"
+inference_script_path="src/poseforge/style_transfer/scripts/run_inference.py"
 simulations_basedir="bulk_data/nmf_rendering/"
 output_basedir="bulk_data/style_transfer/production/translated_videos"
 input_video_filename="processed_nmf_sim_render_colorcode_0.mp4"
