@@ -2,19 +2,34 @@
 
 Pose estimation guided by a biomechanical model.
 
+## Installation
+This package used Poetry for package management. First, [install Poetry](https://python-poetry.org/docs/#installation) and optionally create a virtual environment (either through Poetry or through Conda). Then,
+```bash
+git clone git@github.com:NeLy-EPFL/simupose.git
+cd simupose
+poetry install
+```
 
-## Complete pipeline and code structure
-
-> [!IMPORTANT]  
-> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) for Contrastive Unpaired Translation [(Park et al., 2020)](https://taesung.me/ContrastiveUnpairedTranslation/).
-> To install it:
+> [!IMPORTANT]
+> This package requires [Sibo's fork](https://github.com/sibocw/contrastive-unpaired-translation) of [taesungp/contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) for Contrastive Unpaired Translation [(Park et al., 2020)](https://taesung.me/ContrastiveUnpairedTranslation/) and Sibo's [parallel-video-io](https://github.com/sibocw/parallel-video-io) package.
+>
+> These dependencies are already specified from in `pyproject.toml` via Github URLs. When you run the command above, these should be installed automatically. However, if these projects get updates pushed to Github, you might need to run `poetry update contrastive-unpaired-translation` and `poetry update parallel-video-io` manually.
+>
+> Alternatively, you can install the packages above in "edit mode" to gain better control:
 >
 > ```bash
 > git clone https://github.com/sibocw/contrastive-unpaired-translation.git
 > cd contrastive-unpaired-translation
 > pip install -e .
+> cd ..
+> git clone https://github.com/sibocw/parallel-video-io.git
+> cd parallel-video-io
+> pip install -e .
 > ```
+> (Do not try to run `pip install -e package-name` directly without `cd`ing into `package-name`. The current directory matters with `pip install -e`.)
 
+
+## Complete pipeline and code structure
 ### Part I: Simulate motion priors in NeuroMechFly and generate renderings
 1. Run `python src/biomechpose/simulate_nmf/scripts/copy_kinematic_recording.py`
     - This script scans data from Aymanns et al. (2022) from the NeLy lab server (also publicly available on Harvard Dataverse: https://doi.org/10.7910/DVN/QQMNQK), extracts key kinematic data, and saves them as pickle files.
@@ -87,4 +102,17 @@ Pose estimation guided by a biomechanical model.
 > 4. Run `python src/biomechpose/pose_estimation/scripts/visualize_latents.py` to generate videos showing the latent-space trajectories of selected behavior snippets.
 
 ### Part V: Generalized pose estimation
+#### Predicting 3D keypoint positions
+> [!NOTE]
+> The following steps are only for training the model and visualizing its performance on synthetic data. They do not need to be rerun during production.
+>
+> 1. Train 3D keypoint detection model using `python src/biomechpose/pose_estimation/scripts/run_keypoints3d_training.py`.
+>     - This is a CLI (run `python run_keypoints3d_training.py -h` to see usage). However, the `__main__` section of this script also includes a commented-out example of how to run training directly within Python.
+>     - See `scripts_on_cluster/keypoints3d_training/` for script(s) used to train the model on the SCITAS cluster. 
+> 2. Visualize the performance of the model on synthetic data using `src/biomechpose/pose_estimation/scripts/test_keypoints3d_models.py`. Note that you must select a particular model checkpoint file, and it doesn't necessarily have to be final model after the last epoch (observe validation loss to help decide which epoch to use).
+
+3. Run inference on Spotlight data using `python src/biomechpose/pose_estimation/scripts/run_keypoints3d_inference.py`. This script actually runs prediction using the model state at the end of every other epoch. Combined with the next step, this is meant to help select the best checkpoint to use in production.
+4. Optionally, if you wish to visualize the output of the 3D keypoint detection model, run `python src/biomechpose/pose_estimation/scripts/visualize_production_keypoints3d.py`. Use the output to decide which checkpoint to use for production-time inference.
+
+#### Predicting 2D body segmentation map
 TODO
