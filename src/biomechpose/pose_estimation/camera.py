@@ -100,7 +100,7 @@ class CameraToWorldMapper:
             depth: (...,) array of depth values (in mm).
 
         Returns:
-            (..., 3) array of 3D world coordinates (in mm.
+            (..., 3) array of 3D world coordinates (in mm).
         """
         xy_shape = xy.shape
         depth_shape = depth.shape

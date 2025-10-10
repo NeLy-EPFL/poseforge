@@ -863,28 +863,19 @@ def render_frames_parallel(
     frame_indices = list(range(n_frames))
 
     # Determine actual number of workers
-    if n_workers == -2:
-        import multiprocessing
-
-        actual_workers = max(1, multiprocessing.cpu_count() - 1)
-    elif n_workers == -1:
-        import multiprocessing
-
-        actual_workers = multiprocessing.cpu_count()
-    else:
-        actual_workers = max(1, n_workers)
+    n_workers_effective = Parallel(n_jobs=n_workers)._effective_n_jobs()
 
     # Split frames into chunks for each worker
-    chunk_size = max(1, n_frames // actual_workers)
+    chunk_size = max(1, n_frames // n_workers_effective)
     frame_chunks = [
         frame_indices[i : i + chunk_size] for i in range(0, n_frames, chunk_size)
     ]
 
-    logger.info(f"Using {actual_workers} workers to process {n_frames} frames")
+    logger.info(f"Using {n_workers_effective} workers to process {n_frames} frames")
     logger.info(f"Frame chunks: {[len(chunk) for chunk in frame_chunks]}")
 
     # Run parallel processing
-    Parallel(n_jobs=actual_workers, prefer="processes")(
+    Parallel(n_jobs=n_workers_effective, prefer="processes")(
         delayed(render_frame_chunk_worker)(
             frame_chunk,
             frames_dir,
