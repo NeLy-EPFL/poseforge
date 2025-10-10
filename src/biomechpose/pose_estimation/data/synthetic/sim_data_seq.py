@@ -4,9 +4,9 @@ import h5py
 import cv2
 from pathlib import Path
 from typing import Iterator
+from pvio.video_io import get_video_metadata
 
 from biomechpose.util import read_frames_from_video
-from biomechpose.pose_estimation.data import get_video_metadata
 
 
 class SimulatedDataSequence:
