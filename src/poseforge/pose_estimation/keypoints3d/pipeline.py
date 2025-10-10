@@ -11,12 +11,12 @@ from torch.utils.data import DataLoader
 import poseforge.pose_estimation.keypoints3d.config as config
 from poseforge.pose_estimation.data.synthetic import (
     init_atomic_dataset_and_dataloader,
-    concat_atomic_batches,
-    collapse_batch,
+    atomic_batches_to_simple_batch
 )
 from poseforge.pose_estimation.keypoints3d import Pose2p5DModel, Pose2p5DLoss
 from poseforge.util import (
     clear_memory_cache,
+    force_clear_variables,
     check_mixed_precision_status,
     set_random_seed,
 )
@@ -98,19 +98,8 @@ class Pose2p5DPipeline:
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
                 train_loader
             ):
-                # Merge atomic batches into a single batch
-                atomic_batches_frames = atomic_batches_frames.to(
-                    self.device, non_blocking=True
-                )
-                atomic_batches_sim_data = {
-                    key: val.to(self.device, non_blocking=True)
-                    for key, val in atomic_batches_sim_data.items()
-                }
-                frames_concat, sim_data_concat = concat_atomic_batches(
-                    atomic_batches_frames, atomic_batches_sim_data
-                )
-                frames_collapsed, sim_data_collapsed = collapse_batch(
-                    frames_concat, sim_data_concat
+                frames_collapsed, sim_data_collapsed = atomic_batches_to_simple_batch(
+                    atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
 
                 # Run models
@@ -172,11 +161,9 @@ class Pose2p5DPipeline:
                     step_idx % artifacts_config.validation_interval == 0
                     and step_idx > 0
                 ):
-                    del (
+                    force_clear_variables(
                         atomic_batches_frames,
                         atomic_batches_sim_data,
-                        frames_concat,
-                        sim_data_concat,
                         frames_collapsed,
                         sim_data_collapsed,
                         pred_dict,
@@ -256,19 +243,8 @@ class Pose2p5DPipeline:
                 if step_idx >= max_batches:
                     break
 
-                # Merge atomic batches into a single batch
-                atomic_batches_frames = atomic_batches_frames.to(
-                    self.device, non_blocking=True
-                )
-                atomic_batches_sim_data = {
-                    key: val.to(self.device, non_blocking=True)
-                    for key, val in atomic_batches_sim_data.items()
-                }
-                frames_concat, sim_data_concat = concat_atomic_batches(
-                    atomic_batches_frames, atomic_batches_sim_data
-                )
-                frames_collapsed, sim_data_collapsed = collapse_batch(
-                    frames_concat, sim_data_concat
+                frames_collapsed, sim_data_collapsed = atomic_batches_to_simple_batch(
+                    atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
 
                 # Run model
