@@ -15,8 +15,6 @@ from poseforge.pose_estimation.contrast import (
     ContrastivePretrainingModel,
     InfoNCELoss,
 )
-from poseforge.pose_estimation.data.synthetic import init_atomic_dataset_and_dataloader
-from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
 from poseforge.util import set_random_seed, get_hardware_availability
 
 
@@ -50,28 +48,6 @@ def pretrain_contrastive_model(
     optimizer_config.save(configs_dir / "optimizer_config.yaml")
     training_artifacts_config.save(configs_dir / "artifacts_config.yaml")
 
-    # Initialize datasets and dataloaders
-    train_ds, train_loader = init_atomic_dataset_and_dataloader(
-        data_dirs=training_data_config.train_data_dirs,
-        atomic_batch_n_samples=training_data_config.atomic_batch_n_samples,
-        atomic_batch_n_variants=training_data_config.atomic_batch_n_variants,
-        input_image_size=training_data_config.image_size,
-        batch_size=training_data_config.train_batch_size,
-        n_workers=training_data_config.n_workers,
-        n_channels=3,
-        prefetch_factor=2,
-    )
-    val_ds, val_loader = init_atomic_dataset_and_dataloader(
-        data_dirs=training_data_config.val_data_dirs,
-        atomic_batch_n_samples=training_data_config.atomic_batch_n_samples,
-        atomic_batch_n_variants=training_data_config.atomic_batch_n_variants,
-        input_image_size=training_data_config.image_size,
-        batch_size=training_data_config.val_batch_size,
-        n_workers=training_data_config.n_workers,
-        n_channels=3,
-        prefetch_factor=2,
-    )
-
     # Initialize models
     model = ContrastivePretrainingModel.create_architecture_from_config(
         architecture_config=model_architecture_config
@@ -96,34 +72,23 @@ def pretrain_contrastive_model(
     )
 
     # Train models
-    adam_optimizer_kwargs = {
-        "lr": optimizer_config.adam_lr,
-        "weight_decay": optimizer_config.adam_weight_decay,
-    }
-    log_dir = Path(training_artifacts_config.output_basedir) / "logs"
-    checkpoint_dir = Path(training_artifacts_config.output_basedir) / "checkpoints"
     pipeline.train(
-        training_data_loader=train_loader,
-        validation_data_loader=val_loader,
-        num_epochs=n_epochs,
-        adam_kwargs=adam_optimizer_kwargs,
-        log_dir=log_dir,
-        log_interval=training_artifacts_config.logging_interval,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_interval=training_artifacts_config.checkpoint_interval,
-        validation_interval=training_artifacts_config.validation_interval,
-        nbatches_per_validation=training_artifacts_config.n_batches_per_validation,
+        n_epochs=n_epochs,
+        data_config=training_data_config,
+        optimizer_config=optimizer_config,
+        artifacts_config=training_artifacts_config,
+        seed=seed,
     )
 
 
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(
-        pretrain_contrastive_model,
-        prog=f"python {Path(__file__).name}",
-        description="Pretrain a ResNet feature extractor using a contrastive loss on synthetic videos.",
-    )
+    # tyro.cli(
+    #     pretrain_contrastive_model,
+    #     prog=f"python {Path(__file__).name}",
+    #     description="Pretrain a ResNet feature extractor using a contrastive loss on synthetic videos.",
+    # )
 
     # Example CLI command to run this script:
     # python -u src/poseforge/pose_estimation/contrast/scripts/run_contrastive_pretraining.py \
@@ -172,45 +137,45 @@ if __name__ == "__main__":
     #     --training-artifacts-config.n-batches-per-validation 30
 
     # Example usage by calling the function directly (no CLI)
-    # model_architecture_config = config.ModelArchitectureConfig(
-    #     projection_head_hidden_dim=512, projection_head_output_dim=256
-    # )
-    # model_weights_config = config.ModelWeightsConfig(
-    #     feature_extractor_weights="IMAGENET1K_V1"
-    # )
-    # loss_config = config.LossConfig(info_nce_temperature=0.1)
-    # data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
-    # train_data_dirs = [
-    #     data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
-    #     for fly in range(1, 5)  # flies 1-4
-    #     for trial in range(1, 6)  # trials 1-5
-    # ]
-    # val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
-    # training_data_config = config.TrainingDataConfig(
-    #     train_data_dirs=[str(path) for path in train_data_dirs],
-    #     val_data_dirs=[str(path) for path in val_data_dirs],
-    #     atomic_batch_n_samples=32,
-    #     atomic_batch_n_variants=4,
-    #     train_batch_size=96,  # batch_size 96 -> ~8.25 GB GPU memory with n_variants=4
-    #     val_batch_size=96,
-    #     image_size=(256, 256),
-    #     n_workers=8,
-    # )
-    # optimizer_config = config.OptimizerConfig(adam_lr=3e-4, adam_weight_decay=1e-4)
-    # training_artifacts_config = config.TrainingArtifactsConfig(
-    #     output_basedir="bulk_data/pose_estimation/contrastive_pretraining/trial0",
-    #     logging_interval=10,
-    #     checkpoint_interval=50,
-    #     validation_interval=50,
-    #     n_batches_per_validation=30,
-    # )
-    # pretrain_contrastive_model(
-    #     n_epochs=10,
-    #     model_architecture_config=model_architecture_config,
-    #     model_weights_config=model_weights_config,
-    #     loss_config=loss_config,
-    #     training_data_config=training_data_config,
-    #     optimizer_config=optimizer_config,
-    #     training_artifacts_config=training_artifacts_config,
-    #     seed=42,
-    # )
+    model_architecture_config = config.ModelArchitectureConfig(
+        projection_head_hidden_dim=512, projection_head_output_dim=256
+    )
+    model_weights_config = config.ModelWeightsConfig(
+        feature_extractor_weights="IMAGENET1K_V1"
+    )
+    loss_config = config.LossConfig(info_nce_temperature=0.1)
+    data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
+    train_data_dirs = [
+        data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+        for fly in range(1, 5)  # flies 1-4
+        for trial in range(1, 6)  # trials 1-5
+    ]
+    val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
+    training_data_config = config.TrainingDataConfig(
+        train_data_dirs=[str(path) for path in train_data_dirs],
+        val_data_dirs=[str(path) for path in val_data_dirs],
+        atomic_batch_n_samples=32,
+        atomic_batch_n_variants=4,
+        train_batch_size=96,  # batch_size 96 -> ~8.25 GB GPU memory with n_variants=4
+        val_batch_size=96,
+        image_size=(256, 256),
+        n_workers=8,
+    )
+    optimizer_config = config.OptimizerConfig(adam_lr=3e-4, adam_weight_decay=1e-4)
+    training_artifacts_config = config.TrainingArtifactsConfig(
+        output_basedir="bulk_data/pose_estimation/contrastive_pretraining/trial0",
+        logging_interval=10,
+        checkpoint_interval=50,
+        validation_interval=50,
+        n_batches_per_validation=30,
+    )
+    pretrain_contrastive_model(
+        n_epochs=10,
+        model_architecture_config=model_architecture_config,
+        model_weights_config=model_weights_config,
+        loss_config=loss_config,
+        training_data_config=training_data_config,
+        optimizer_config=optimizer_config,
+        training_artifacts_config=training_artifacts_config,
+        seed=42,
+    )
