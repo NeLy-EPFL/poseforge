@@ -8,8 +8,9 @@ logging.basicConfig(
 import torch
 from dataclasses import dataclass
 from pathlib import Path
+from torchsummary import summary
 
-from poseforge.pose_estimation.data import init_atomic_dataset_and_dataloader
+from poseforge.pose_estimation.data.synthetic import init_atomic_dataset_and_dataloader
 from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
 from poseforge.pose_estimation.contrast import (
     ContrastivePretrainingPipeline,
@@ -113,18 +114,18 @@ def pretrain_contrastive_model(
     # Initialize datasets and dataloaders
     train_ds, train_loader = init_atomic_dataset_and_dataloader(
         data_dirs=data.train_data_dirs,
-        atomic_batch_nsamples=sampling.atomic_batch_nsamples,
-        atomic_batch_nvariants=sampling.atomic_batch_nvariants,
-        image_size=data.image_size,
+        atomic_batch_n_samples=sampling.atomic_batch_nsamples,
+        atomic_batch_n_variants=sampling.atomic_batch_nvariants,
+        input_image_size=data.image_size,
         batch_size=sampling.train_batch_size,
         num_workers=sampling.num_workers,
         num_channels=3,
     )
     val_ds, val_loader = init_atomic_dataset_and_dataloader(
         data_dirs=data.val_data_dirs,
-        atomic_batch_nsamples=sampling.atomic_batch_nsamples,
-        atomic_batch_nvariants=sampling.atomic_batch_nvariants,
-        image_size=data.image_size,
+        atomic_batch_n_samples=sampling.atomic_batch_nsamples,
+        atomic_batch_n_variants=sampling.atomic_batch_nvariants,
+        input_image_size=data.image_size,
         batch_size=sampling.val_batch_size,
         num_workers=sampling.num_workers,
         num_channels=3,
@@ -146,6 +147,11 @@ def pretrain_contrastive_model(
         output_dim=model.projection_head_output_dim,
     )
     logging.info("Created projection head")
+    
+    print("========== Feature Extractor Summary ==========")
+    summary(feature_extractor.cuda(), (3, *data.image_size))
+    print("=========== Projection Head Summary ===========")
+    summary(projection_head.cuda(), (projection_head_input_dim,))
 
     # Initialize contrastive learning pipeline
     pipeline = ContrastivePretrainingPipeline(
@@ -179,11 +185,11 @@ def pretrain_contrastive_model(
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(
-        pretrain_contrastive_model,
-        prog=f"python {Path(__file__).name}",
-        description="Pretrain a ResNet feature extractor using a contrastive loss on synthetic videos.",
-    )
+    # tyro.cli(
+    #     pretrain_contrastive_model,
+    #     prog=f"python {Path(__file__).name}",
+    #     description="Pretrain a ResNet feature extractor using a contrastive loss on synthetic videos.",
+    # )
 
     # Example CLI command to run this script:
     # python -u src/poseforge/pose_estimation/scripts/run_contrastive_pretraining.py \
@@ -232,48 +238,48 @@ if __name__ == "__main__":
     #     --output.nbatches-per-validation 300
 
     # Example usage by calling the function directly (no CLI)
-    # sampling_config = SamplingConfig(
-    #     atomic_batch_nsamples=32,
-    #     atomic_batch_nvariants=4,
-    #     train_batch_size=96,  # batch_size 96 -> ~8.25 GB GPU memory with n_variants=4
-    #     val_batch_size=96,
-    #     num_workers=4,
-    # )
-    # model_config = ModelConfig(
-    #     use_pretrained_backbone=True,
-    #     projection_head_hidden_dim=512,
-    #     projection_head_output_dim=256,
-    # )
-    # data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
-    # train_data_dirs = [
-    #     data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
-    #     for fly in range(1, 5)  # flies 1-4
-    #     for trial in range(1, 6)  # trials 1-5
-    # ]
-    # val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
-    # data_config = DataConfig(
-    #     train_data_dirs=[str(path) for path in train_data_dirs],
-    #     val_data_dirs=[str(path) for path in val_data_dirs],
-    #     image_size=(256, 256),
-    #     num_channels=3,
-    # )
-    # training_config = TrainingConfig(
-    #     num_epochs=10,
-    #     seed=42,
-    #     adam_lr=3e-4,
-    #     adam_weight_decay=1e-4,
-    # )
-    # output_config = OutputConfig(
-    #     output_basedir="bulk_data/pose_estimation/contrastive_pretraining/trial0",
-    #     logging_interval=10,
-    #     checkpoint_interval=50,
-    #     validation_interval=50,
-    #     nbatches_per_validation=30,
-    # )
-    # pretrain_contrastive_model(
-    #     sampling=sampling_config,
-    #     model=model_config,
-    #     data=data_config,
-    #     training=training_config,
-    #     output=output_config,
-    # )
+    sampling_config = SamplingConfig(
+        atomic_batch_nsamples=32,
+        atomic_batch_nvariants=4,
+        train_batch_size=96,  # batch_size 96 -> ~8.25 GB GPU memory with n_variants=4
+        val_batch_size=96,
+        num_workers=4,
+    )
+    model_config = ModelConfig(
+        use_pretrained_backbone=True,
+        projection_head_hidden_dim=512,
+        projection_head_output_dim=256,
+    )
+    data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
+    train_data_dirs = [
+        data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+        for fly in range(1, 5)  # flies 1-4
+        for trial in range(1, 6)  # trials 1-5
+    ]
+    val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
+    data_config = DataConfig(
+        train_data_dirs=[str(path) for path in train_data_dirs],
+        val_data_dirs=[str(path) for path in val_data_dirs],
+        image_size=(256, 256),
+        num_channels=3,
+    )
+    training_config = TrainingConfig(
+        num_epochs=10,
+        seed=42,
+        adam_lr=3e-4,
+        adam_weight_decay=1e-4,
+    )
+    output_config = OutputConfig(
+        output_basedir="bulk_data/pose_estimation/contrastive_pretraining/trial0",
+        logging_interval=10,
+        checkpoint_interval=50,
+        validation_interval=50,
+        nbatches_per_validation=30,
+    )
+    pretrain_contrastive_model(
+        sampling=sampling_config,
+        model=model_config,
+        data=data_config,
+        training=training_config,
+        output=output_config,
+    )

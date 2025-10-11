@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from collections import OrderedDict
 from pathlib import Path
 from torchvision import models
 from torchvision.models import ResNet18_Weights

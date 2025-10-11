@@ -10,7 +10,10 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
 from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
-from poseforge.pose_estimation.data import concat_atomic_batches, collapse_batch
+from poseforge.pose_estimation.data.synthetic import (
+    concat_atomic_batches,
+    collapse_batch,
+)
 from poseforge.pose_estimation.contrast.model import (
     ContrastiveProjectionHead,
     info_nce_loss,
