@@ -13,6 +13,8 @@
 echo "Hello from $(hostname)"
 
 # Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
 conda activate poseforge
 
 # Define paths
