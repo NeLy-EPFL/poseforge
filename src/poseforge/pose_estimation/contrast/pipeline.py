@@ -360,7 +360,6 @@ class ContrastivePretrainingPipeline:
             batch_size=data_config.train_batch_size,
             n_workers=data_config.n_workers,
             n_channels=3,
-            prefetch_factor=2,
         )
 
     @staticmethod
@@ -373,7 +372,6 @@ class ContrastivePretrainingPipeline:
             batch_size=data_config.val_batch_size,
             n_workers=data_config.n_workers,
             n_channels=3,
-            prefetch_factor=2,
         )
 
     def _check_amp_status_for_model_params(
