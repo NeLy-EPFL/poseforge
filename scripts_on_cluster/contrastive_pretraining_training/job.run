@@ -13,6 +13,7 @@
 
 echo "Hello from $(hostname)"
 
+. spack/share/spack/setup-env.sh
 spack load ffmpeg
 conda activate poseforge
 
@@ -56,7 +57,7 @@ python -u src/poseforge/pose_estimation/contrast/scripts/run_contrastive_pretrai
     --training-data-config.train-batch-size 960 \
     --training-data-config.val-batch-size 256 \
     --training-data-config.image-size 256 256 \
-    --training-data-config.n-workers 12 \
+    --training-data-config.n-workers 4 \
     --optimizer-config.adam-lr 3e-4 \
     --optimizer-config.adam-weight-decay 1e-4 \
     --training-artifacts-config.output-basedir \
