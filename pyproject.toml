@@ -13,7 +13,7 @@ dependencies = [
     "pandas>=2.3,<3",
     "jupyter>=1.1,<2",
     "matplotlib>=3.10,<4",
-    "torch>=2.7,<3",
+    "torch==2.8",  # torch 2.8 specifically works with torchcodec 0.7; hardcoding version for both
     "torchvision==0.23.0",
     "tensorboard>=2.19,<3",
     "pillow>=11.3,<12",
@@ -36,7 +36,7 @@ dependencies = [
     "scikit-learn>=1.7.2,<2",
     "PyYAML>=6.0.3,<7",
     "cmasher>=1.3.3,<2",
-    "torchcodec==0.7.0",
+    "torchcodec==0.7",  # torch 2.8 specifically works with torchcodec 0.7; hardcoding version for both
     "torchsummary>=1.5.1,<2",
     "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
     "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",

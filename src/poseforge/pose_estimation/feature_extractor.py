@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from collections import OrderedDict
 from pathlib import Path
 from torchvision import models
 from torchvision.models import ResNet18_Weights
@@ -46,26 +45,6 @@ class ResNetFeatureExtractor(nn.Module):
 
         # Initialize ResNet-18 backbone
         self.resnet = models.resnet18(weights=backbone_weights)
-
-        # Remove the final classification head (avgpool + fc)
-        # ResNet architecture:
-        #     conv1 -> bn1 -> relu -> maxpool
-        #           -> layer1 -> layer2 -> layer3 -> layer4
-        #           -> avgpool -> fc
-        # Remove the avgpool and fc; keep everything up to the last conv layer
-        model_elements = OrderedDict(
-            [
-                ("conv1", self.resnet.conv1),
-                ("bn1", self.resnet.bn1),
-                ("relu", self.resnet.relu),
-                ("maxpool", self.resnet.maxpool),
-                ("layer1", self.resnet.layer1),
-                ("layer2", self.resnet.layer2),
-                ("layer3", self.resnet.layer3),
-                ("layer4", self.resnet.layer4),
-            ]
-        )
-        self.resnet_feature_extractor = nn.Sequential(model_elements)
 
         # Find out the output size of the ResNet feature extractor
         self.output_channels = 512  # ResNet-18 layer4 output channels
@@ -137,6 +116,12 @@ class ResNetFeatureExtractor(nn.Module):
         """
         x_norm = self._apply_imagenet_normalization(x)
 
+        # Remove the final classification head (avgpool + fc)
+        # ResNet architecture:
+        #     conv1 -> bn1 -> relu -> maxpool
+        #           -> layer1 -> layer2 -> layer3 -> layer4
+        #           -> avgpool -> fc
+        # Discard the avgpool and fc; keep everything up to the last conv layer
         conv1_out = self.resnet.conv1(x_norm)
         bn1_out = self.resnet.bn1(conv1_out)
         x0 = self.resnet.relu(bn1_out)

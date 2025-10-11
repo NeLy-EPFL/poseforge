@@ -369,10 +369,11 @@ def init_atomic_dataset_and_dataloader(
     load_keypoint_positions: bool = False,
     load_body_segment_maps: bool = False,
     shuffle: bool = False,
-    num_workers: int | None = None,
-    num_channels: int = 3,
+    n_workers: int | None = None,
+    n_channels: int = 3,
     pin_memory: bool = True,
     drop_last: bool = True,
+    prefetch_factor: int | None = None,
 ):
     """
     Initializes an AtomicBatchDataset and a corresponding DataLoader for
@@ -396,13 +397,15 @@ def init_atomic_dataset_and_dataloader(
             segment maps. Defaults to False.
         shuffle (bool, optional): Whether to shuffle the data. Defaults to
             False.
-        num_workers (int | None, optional): Number of worker threads for
+        n_workers (int | None, optional): Number of worker threads for
             data loading. If None, uses available CPU cores.
-        num_channels (int, optional): Number of image channels. Default 3.
+        n_channels (int, optional): Number of image channels. Default 3.
         pin_memory (bool, optional): Whether to use pinned memory in
             DataLoader. Defaults to True.
         drop_last (bool, optional): Whether to drop the last incomplete
             batch. Defaults to True.
+        prefetch_factor (int | None, optional): Number of samples to load
+            in advance by each worker. If None, uses PyTorch default.
 
     Returns:
         dataset (AtomicBatchDataset):
@@ -415,7 +418,7 @@ def init_atomic_dataset_and_dataloader(
         data_dirs=[Path(path) for path in data_dirs],
         n_variants=atomic_batch_n_variants,
         image_size=input_image_size,
-        n_channels=num_channels,
+        n_channels=n_channels,
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,
         load_body_segment_maps=load_body_segment_maps,
@@ -429,18 +432,19 @@ def init_atomic_dataset_and_dataloader(
         )
 
     # Create parallel dataloaders
-    num_workers = num_workers
-    if num_workers is None:
+    n_workers = n_workers
+    if n_workers is None:
         hardware_avail = get_hardware_availability()
-        num_workers = hardware_avail["num_cpu_cores_available"]
-        logging.info(f"Using {num_workers} data loading workers")
+        n_workers = hardware_avail["num_cpu_cores_available"]
+        logging.info(f"Using {n_workers} data loading workers")
     dataloader = DataLoader(
         dataset,
         batch_size=n_atomic_batches_per_batch,
         shuffle=shuffle,
-        num_workers=num_workers,
+        num_workers=n_workers,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        prefetch_factor=prefetch_factor,
     )
 
     return dataset, dataloader

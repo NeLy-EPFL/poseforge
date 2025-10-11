@@ -310,7 +310,7 @@ class Pose2p5DPipeline:
             load_keypoint_positions=True,
             load_body_segment_maps=False,
             shuffle=True,
-            num_workers=data_config.num_workers,
+            n_workers=data_config.num_workers,
             num_channels=3,
             pin_memory=True,
             drop_last=True,
@@ -328,7 +328,7 @@ class Pose2p5DPipeline:
             load_keypoint_positions=True,
             load_body_segment_maps=False,
             shuffle=False,
-            num_workers=data_config.num_workers,
+            n_workers=data_config.num_workers,
             num_channels=3,
             pin_memory=True,
             drop_last=True,
@@ -398,7 +398,7 @@ class Pose2p5DPipeline:
     def _check_amp_status_during_training(
         self,
         pred_dict: dict[str, torch.Tensor],
-        grad_scaler: torch.amp.GradScaler,
+        amp_scaler: torch.amp.GradScaler,
         subtitle: str = "Variables during training",
     ):
         return check_mixed_precision_status(
@@ -413,12 +413,12 @@ class Pose2p5DPipeline:
                 "pred_conf_xy": pred_dict["conf_xy"],
                 "pred_conf_depth": pred_dict["conf_depth"],
             },
-            grad_scaler=grad_scaler,
+            grad_scaler=amp_scaler,
             subtitle=subtitle,
         )
 
     def _check_amp_status_for_model_params(
-        self, grad_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
+        self, amp_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
     ):
         return check_mixed_precision_status(
             self.use_float16,
@@ -430,6 +430,6 @@ class Pose2p5DPipeline:
                 "xy_heatmap_head_params": self.model.heatmap_head.parameters(),
                 "depth_head_params": self.model.depth_head.parameters(),
             },
-            grad_scaler=grad_scaler,
+            grad_scaler=amp_scaler,
             subtitle=subtitle,
         )
