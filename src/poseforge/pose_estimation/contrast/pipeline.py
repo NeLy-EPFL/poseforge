@@ -29,12 +29,12 @@ class ContrastivePretrainingPipeline:
     def __init__(
         self,
         contrastive_pretraining_model: ContrastivePretrainingModel,
-        info_nce_loss_func: InfoNCELoss,
+        info_nce_loss_func: InfoNCELoss | None = None,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
         self.model = contrastive_pretraining_model.to(device)
-        self.loss_func = info_nce_loss_func.to(device)
+        self.loss_func = info_nce_loss_func.to(device) if info_nce_loss_func else None
         self.device = device
         if torch.cuda.is_available() and "cuda" in str(self.device):
             self.device_type = "cuda"
@@ -272,6 +272,10 @@ class ContrastivePretrainingPipeline:
         Returns:
             Average validation loss
         """
+        # Check if loss function is provided
+        if self.loss_func is None:
+            raise ValueError("Loss function must be provided for training")
+        
         # Set models to evaluation mode
         self.model.eval()
 
