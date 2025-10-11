@@ -138,7 +138,7 @@ class OutputBuffer:
 
     @property
     def n_open_buckets(self) -> int:
-        return len(self.expected_buckets_and_sizes)
+        return len(self.buffers)
 
     @property
     def n_data_total(self) -> int:

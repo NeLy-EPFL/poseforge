@@ -30,7 +30,7 @@ from poseforge.util import (
 class BodySegmentationPipeline:
     # In the future, these can be written as metadata to atomic batch files
     # fmt: off
-    label_keys = [
+    class_labels = [
         "Background", "OtherSegments", "Thorax", "LFCoxa", "LFFemur",
         "LFTibia", "LFTarsus", "LMCoxa", "LMFemur", "LMTibia", "LMTarsus",
         "LHCoxa", "LHFemur", "LHTibia", "LHTarsus", "RFCoxa", "RFFemur",
