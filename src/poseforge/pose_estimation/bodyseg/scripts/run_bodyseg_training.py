@@ -18,7 +18,7 @@ from poseforge.pose_estimation.bodyseg import (
 from poseforge.util import get_hardware_availability
 
 
-def _setup_model(
+def setup_model(
     architecture_config: config.ModelArchitectureConfig,
     weights_config: config.ModelWeightsConfig | None,
 ) -> BodySegmentationModel:
@@ -32,13 +32,13 @@ def _setup_model(
     return model
 
 
-def _setup_loss_func(loss_config: config.LossConfig) -> CombinedDiceCELoss:
+def setup_loss_func(loss_config: config.LossConfig) -> CombinedDiceCELoss:
     loss_func = CombinedDiceCELoss.create_from_config(loss_config)
     logging.info("Set up combined loss function")
     return loss_func
 
 
-def _save_configs(
+def save_configs(
     configs_dir: Path,
     *,
     model_architecture_config: config.ModelArchitectureConfig,
@@ -67,6 +67,7 @@ def train_bodyseg_model(
     optimizer_config: config.OptimizerConfig,
     training_artifacts_config: config.TrainingArtifactsConfig,
     seed: int = 42,
+    half_batch_size_for_debugging: bool = False,
 ) -> None:
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
@@ -75,7 +76,7 @@ def train_bodyseg_model(
     torch.backends.cudnn.benchmark = True
 
     # Save configs
-    _save_configs(
+    save_configs(
         Path(training_artifacts_config.output_basedir) / "configs",
         model_architecture_config=model_architecture_config,
         model_weights_config=model_weights_config,
@@ -86,13 +87,15 @@ def train_bodyseg_model(
     )
 
     # Initialize model and loss function
-    pose_model = _setup_model(model_architecture_config, model_weights_config)
-    summary(pose_model.cuda(), (3, *training_data_config.input_image_size))
-    criterion = _setup_loss_func(loss_config)
+    model = setup_model(model_architecture_config, model_weights_config)
+    criterion = setup_loss_func(loss_config)
+
+    # Print model summary
+    print_model_summary(training_data_config, model)
 
     # Initialize learning pipeline
     pipeline = BodySegmentationPipeline(
-        model=pose_model, loss_func=criterion, device="cuda", use_float16=True
+        model=model, loss_func=criterion, device="cuda", use_float16=True
     )
 
     # Train the model
@@ -102,9 +105,17 @@ def train_bodyseg_model(
         optimizer_config=optimizer_config,
         artifacts_config=training_artifacts_config,
         seed=seed,
+        half_batch_size_for_debugging=half_batch_size_for_debugging,
     )
 
     logging.info("Training complete")
+
+def print_model_summary(training_data_config, model):
+    down_in_dim = (3, *training_data_config.input_image_size)
+    print("============== Full Model Summary ===============")
+    summary(model, down_in_dim, device="cpu")
+    print("=========== Feature Extractor Summary ===========")
+    summary(model.feature_extractor, down_in_dim, device="cpu")
 
 
 if __name__ == "__main__":
@@ -119,7 +130,7 @@ if __name__ == "__main__":
     # Example using native Python function calls:
     model_architecture_config = config.ModelArchitectureConfig()
     model_weights_config = config.ModelWeightsConfig(
-        feature_extractor_weights="bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/checkpoints/checkpoint_epoch009_step003000.feature_extractor.pth",
+        feature_extractor_weights="bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch001_step002000.feature_extractor.pth",
         model_weights=None,
     )
     loss_config = config.LossConfig()
@@ -138,15 +149,15 @@ if __name__ == "__main__":
         atomic_batch_n_variants=4,
         train_batch_size=32,
         val_batch_size=32,
-        num_workers=8,
+        n_workers=8,
     )
     optimizer_config = config.OptimizerConfig()
     training_artifacts_config = config.TrainingArtifactsConfig(
-        output_basedir="bulk_data/pose_estimation/bodyseg/trial_20251011a/",
+        output_basedir="bulk_data/pose_estimation/bodyseg/trial_20251011b/",
         logging_interval=10,  # 1000
         checkpoint_interval=100,  # 1000
         validation_interval=100,  # 1000
-        n_batches_per_validation=300,
+        n_batches_per_validation=100,  # 300
     )
     train_bodyseg_model(
         n_epochs=10,
@@ -157,4 +168,5 @@ if __name__ == "__main__":
         optimizer_config=optimizer_config,
         training_artifacts_config=training_artifacts_config,
         seed=42,
+        half_batch_size_for_debugging=True,
     )

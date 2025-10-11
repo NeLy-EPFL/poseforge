@@ -57,7 +57,7 @@ class TrainingDataConfig(SerializableDataClass):
     # a multiple of `atomic_batch_n_samples` in `AtomicBatchDataset`
     val_batch_size: int
     # Number of workers for data loading. Use number of CPU cores if None.
-    num_workers: int | None = None
+    n_workers: int | None = None
 
 
 @dataclass(frozen=True)

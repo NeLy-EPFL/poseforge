@@ -54,6 +54,15 @@ class BodySegmentationPipeline:
         else:
             self.device_type = "cpu"
         self.use_float16 = use_float16
+        
+    def _get_half_batch(self, frames_batch, sim_data_batch):
+        """Return half of the batch to save memory (for debugging only)."""
+        half_batch_size = frames_batch.shape[0] // 2
+        frames_batch = frames_batch[:half_batch_size, ...]
+        sim_data_batch = {
+            k: v[:half_batch_size, ...] for k, v in sim_data_batch.items()
+        }
+        return frames_batch, sim_data_batch
 
     def train(
         self,
@@ -62,9 +71,18 @@ class BodySegmentationPipeline:
         optimizer_config: config.OptimizerConfig,
         artifacts_config: config.TrainingArtifactsConfig,
         seed: int = 42,
+        half_batch_size_for_debugging: bool = False,
     ):
         # Set seed for reproducibility
         set_random_seed(seed)
+
+        # If half_batch_size_for_debugging, cut batch sizes in half to save memory
+        self.half_batch_size_for_debugging = half_batch_size_for_debugging
+        if self.half_batch_size_for_debugging:
+            logging.warning(
+                "Debug mode: using half batch sizes for training and validation in "
+                "order to fit the model in memory for a GeForce RTX 3080 Ti."
+            )
 
         # Set up training and validation data
         train_ds, train_loader = self._init_training_dataset_and_dataloader(data_config)
@@ -110,6 +128,8 @@ class BodySegmentationPipeline:
                 frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
+                if self.half_batch_size_for_debugging:
+                    frames, sim_data = self._get_half_batch(frames, sim_data)
                 target_indices = sim_data["body_seg_maps"].long()  # (batch_size, H, W)
                 if target_indices.shape[1:] != frames.shape[2:]:
                     raise ValueError(
@@ -239,6 +259,8 @@ class BodySegmentationPipeline:
                 frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
+                if self.half_batch_size_for_debugging:
+                    frames, sim_data = self._get_half_batch(frames, sim_data)
                 target_indices = sim_data["body_seg_maps"].long()  # (batch_size, H, W)
                 if target_indices.shape[1:] != frames.shape[2:]:
                     raise ValueError(
@@ -290,8 +312,8 @@ class BodySegmentationPipeline:
             load_keypoint_positions=False,
             load_body_segment_maps=True,
             shuffle=True,
-            num_workers=data_config.num_workers,
-            num_channels=3,
+            n_workers=data_config.n_workers,
+            n_channels=3,
             pin_memory=True,
             drop_last=True,
         )
@@ -309,8 +331,8 @@ class BodySegmentationPipeline:
             load_keypoint_positions=False,
             load_body_segment_maps=True,
             shuffle=False,
-            num_workers=data_config.num_workers,
-            num_channels=3,
+            n_workers=data_config.n_workers,
+            n_channels=3,
             pin_memory=True,
             drop_last=True,
         )
@@ -443,7 +465,7 @@ class BodySegmentationPipeline:
         logging.info(log_str)
         writer.add_scalar("train/sys/throughput", throughput, global_step_idx)
 
-    def update_logs_validation(
+    def _update_logs_validation(
         self,
         writer: SummaryWriter,
         *,
