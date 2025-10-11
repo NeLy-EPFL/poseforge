@@ -47,32 +47,8 @@ class ResNetFeatureExtractor(nn.Module):
         # Initialize ResNet-18 backbone
         self.resnet = models.resnet18(weights=backbone_weights)
 
-        # Remove the final classification head (avgpool + fc)
-        # ResNet architecture:
-        #     conv1 -> bn1 -> relu -> maxpool
-        #           -> layer1 -> layer2 -> layer3 -> layer4
-        #           -> avgpool -> fc
-        # Remove the avgpool and fc; keep everything up to the last conv layer
-        model_elements = OrderedDict(
-            [
-                ("conv1", self.resnet.conv1),
-                ("bn1", self.resnet.bn1),
-                ("relu", self.resnet.relu),
-                ("maxpool", self.resnet.maxpool),
-                ("layer1", self.resnet.layer1),
-                ("layer2", self.resnet.layer2),
-                ("layer3", self.resnet.layer3),
-                ("layer4", self.resnet.layer4),
-            ]
-        )
-        self.resnet_feature_extractor = nn.Sequential(model_elements)
-
         # Find out the output size of the ResNet feature extractor
         self.output_channels = 512  # ResNet-18 layer4 output channels
-        # These need to be determined based on input data size. Call
-        # `data_dependent_init(x)` with a sample input to set them.
-        self.output_feature_map_size = (None, None)
-        self.output_dim = None
 
         # Load weights for this very nn.Module if provided
         if my_module_weights is not None:
@@ -110,39 +86,53 @@ class ResNetFeatureExtractor(nn.Module):
         x_normalized = (x - mean) / std
         return x_normalized
 
-    def forward(self, x):
+    def forward(self, x, return_intermediates: bool = False):
         """
         Args:
             x (torch.Tensor): Input image tensor of shape (batch_size, 3,
                 height, width), with pixel values in [0, 1].
+            return_intermediates (bool): Whether to return intermediate
+                feature maps from various layers. Default False.
 
         Returns:
-            features (torch.Tensor): Extracted features. The shape is
-                (batch_size, out_channels, *self.output_feature_map_size)
-                where self.output_feature_map_size depends on the input
-                image size.
+            If return_intermediates is False:
+                features (torch.Tensor): Extracted features. The shape is
+                    (batch_size, out_channels, *output_feature_map_size)
+                    where output_feature_map_size depends on the input
+                    image size.
+            If return_intermediates is True:
+                A tuple of 5 torch.Tensors:
+                - Features after initial Conv-BN-ReLU but before maxpool:
+                      tensor of shape (batch_size, 64, 128, 128)
+                - Features after layer1:
+                      tensor of shape (batch_size, 64, 64, 64)
+                - Features after layer2:
+                      tensor of shape (batch_size, 128, 32, 32)
+                - Features after layer3:
+                      tensor of shape (batch_size, 256, 16, 16)
+                - Features after layer4:
+                      tensor of shape (batch_size, 512, 8, 8)
+                      This is the same as the single output returned if
+                      return_intermediates is False.
         """
         x_norm = self._apply_imagenet_normalization(x)
-        return self.resnet_feature_extractor(x_norm)
 
-    def data_dependent_init(self, x: torch.Tensor):
-        """Initialize data-dependent parameters based on a sample input.
-        Specifically, determine the feature map size in the last layer
-        right before global adaptive pooling. When `global_pool` is False,
-        this is useful to determine the spatial dimensions of the output.
+        # Remove the final classification head (avgpool + fc)
+        # ResNet architecture:
+        #     conv1 -> bn1 -> relu -> maxpool
+        #           -> layer1 -> layer2 -> layer3 -> layer4
+        #           -> avgpool -> fc
+        # Discard the avgpool and fc; keep everything up to the last conv layer
+        conv1_out = self.resnet.conv1(x_norm)
+        bn1_out = self.resnet.bn1(conv1_out)
+        x0 = self.resnet.relu(bn1_out)
+        x0_maxpool_out = self.resnet.maxpool(x0)
+        x1 = self.resnet.layer1(x0_maxpool_out)
+        x2 = self.resnet.layer2(x1)
+        x3 = self.resnet.layer3(x2)
+        x4 = self.resnet.layer4(x3)
 
-        This method only needs to be called once and only if `global_pool`
-        is False.
-
-        Args:
-            x (torch.Tensor): Input image tensor of shape (batch_size, 3,
-                height, width), with pixel values in [0, 1].
-        """
-        with torch.no_grad():
-            _, _, n_rows_in, n_cols_in = x.shape
-            dummy_batch_size = 1
-            dummy_input = torch.zeros((dummy_batch_size, 3, n_rows_in, n_cols_in))
-            feature_map = self.resnet_feature_extractor(dummy_input)
-            _, _, n_rows_out, n_cols_out = feature_map.shape
-        self.output_feature_map_size = (n_rows_out, n_cols_out)
-        self.output_dim = self.output_channels * n_rows_out * n_cols_out
+        if return_intermediates:
+            return x0, x1, x2, x3, x4
+        else:
+            return x4
