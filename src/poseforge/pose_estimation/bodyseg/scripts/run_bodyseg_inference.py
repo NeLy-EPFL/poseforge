@@ -39,7 +39,7 @@ def test_bodyseg_model(
     torch.backends.cudnn.benchmark = True
 
     # Find all trials to process
-    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))[:2]
+    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
     print(f"Found {len(list(input_trials))} trials to process")
 
     # Create dataset and dataloader
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251011a")
     training_stages = [model_dir / "checkpoints/epoch0_step3900.model.pth"]
-    output_basedir = model_dir / "inferencex"
+    output_basedir = model_dir / "inference"
     output_basedir.mkdir(parents=True, exist_ok=True)
     batch_size = 192
     n_workers = 16
