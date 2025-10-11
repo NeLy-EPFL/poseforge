@@ -116,8 +116,8 @@ class BodySegmentationPipeline:
 
                 # Forward pass with mixed precision
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred = self.model(frames)
-                    loss_dict = self.loss_func(pred, target_indices)
+                    pred_dict = self.model(frames)
+                    loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                     # Check if float16 is used
                     if epoch_idx == 0 and step_idx == 0:
@@ -127,7 +127,7 @@ class BodySegmentationPipeline:
                         self._check_amp_status_during_training(
                             frames,
                             target_indices,
-                            pred,
+                            pred_dict,
                             amp_scaler,
                             subtitle="Variables at start of training",
                         )
@@ -244,8 +244,8 @@ class BodySegmentationPipeline:
 
                 # Run model
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred = self.model(frames)
-                    loss_dict = self.loss_func(pred, target_indices)
+                    pred_dict = self.model(frames)
+                    loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                 # Accumulate losses
                 for key, loss in loss_dict.items():
@@ -268,9 +268,9 @@ class BodySegmentationPipeline:
         with torch.no_grad():
             frames = frames.to(self.device)
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                pred = self.model(frames)
+                pred_dict = self.model(frames)
         self.model.train()
-        return pred.to(input_device)
+        return {key: tensor.to(input_device) for key, tensor in pred_dict.items()}
 
     def _init_training_dataset_and_dataloader(
         self, data_config: config.TrainingDataConfig
@@ -378,7 +378,7 @@ class BodySegmentationPipeline:
         self,
         input_images: torch.Tensor,
         target: torch.Tensor,
-        pred: torch.Tensor,
+        pred_dict: torch.Tensor,
         grad_scaler: torch.amp.GradScaler,
         subtitle: str = "Variables during training",
     ):
@@ -389,7 +389,8 @@ class BodySegmentationPipeline:
             tensors={
                 "input_images": input_images,
                 "target": target,
-                "predictions": pred,
+                "pred": pred_dict["logits"],
+                "pred_conf": pred_dict["confidence"],
             },
             grad_scaler=grad_scaler,
             subtitle=subtitle,

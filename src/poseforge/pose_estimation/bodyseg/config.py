@@ -4,6 +4,18 @@ from poseforge.util import SerializableDataClass
 
 
 @dataclass(frozen=True)
+class ModelArchitectureConfig(SerializableDataClass):
+    # Number of segmentation classes (including background)
+    # Default 29: {coxa, femur, tibia, tarsus} x 6 legs + antenna * 2 + thorax
+    # + any-other-body-part + background
+    n_classes: int = 29
+    # Number of hidden channels in the final upsampling layer before classification
+    final_upsampler_n_hidden_channels: int = 32
+    # Method to compute confidence scores
+    confidence_method: str = "entropy"  # "entropy" or "peak"
+
+
+@dataclass(frozen=True)
 class ModelWeightsConfig(SerializableDataClass):
     # Feature extractor weights. Can be a path to the (contrastively) pretrained weights
     # or "IMAGENET1K_V1"
@@ -11,6 +23,16 @@ class ModelWeightsConfig(SerializableDataClass):
     # Model weights, optional. If provided, the model will be initialized from these
     # weights (in which case feature_extractor_weights is ignored).
     model_weights: str | None = None
+    
+@dataclass(frozen=True)
+class LossConfig(SerializableDataClass):
+    # Weight for the Dice loss term
+    weight_dice: float = 1.0
+    # Weight for the cross-entropy loss term
+    weight_ce: float = 1.0
+    # Optional class weights for the cross-entropy loss term. If provided, it should be
+    # a list of length n_classes. If not provided, all classes are weighted equally.
+    ce_class_weights: list[float] | None = None
 
 
 @dataclass(frozen=True)

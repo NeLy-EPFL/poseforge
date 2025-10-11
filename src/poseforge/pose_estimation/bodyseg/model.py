@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import logging
+from pathlib import Path
 
+import poseforge.pose_estimation.bodyseg.config as config
 from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
 
 
@@ -36,25 +39,26 @@ class BodySegmentationModel(nn.Module):
         self,
         n_classes: int,
         feature_extractor: ResNetFeatureExtractor,
-        temperature: float,
-        confidence_method: str = "entropy",
+        final_upsampler_n_hidden_channels: int,
+        confidence_method: str | None = None,
     ):
         """
         Args:
             n_classes (int): Number of classes to predict.
             feature_extractor (ResNetFeatureExtractor): (Pretrained)
                 feature extractor.
-            temperature (float): Temperature for soft-argmax in heatmaps.
-            confidence_method (str): Method to compute confidence scores in
-                soft argmax of x-y heatmaps and depth logits. Options:
-                "entropy" (1 - normalized entropy in predicted
-                distribution, default) or "peak" (max probability).
+            final_upsampler_n_hidden_channels (int): Number of hidden
+                channels in the final upsampling layer before
+                classification.
+            confidence_method (str, optional): Method to compute confidence
+                scores from the output logits. Options: "entropy"
+                (1 - normalized entropy in predicted distribution), "peak"
+                (max probability among classes), or None (not computed).
         """
         super(BodySegmentationModel, self).__init__()
         self.n_classes = n_classes
         self.feature_extractor = feature_extractor
-        self.temperature = temperature
-        self.final_upsampler_n_hidden_channels = 32  # fixed for now
+        self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
         self.confidence_method = confidence_method
 
         if confidence_method not in ["entropy", "peak"]:
@@ -83,6 +87,65 @@ class BodySegmentationModel(nn.Module):
         self.classifier = nn.Conv2d(
             self.final_upsampler_n_hidden_channels, self.n_classes, kernel_size=1
         )
+
+    @classmethod
+    def create_architecture_from_config(
+        cls, architecture_config: config.ModelArchitectureConfig | Path | str
+    ) -> "BodySegmentationModel":
+        # Load from file if config is given as a path
+        if isinstance(architecture_config, (Path, str)):
+            architecture_config = config.ModelArchitectureConfig.load(
+                architecture_config
+            )
+            logging.info(f"Loaded model architecture config from {architecture_config}")
+
+        # Initialize feature extractor (WITHOUT WEIGHTS at this step!)
+        feature_extractor = ResNetFeatureExtractor()
+
+        # Initialize model from config (WITHOUT WEIGHTS at this step!)
+        obj = cls(
+            n_classes=architecture_config.n_classes,
+            feature_extractor=feature_extractor,
+            final_upsampler_n_hidden_channels=architecture_config.final_upsampler_n_hidden_channels,
+            confidence_method=architecture_config.confidence_method,
+        )
+
+        logging.info("Created BodySegmentationModel from architecture config")
+        return obj
+
+    def load_weights_from_config(
+        self, weights_config: config.ModelWeightsConfig | Path | str
+    ):
+        # Load from file if config is given as a path
+        if isinstance(weights_config, (Path, str)):
+            weights_config = config.ModelWeightsConfig.load(weights_config)
+            logging.info(f"Loaded model weights config from {weights_config}")
+
+        # Check if config has either feature extractor weights or full model weights
+        if (
+            weights_config.feature_extractor_weights is None
+            and weights_config.model_weights is None
+        ):
+            logging.warning("weights_config contains nothing useful. No action taken.")
+
+        # If full model weights are provided, load them directly
+        if weights_config.model_weights is not None:
+            checkpoint_path = Path(weights_config.model_weights)
+            if not checkpoint_path.is_file():
+                raise ValueError(f"Model weights path {checkpoint_path} is not a file")
+            weights = torch.load(checkpoint_path, map_location="cpu")
+            self.load_state_dict(weights)
+            logging.info(
+                f"Loaded BodySegmentationModel weights (inc. feature extractor) from config"
+            )
+            return
+
+        # Otherwise, init feature extractor first
+        self.feature_extractor = ResNetFeatureExtractor(
+            # Path, str, or "IMAGENET1K_V1"
+            weights=weights_config.feature_extractor_weights
+        )
+        logging.info("Set up feature extractor from config")
 
     def forward(self, x):
         """
@@ -131,7 +194,23 @@ class BodySegmentationModel(nn.Module):
         upsampled = self.final_upsampler(d0)
         segmentation_logits = self.classifier(upsampled)
 
-        return segmentation_logits
+        # Compute confidence scores
+        if self.confidence_method == "entropy":
+            # Softmax to get class probabilities
+            probs = F.softmax(segmentation_logits, dim=1)  # (B, n_classes, H, W)
+            # Compute normalized entropy --- everything below has shape (B, H, W)
+            entropy = -(probs * torch.log(probs.clamp_min(1e-6))).sum(dim=1)
+            # Normalize by the maximum possible entropy (uniform distribution)
+            n_classes = torch.tensor(self.n_classes, dtype=entropy.dtype)  # scalar
+            normalized_entropy = entropy / torch.log(n_classes)
+            confidence = 1.0 - normalized_entropy  # Higher confidence for lower entropy
+        elif self.confidence_method == "peak":
+            probs = F.softmax(segmentation_logits, dim=1)  # (B, n_classes, H, W)
+            confidence = torch.max(probs, dim=1)  # (B, H, W)
+        else:
+            confidence = None
+
+        return {"logits": segmentation_logits, "confidence": confidence}
 
 
 class DiceLoss(nn.Module):
@@ -194,6 +273,25 @@ class CombinedLoss(nn.Module):
         self.dice_loss = DiceLoss()
         self.ce_loss = nn.CrossEntropyLoss(weight=ce_class_weights)
 
+    @classmethod
+    def create_from_config(
+        cls, loss_config: config.LossConfig | Path | str
+    ) -> "CombinedLoss":
+        # Load from file if config is given as a path
+        if isinstance(loss_config, (Path, str)):
+            loss_config = config.LossConfig.load(loss_config)
+            logging.info(f"Loaded model loss config from {loss_config}")
+
+        # Initialize loss from config
+        obj = cls(
+            weight_dice=loss_config.weight_dice,
+            weight_ce=loss_config.weight_ce,
+            ce_class_weights=loss_config.ce_class_weights,
+        )
+
+        logging.info("Created Pose2p5DLoss from loss config")
+        return obj
+
     def forward(self, pred_logits, target_indices):
         """
         Args:
@@ -201,7 +299,7 @@ class CombinedLoss(nn.Module):
                 Predicted logits (batch_size, n_classes, height, width).
             target_indices (torch.Tensor):
                 Ground truth class indices (batch_size, height, width).
-        
+
         Returns:
             loss (torch.Tensor): Combined loss (scalar).
         """
