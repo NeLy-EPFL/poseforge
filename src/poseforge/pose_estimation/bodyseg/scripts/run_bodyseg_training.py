@@ -7,6 +7,7 @@ logging.basicConfig(
 
 import torch
 from pathlib import Path
+from torchsummary import summary
 
 import poseforge.pose_estimation.bodyseg.config as config
 from poseforge.pose_estimation.bodyseg import (
@@ -86,6 +87,7 @@ def train_bodyseg_model(
 
     # Initialize model and loss function
     pose_model = _setup_model(model_architecture_config, model_weights_config)
+    summary(pose_model.cuda(), (3, *training_data_config.input_image_size))
     criterion = _setup_loss_func(loss_config)
 
     # Initialize learning pipeline
