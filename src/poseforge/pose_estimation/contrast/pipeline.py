@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
-import time
 import logging
+from time import time
 from tqdm import tqdm
 from datetime import datetime
 from typing import Any
@@ -133,8 +133,8 @@ class ContrastivePretrainingPipeline:
                 f"Starting epoch {epoch_idx} out of {num_epochs} at {datetime.now()}"
             )
             running_loss = 0.0
-            epoch_start_time = time.time()
-            running_start_time = time.time()
+            epoch_start_time = time()
+            running_start_time = time()
             for step_idx, (atomic_batches, _) in enumerate(training_data_loader):
                 # Merge atomic batches into a single batch
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
@@ -185,7 +185,7 @@ class ContrastivePretrainingPipeline:
                 if step_idx % log_interval == 0:
                     avg_loss = running_loss / log_interval
                     learning_rate = optimizer.param_groups[0]["lr"]
-                    throughput = log_interval / (time.time() - running_start_time)
+                    throughput = log_interval / (time() - running_start_time)
                     self._update_logs_training(
                         writer=writer,
                         epoch_idx=epoch_idx,

@@ -1,6 +1,6 @@
 import torch
-import time
 import logging
+from time import time
 from collections import defaultdict
 from tqdm import tqdm
 from datetime import datetime
@@ -91,8 +91,8 @@ class Pose2p5DPipeline:
                 f"Starting epoch {epoch_idx} out of {n_epochs} at {datetime.now()}"
             )
             running_loss_dict = defaultdict(lambda: 0.0)
-            epoch_start_time = time.time()
-            running_start_time = time.time()
+            epoch_start_time = time()
+            running_start_time = time()
 
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
                 train_loader
@@ -139,7 +139,7 @@ class Pose2p5DPipeline:
                         k: x / artifacts_config.logging_interval
                         for k, x in running_loss_dict.items()
                     }
-                    time_now = time.time()
+                    time_now = time()
                     throughput = artifacts_config.logging_interval / (
                         time_now - running_start_time
                     )
@@ -202,7 +202,7 @@ class Pose2p5DPipeline:
                     )
                     logging.info(f"Saved checkpoint to {checkpoint_path_stem}.*.pth")
 
-            epoch_wall_time = time.time() - epoch_start_time
+            epoch_wall_time = time() - epoch_start_time
             logging.info(
                 f"Finished epoch {epoch_idx} in {epoch_wall_time:.2f} seconds."
             )
