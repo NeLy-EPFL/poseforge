@@ -118,16 +118,8 @@ class ContrastivePretrainingPipeline:
 
         # Set up mixed-precision training
         amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
-        check_mixed_precision_status(
-            self.use_float16,
-            self.device,
-            print_results=True,
-            tensors={
-                "feature_extractor_params": self.feature_extractor.parameters(),
-                "projection_head_params": self.projection_head.parameters(),
-            },
-            grad_scaler=amp_scaler,
-            subtitle="Initial model parameter dtypes",
+        self._check_amp_status_for_model_params(
+            amp_scaler, subtitle="Model parameters before training"
         )
 
         # Training loop
@@ -162,19 +154,17 @@ class ContrastivePretrainingPipeline:
 
                     # Check if float16 is actually being used
                     if epoch_idx == 0 and step_idx == 0:
-                        check_mixed_precision_status(
-                            self.use_float16,
-                            self.device,
-                            tensors={
-                                "collapsed_batch": collapsed_batch,
-                                "h_features": h_features,
-                                "h_features_pooled": h_features_pooled,
-                                "z_features": z_features,
-                                "loss": loss,
-                            },
-                            grad_scaler=amp_scaler,
-                            print_results=True,
-                            subtitle="First training step",
+                        self._check_amp_status_for_model_params(
+                            amp_scaler, subtitle="Model parameters at start of training"
+                        )
+                        self._check_amp_status_during_training(
+                            collapsed_batch,
+                            h_features,
+                            h_features_pooled,
+                            z_features,
+                            loss,
+                            amp_scaler,
+                            subtitle="Variables at start of training",
                         )
 
                 # Backpropagate and optimize
@@ -361,4 +351,44 @@ class ContrastivePretrainingPipeline:
             h_features.to(input_device),
             h_features_pooled.to(input_device),
             z_features.to(input_device),
+        )
+
+    def _check_amp_status_for_model_params(
+        self, amp_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
+    ):
+        return check_mixed_precision_status(
+            self.use_float16,
+            self.device,
+            print_results=True,
+            tensors={
+                "feature_extractor_params": self.feature_extractor.parameters(),
+                "projection_head_params": self.projection_head.parameters(),
+            },
+            grad_scaler=amp_scaler,
+            subtitle=subtitle,
+        )
+
+    def _check_amp_status_during_training(
+        self,
+        collapsed_batch: torch.Tensor,
+        h_features: torch.Tensor,
+        h_features_pooled: torch.Tensor,
+        z_features: torch.Tensor,
+        loss: torch.Tensor,
+        amp_scaler: torch.amp.GradScaler,
+        subtitle: str = "Variables during training",
+    ):
+        return check_mixed_precision_status(
+            self.use_float16,
+            self.device,
+            print_results=True,
+            tensors={
+                "collapsed_batch": collapsed_batch,
+                "h_features": h_features,
+                "h_features_pooled": h_features_pooled,
+                "z_features": z_features,
+                "loss": loss,
+            },
+            grad_scaler=amp_scaler,
+            subtitle=subtitle,
         )
