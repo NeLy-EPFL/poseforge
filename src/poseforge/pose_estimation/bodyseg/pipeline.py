@@ -110,7 +110,7 @@ class BodySegmentationPipeline:
                 frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
-                target_indices = sim_data["body_seg_maps"]  # (batch_size, H, W)
+                target_indices = sim_data["body_seg_maps"].long()  # (batch_size, H, W)
                 if target_indices.shape[1:] != frames.shape[2:]:
                     raise ValueError(
                         f"Target indices shape {target_indices.shape} does not match "
@@ -239,7 +239,7 @@ class BodySegmentationPipeline:
                 frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
-                target_indices = sim_data["body_seg_maps"]  # (batch_size, H, W)
+                target_indices = sim_data["body_seg_maps"].long()  # (batch_size, H, W)
                 if target_indices.shape[1:] != frames.shape[2:]:
                     raise ValueError(
                         f"Target indices shape {target_indices.shape} does not match "
