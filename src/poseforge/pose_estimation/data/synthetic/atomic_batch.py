@@ -369,10 +369,11 @@ def init_atomic_dataset_and_dataloader(
     load_keypoint_positions: bool = False,
     load_body_segment_maps: bool = False,
     shuffle: bool = False,
-    num_workers: int | None = None,
-    num_channels: int = 3,
+    n_workers: int | None = None,
+    n_channels: int = 3,
     pin_memory: bool = True,
     drop_last: bool = True,
+    prefetch_factor: int | None = None,
 ):
     """
     Initializes an AtomicBatchDataset and a corresponding DataLoader for
@@ -396,13 +397,15 @@ def init_atomic_dataset_and_dataloader(
             segment maps. Defaults to False.
         shuffle (bool, optional): Whether to shuffle the data. Defaults to
             False.
-        num_workers (int | None, optional): Number of worker threads for
+        n_workers (int | None, optional): Number of worker threads for
             data loading. If None, uses available CPU cores.
-        num_channels (int, optional): Number of image channels. Default 3.
+        n_channels (int, optional): Number of image channels. Default 3.
         pin_memory (bool, optional): Whether to use pinned memory in
             DataLoader. Defaults to True.
         drop_last (bool, optional): Whether to drop the last incomplete
             batch. Defaults to True.
+        prefetch_factor (int | None, optional): Number of samples to load
+            in advance by each worker. If None, uses PyTorch default.
 
     Returns:
         dataset (AtomicBatchDataset):
@@ -415,7 +418,7 @@ def init_atomic_dataset_and_dataloader(
         data_dirs=[Path(path) for path in data_dirs],
         n_variants=atomic_batch_n_variants,
         image_size=input_image_size,
-        n_channels=num_channels,
+        n_channels=n_channels,
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,
         load_body_segment_maps=load_body_segment_maps,
@@ -429,21 +432,86 @@ def init_atomic_dataset_and_dataloader(
         )
 
     # Create parallel dataloaders
-    num_workers = num_workers
-    if num_workers is None:
+    n_workers = n_workers
+    if n_workers is None:
         hardware_avail = get_hardware_availability()
-        num_workers = hardware_avail["num_cpu_cores_available"]
-        logging.info(f"Using {num_workers} data loading workers")
+        n_workers = hardware_avail["num_cpu_cores_available"]
+        logging.info(f"Using {n_workers} data loading workers")
     dataloader = DataLoader(
         dataset,
         batch_size=n_atomic_batches_per_batch,
         shuffle=shuffle,
-        num_workers=num_workers,
+        num_workers=n_workers,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        prefetch_factor=prefetch_factor,
     )
 
     return dataset, dataloader
+
+
+def atomic_batches_to_simple_batch(
+    atomic_batches_frames: torch.Tensor,
+    atomic_batches_sim_data: dict[str, torch.Tensor] | None = None,
+    device: torch.device | str | None = None,
+):
+    """Convert a batch of atomic batches to a simple batch, and move to
+    device if needed.
+
+    Args:
+        atomic_batches_frames (torch.Tensor): Tensor of shape
+            (n_atomic_batches, n_variants, n_frames, n_channels, height, width)
+        atomic_batches_sim_data (dict[str, torch.Tensor], optional):
+            Optional dictionary of simulation data, where each value is a
+            tensor of shape (n_atomic_batches, n_frames, ...). Note that there
+            is no n_variants dimension here because all variants come from the
+            same simulation. If supplied, each dict key-value pair will be
+            repeated along the n_variants dimension and then concatenated
+            along the n_frames dimension so as to match the concatenated
+            atomic_batches. See concat_atomic_batches for details.
+            Defaults to None.
+        device (torch.device | str, optional): Device to move tensors to.
+
+    Returns:
+        If atomic_batches_sim_data is None:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, n_channels, height, width).
+        If atomic_batches_sim_data is not None:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, n_channels, height, width).
+            dict[str, torch.Tensor]: Dictionary of simulation data, where
+                each value is a tensor of shape
+                (n_variants * n_atomic_batches * n_samples, ...).
+    """
+    # Move to device if needed
+    if device is not None:
+        atomic_batches_frames = atomic_batches_frames.to(device, non_blocking=True)
+        if atomic_batches_sim_data is not None:
+            atomic_batches_sim_data = {
+                key: val.to(device, non_blocking=True)
+                for key, val in atomic_batches_sim_data.items()
+            }
+
+    # Concatenate atomic batches:
+    # From (n_atomic_batches, n_variants, n_frames, n_channels, height, width)
+    # ... to (n_variants, n_atomic_batches * n_frames, n_channels, height, width)
+    # This function already handles the case where the optional sim_data is None
+    frames_concat, sim_data_concat = concat_atomic_batches(
+        atomic_batches_frames, atomic_batches_sim_data
+    )
+
+    # Collapse frames (flatten n_variants and n_frames) into one dimension:
+    # From (n_variants, n_atomic_batches * n_frames, n_channels, height, width)
+    # ... to (n_variants * n_atomic_batches * n_frames, n_channels, height, width)
+    # This function already handles the case where the optional sim_data is None
+    frames_collapsed, sim_data_collapsed = collapse_batch(
+        frames_concat, sim_data_concat
+    )
+
+    if atomic_batches_sim_data is None:
+        return frames_collapsed
+    else:
+        return frames_collapsed, sim_data_collapsed
 
 
 def _test_throughput():
