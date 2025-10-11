@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import time
 import logging
+from itertools import chain
 from tqdm import tqdm
 from datetime import datetime
 from typing import Any
@@ -9,14 +10,13 @@ from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
 from poseforge.pose_estimation.data.synthetic import (
     concat_atomic_batches,
     collapse_batch,
 )
 from poseforge.pose_estimation.contrast.model import (
-    ContrastiveProjectionHead,
-    info_nce_loss,
+    ContrastivePretrainingModel,
+    InfoNCELoss,
 )
 from poseforge.util import clear_memory_cache, check_mixed_precision_status
 
@@ -24,13 +24,13 @@ from poseforge.util import clear_memory_cache, check_mixed_precision_status
 class ContrastivePretrainingPipeline:
     def __init__(
         self,
-        feature_extractor: ResNetFeatureExtractor,
-        projection_head: ContrastiveProjectionHead,
+        contrastive_pretraining_model: ContrastivePretrainingModel,
+        info_nce_loss_func: InfoNCELoss,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
-        self.feature_extractor = feature_extractor.to(device)
-        self.projection_head = projection_head.to(device)
+        self.model = contrastive_pretraining_model.to(device)
+        self.loss_func = info_nce_loss_func.to(device)
         self.device = device
         if torch.cuda.is_available() and "cuda" in str(self.device):
             self.device_type = "cuda"
@@ -40,8 +40,10 @@ class ContrastivePretrainingPipeline:
 
     def _create_optimizer(self, adam_kwargs: dict[str, Any]) -> torch.optim.Optimizer:
         return torch.optim.Adam(
-            list(self.feature_extractor.parameters())
-            + list(self.projection_head.parameters()),
+            chain(
+                self.model.feature_extractor.parameters(),
+                self.model.projection_head.parameters(),
+            ),
             **adam_kwargs,
         )
 
@@ -82,11 +84,11 @@ class ContrastivePretrainingPipeline:
 
     def _save_checkpoint(self, checkpoint_path_stem: Path) -> None:
         torch.save(
-            self.feature_extractor.state_dict(),
+            self.model.feature_extractor.state_dict(),
             checkpoint_path_stem.with_suffix(".feature_extractor.pth"),
         )
         torch.save(
-            self.projection_head.state_dict(),
+            self.model.projection_head.state_dict(),
             checkpoint_path_stem.with_suffix(".projection_head.pth"),
         )
 
@@ -139,17 +141,12 @@ class ContrastivePretrainingPipeline:
 
                 # Run models
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    h_features = self.feature_extractor(collapsed_batch)
-                    h_features_pooled = F.adaptive_avg_pool2d(
-                        h_features, (1, 1)
-                    ).flatten(start_dim=1)
-                    z_features = self.projection_head(h_features_pooled)
-                    loss = info_nce_loss(
-                        z_features,
-                        temperature,
-                        n_samples=n_samples,
-                        n_variants=n_variants,
-                        device=self.device,
+                    pred_dict = self.model(collapsed_batch)
+                    h_features = pred_dict["h_features"]
+                    h_features_pooled = pred_dict["h_features_pooled"]
+                    z_features = pred_dict["z_features"]
+                    loss = self.loss_func(
+                        z_features, n_samples=n_samples, n_variants=n_variants
                     )
 
                     # Check if float16 is actually being used
@@ -159,9 +156,7 @@ class ContrastivePretrainingPipeline:
                         )
                         self._check_amp_status_during_training(
                             collapsed_batch,
-                            h_features,
-                            h_features_pooled,
-                            z_features,
+                            pred_dict,
                             loss,
                             amp_scaler,
                             subtitle="Variables at start of training",
@@ -208,11 +203,11 @@ class ContrastivePretrainingPipeline:
                     )
 
                     # Free GPU memory before validation
-                    # Delete training batch tensors
                     del (
                         atomic_batches,
                         concatenated_batch,
                         collapsed_batch,
+                        pred_dict,
                         h_features,
                         h_features_pooled,
                         z_features,
@@ -258,8 +253,7 @@ class ContrastivePretrainingPipeline:
             Average validation loss
         """
         # Set models to evaluation mode
-        self.feature_extractor.eval()
-        self.projection_head.eval()
+        self.model.eval()
 
         total_loss = 0.0
         if max_nbatches is None:
@@ -279,17 +273,10 @@ class ContrastivePretrainingPipeline:
 
                 # Forward pass with mixed precision
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    h_features = self.feature_extractor(collapsed_batch)
-                    h_features_pooled = F.adaptive_avg_pool2d(
-                        h_features, (1, 1)
-                    ).flatten(start_dim=1)
-                    z_features = self.projection_head(h_features_pooled)
-                    loss = info_nce_loss(
-                        z_features,
-                        temperature,
-                        n_samples=n_samples,
-                        n_variants=n_variants,
-                        device=self.device,
+                    pred_dict = self.model(collapsed_batch)
+                    z_features = pred_dict["z_features"]
+                    loss = self.loss_func(
+                        z_features, n_samples=n_samples, n_variants=n_variants
                     )
 
                 total_loss += loss.item()
@@ -302,15 +289,14 @@ class ContrastivePretrainingPipeline:
             atomic_batches,
             concatenated_batch,
             collapsed_batch,
-            h_features,
+            pred_dict,
             z_features,
             loss,
         )
         clear_memory_cache()
 
         # Set models back to training mode
-        self.feature_extractor.train()
-        self.projection_head.train()
+        self.model.train()
 
         return avg_validation_loss
 
@@ -334,24 +320,15 @@ class ContrastivePretrainingPipeline:
             batch = batch.to(self.device, non_blocking=True)
 
         # Set models to evaluation mode
-        self.feature_extractor.eval()
-        self.projection_head.eval()
+        self.model.eval()
 
         # Run models
         with torch.no_grad():
             batch = batch.to(self.device, non_blocking=True)
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                h_features = self.feature_extractor(batch)
-                h_features_pooled = F.adaptive_avg_pool2d(h_features, (1, 1)).flatten(
-                    start_dim=1
-                )
-                z_features = self.projection_head(h_features_pooled)
+                pred_dict = self.model(batch)
 
-        return (
-            h_features.to(input_device),
-            h_features_pooled.to(input_device),
-            z_features.to(input_device),
-        )
+        return {key: tensor.to(input_device) for key, tensor in pred_dict.items()}
 
     def _check_amp_status_for_model_params(
         self, amp_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
@@ -361,8 +338,8 @@ class ContrastivePretrainingPipeline:
             self.device,
             print_results=True,
             tensors={
-                "feature_extractor_params": self.feature_extractor.parameters(),
-                "projection_head_params": self.projection_head.parameters(),
+                "feature_extractor_params": self.model.feature_extractor.parameters(),
+                "projection_head_params": self.model.projection_head.parameters(),
             },
             grad_scaler=amp_scaler,
             subtitle=subtitle,
@@ -371,9 +348,7 @@ class ContrastivePretrainingPipeline:
     def _check_amp_status_during_training(
         self,
         collapsed_batch: torch.Tensor,
-        h_features: torch.Tensor,
-        h_features_pooled: torch.Tensor,
-        z_features: torch.Tensor,
+        pred_dict: dict[str, torch.Tensor],
         loss: torch.Tensor,
         amp_scaler: torch.amp.GradScaler,
         subtitle: str = "Variables during training",
@@ -384,9 +359,9 @@ class ContrastivePretrainingPipeline:
             print_results=True,
             tensors={
                 "collapsed_batch": collapsed_batch,
-                "h_features": h_features,
-                "h_features_pooled": h_features_pooled,
-                "z_features": z_features,
+                "h_features": pred_dict["h_features"],
+                "h_features_pooled": pred_dict["h_features_pooled"],
+                "z_features": pred_dict["z_features"],
                 "loss": loss,
             },
             grad_scaler=amp_scaler,

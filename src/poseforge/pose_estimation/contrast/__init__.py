@@ -1,2 +1,2 @@
-from .model import ContrastiveProjectionHead, info_nce_loss
+from .model import ContrastivePretrainingModel, InfoNCELoss
 from .pipeline import ContrastivePretrainingPipeline
