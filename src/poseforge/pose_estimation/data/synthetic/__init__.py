@@ -5,4 +5,5 @@ from .atomic_batch import (
     init_atomic_dataset_and_dataloader,
     concat_atomic_batches,
     collapse_batch,
+    atomic_batches_to_simple_batch,
 )

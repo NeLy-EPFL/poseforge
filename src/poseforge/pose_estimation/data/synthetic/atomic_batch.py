@@ -446,6 +446,70 @@ def init_atomic_dataset_and_dataloader(
     return dataset, dataloader
 
 
+def atomic_batches_to_simple_batch(
+    atomic_batches_frames: torch.Tensor,
+    atomic_batches_sim_data: dict[str, torch.Tensor] | None = None,
+    device: torch.device | str | None = None,
+):
+    """Convert a batch of atomic batches to a simple batch, and move to
+    device if needed.
+
+    Args:
+        atomic_batches_frames (torch.Tensor): Tensor of shape
+            (n_atomic_batches, n_variants, n_frames, n_channels, height, width)
+        atomic_batches_sim_data (dict[str, torch.Tensor], optional):
+            Optional dictionary of simulation data, where each value is a
+            tensor of shape (n_atomic_batches, n_frames, ...). Note that there
+            is no n_variants dimension here because all variants come from the
+            same simulation. If supplied, each dict key-value pair will be
+            repeated along the n_variants dimension and then concatenated
+            along the n_frames dimension so as to match the concatenated
+            atomic_batches. See concat_atomic_batches for details.
+            Defaults to None.
+        device (torch.device | str, optional): Device to move tensors to.
+
+    Returns:
+        If atomic_batches_sim_data is None:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, n_channels, height, width).
+        If atomic_batches_sim_data is not None:
+            torch.Tensor: Collapsed batch of shape
+                (n_variants * n_atomic_batches * n_samples, n_channels, height, width).
+            dict[str, torch.Tensor]: Dictionary of simulation data, where
+                each value is a tensor of shape
+                (n_variants * n_atomic_batches * n_samples, ...).
+    """
+    # Move to device if needed
+    if device is not None:
+        atomic_batches_frames = atomic_batches_frames.to(device, non_blocking=True)
+        if atomic_batches_sim_data is not None:
+            atomic_batches_sim_data = {
+                key: val.to(device, non_blocking=True)
+                for key, val in atomic_batches_sim_data.items()
+            }
+
+    # Concatenate atomic batches:
+    # From (n_atomic_batches, n_variants, n_frames, n_channels, height, width)
+    # ... to (n_variants, n_atomic_batches * n_frames, n_channels, height, width)
+    # This function already handles the case where the optional sim_data is None
+    frames_concat, sim_data_concat = concat_atomic_batches(
+        atomic_batches_frames, atomic_batches_sim_data
+    )
+
+    # Collapse frames (flatten n_variants and n_frames) into one dimension:
+    # From (n_variants, n_atomic_batches * n_frames, n_channels, height, width)
+    # ... to (n_variants * n_atomic_batches * n_frames, n_channels, height, width)
+    # This function already handles the case where the optional sim_data is None
+    frames_collapsed, sim_data_collapsed = collapse_batch(
+        frames_concat, sim_data_concat
+    )
+
+    if atomic_batches_sim_data is None:
+        return frames_collapsed
+    else:
+        return frames_collapsed, sim_data_collapsed
+
+
 def _test_throughput():
     from time import time
     from torch.utils.data import DataLoader
