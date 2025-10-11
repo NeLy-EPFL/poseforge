@@ -1,2 +1,2 @@
-from .model import BodySegmentationModel, CombinedLoss
+from .model import BodySegmentationModel, CombinedDiceCELoss
 from .pipeline import BodySegmentationPipeline

@@ -11,7 +11,7 @@ from pathlib import Path
 import poseforge.pose_estimation.bodyseg.config as config
 from poseforge.pose_estimation.bodyseg import (
     BodySegmentationModel,
-    CombinedLoss,
+    CombinedDiceCELoss,
     BodySegmentationPipeline,
 )
 from poseforge.util import get_hardware_availability
@@ -31,8 +31,8 @@ def _setup_model(
     return model
 
 
-def _setup_loss_func(loss_config: config.LossConfig) -> CombinedLoss:
-    loss_func = CombinedLoss.create_from_config(loss_config)
+def _setup_loss_func(loss_config: config.LossConfig) -> CombinedDiceCELoss:
+    loss_func = CombinedDiceCELoss.create_from_config(loss_config)
     logging.info("Set up combined loss function")
     return loss_func
 
@@ -131,6 +131,7 @@ if __name__ == "__main__":
     training_data_config = config.TrainingDataConfig(
         train_data_dirs=[str(path) for path in train_data_dirs],
         val_data_dirs=[str(path) for path in val_data_dirs],
+        input_image_size=(256, 256),
         atomic_batch_n_samples=32,
         atomic_batch_n_variants=4,
         train_batch_size=32,

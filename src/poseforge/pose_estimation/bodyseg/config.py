@@ -23,7 +23,8 @@ class ModelWeightsConfig(SerializableDataClass):
     # Model weights, optional. If provided, the model will be initialized from these
     # weights (in which case feature_extractor_weights is ignored).
     model_weights: str | None = None
-    
+
+
 @dataclass(frozen=True)
 class LossConfig(SerializableDataClass):
     # Weight for the Dice loss term
@@ -41,6 +42,8 @@ class TrainingDataConfig(SerializableDataClass):
     train_data_dirs: list[str]
     # Paths to validation data (recursively containing atomic batches)
     val_data_dirs: list[str]
+    # Frame size (height, width)
+    input_image_size: tuple[int, int]
     # Numbers of samples (frames) in each pre-extracted atomic batch
     atomic_batch_n_samples: int
     # Number of variants (synthetic images made by different style transfer models)

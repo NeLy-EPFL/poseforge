@@ -11,12 +11,11 @@ from torch.utils.data import DataLoader
 import poseforge.pose_estimation.keypoints3d.config as config
 from poseforge.pose_estimation.data.synthetic import (
     init_atomic_dataset_and_dataloader,
-    atomic_batches_to_simple_batch
+    atomic_batches_to_simple_batch,
 )
 from poseforge.pose_estimation.keypoints3d import Pose2p5DModel, Pose2p5DLoss
 from poseforge.util import (
     clear_memory_cache,
-    force_clear_variables,
     check_mixed_precision_status,
     set_random_seed,
 )
@@ -161,7 +160,7 @@ class Pose2p5DPipeline:
                     step_idx % artifacts_config.validation_interval == 0
                     and step_idx > 0
                 ):
-                    force_clear_variables(
+                    del (
                         atomic_batches_frames,
                         atomic_batches_sim_data,
                         frames_collapsed,
@@ -176,7 +175,7 @@ class Pose2p5DPipeline:
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
                     )
-                    self.update_logs_validation(
+                    self._update_logs_validation(
                         writer,
                         epoch_idx=epoch_idx,
                         within_epoch_step_idx=step_idx,
@@ -357,7 +356,7 @@ class Pose2p5DPipeline:
         logging.info(log_str)
         writer.add_scalar("train/sys/throughput", throughput, global_step_idx)
 
-    def update_logs_validation(
+    def _update_logs_validation(
         self,
         writer: SummaryWriter,
         *,

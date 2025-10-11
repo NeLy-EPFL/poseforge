@@ -10,7 +10,10 @@ from itertools import chain
 from tqdm import tqdm
 
 import poseforge.pose_estimation.bodyseg.config as config
-from poseforge.pose_estimation.bodyseg.model import BodySegmentationModel, CombinedLoss
+from poseforge.pose_estimation.bodyseg.model import (
+    BodySegmentationModel,
+    CombinedDiceCELoss,
+)
 from poseforge.pose_estimation.data.synthetic import (
     init_atomic_dataset_and_dataloader,
     atomic_batches_to_simple_batch,
@@ -20,7 +23,7 @@ from poseforge.util import (
     check_mixed_precision_status,
     count_optimizer_parameters,
     count_module_parameters,
-    force_clear_variables,
+    clear_memory_cache,
 )
 
 
@@ -39,7 +42,7 @@ class BodySegmentationPipeline:
     def __init__(
         self,
         model: BodySegmentationModel,
-        loss_func: CombinedLoss | None = None,
+        loss_func: CombinedDiceCELoss | None = None,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
@@ -168,18 +171,19 @@ class BodySegmentationPipeline:
                     step_idx % artifacts_config.validation_interval == 0
                     and step_idx > 0
                 ):
-                    force_clear_variables(
+                    del (
                         atomic_batches_frames,
                         atomic_batches_sim_data,
                         frames,
                         sim_data,
                         target_indices,
                     )
+                    clear_memory_cache()
                     val_loss_dict = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
                     )
-                    self.update_logs_validation(
+                    self._update_logs_validation(
                         writer,
                         epoch_idx=epoch_idx,
                         within_epoch_step_idx=step_idx,
@@ -251,13 +255,14 @@ class BodySegmentationPipeline:
                 for key, loss in loss_dict.items():
                     total_loss_dict[key] += loss.item()
 
-        force_clear_variables(
+        del (
             atomic_batches_frames,
             atomic_batches_sim_data,
             frames,
             sim_data,
             target_indices,
         )
+        clear_memory_cache()
         self.model.train()
         n_steps_iterated = step_idx + 1
         return {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
@@ -400,7 +405,7 @@ class BodySegmentationPipeline:
     def _save_checkpoint(
         checkpoint_path_stem: Path,
         model: BodySegmentationModel,
-        loss: CombinedLoss | None = None,
+        loss: CombinedDiceCELoss | None = None,
         optimizer: torch.optim.Optimizer | None = None,
         grad_scaler: torch.amp.GradScaler | None = None,
     ) -> None:
@@ -415,3 +420,44 @@ class BodySegmentationPipeline:
         if grad_scaler is not None:
             path = checkpoint_path_stem.with_suffix(".grad_scaler.pth")
             torch.save(grad_scaler.state_dict(), path)
+
+    def _update_logs_training(
+        self,
+        writer: SummaryWriter,
+        *,
+        epoch_index: int,
+        within_epoch_step_idx: int,
+        n_batches_per_epoch: int,
+        avg_loss_dict: dict[str, float],
+        throughput: float,
+    ) -> None:
+        global_step_idx = epoch_index * n_batches_per_epoch + within_epoch_step_idx
+        writer.add_scalar("train/epoch", epoch_index, global_step_idx)
+        log_str = (
+            f"Epoch {epoch_index}, step {within_epoch_step_idx}/{n_batches_per_epoch}, "
+        )
+        for key, value in avg_loss_dict.items():
+            log_str += f"{key}: {value:.4f}, "
+            writer.add_scalar(f"train/loss/{key}", value, global_step_idx)
+        log_str += f"throughput: {throughput:.2f} batches/sec"
+        logging.info(log_str)
+        writer.add_scalar("train/sys/throughput", throughput, global_step_idx)
+
+    def update_logs_validation(
+        self,
+        writer: SummaryWriter,
+        *,
+        epoch_idx: int,
+        within_epoch_step_idx: int,
+        n_batches_per_epoch: int,
+        val_loss_dict: dict[str, float],
+    ) -> None:
+        global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
+        log_str = (
+            f"Validation at epoch {epoch_idx}, "
+            f"step {within_epoch_step_idx}/{n_batches_per_epoch}, "
+        )
+        for key, value in val_loss_dict.items():
+            log_str += f"{key}: {value:.4f}, "
+            writer.add_scalar(f"val/loss/{key}", value, global_step_idx)
+        logging.info(log_str)

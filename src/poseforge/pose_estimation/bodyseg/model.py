@@ -61,10 +61,10 @@ class BodySegmentationModel(nn.Module):
         self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
         self.confidence_method = confidence_method
 
-        if confidence_method not in ["entropy", "peak"]:
+        if confidence_method not in ["entropy", "peak", None]:
             raise ValueError(
                 f"Invalid confidence_method {confidence_method}. "
-                'Must be "entropy" or "peak".'
+                'Must be "entropy", "peak", or None.'
             )
 
         # Create decoder (decoder1/2/3/4 mirror encoder layers 1/2/3/4)
@@ -206,7 +206,7 @@ class BodySegmentationModel(nn.Module):
             confidence = 1.0 - normalized_entropy  # Higher confidence for lower entropy
         elif self.confidence_method == "peak":
             probs = F.softmax(segmentation_logits, dim=1)  # (B, n_classes, H, W)
-            confidence = torch.max(probs, dim=1)  # (B, H, W)
+            confidence, dim = torch.max(probs, dim=1)  # (B, H, W)
         else:
             confidence = None
 
@@ -253,7 +253,7 @@ class DiceLoss(nn.Module):
         return loss
 
 
-class CombinedLoss(nn.Module):
+class CombinedDiceCELoss(nn.Module):
     def __init__(
         self,
         weight_dice: float = 0.5,
@@ -265,7 +265,7 @@ class CombinedLoss(nn.Module):
             weight_dice (float): Weight for Dice loss component.
             weight_ce (float): Weight for Cross-Entropy loss component.
         """
-        super(CombinedLoss, self).__init__()
+        super(CombinedDiceCELoss, self).__init__()
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
         self.ce_class_weights = ce_class_weights
@@ -276,7 +276,7 @@ class CombinedLoss(nn.Module):
     @classmethod
     def create_from_config(
         cls, loss_config: config.LossConfig | Path | str
-    ) -> "CombinedLoss":
+    ) -> "CombinedDiceCELoss":
         # Load from file if config is given as a path
         if isinstance(loss_config, (Path, str)):
             loss_config = config.LossConfig.load(loss_config)
@@ -289,7 +289,7 @@ class CombinedLoss(nn.Module):
             ce_class_weights=loss_config.ce_class_weights,
         )
 
-        logging.info("Created Pose2p5DLoss from loss config")
+        logging.info("Created CombinedDiceCELoss from loss config")
         return obj
 
     def forward(self, pred_logits, target_indices):

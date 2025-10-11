@@ -139,13 +139,6 @@ def clear_memory_cache(logging_level=logging.DEBUG):
         )
 
 
-def force_clear_variables(*args):
-    """Force clear variables and free up memory"""
-    for var in args:
-        del var
-    clear_memory_cache(logging_level=logging.INFO)
-
-
 def check_num_frames(video_path: Path) -> int:
     """Check number of frames in a video file using imageio.v2"""
     try:
