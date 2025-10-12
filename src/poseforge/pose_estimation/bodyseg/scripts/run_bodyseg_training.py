@@ -153,7 +153,7 @@ if __name__ == "__main__":
     )
     optimizer_config = config.OptimizerConfig()
     training_artifacts_config = config.TrainingArtifactsConfig(
-        output_basedir="bulk_data/pose_estimation/bodyseg/trial_20251011b/",
+        output_basedir="bulk_data/pose_estimation/bodyseg/trial_20251012a/",
         logging_interval=10,  # 1000
         checkpoint_interval=100,  # 1000
         validation_interval=100,  # 1000

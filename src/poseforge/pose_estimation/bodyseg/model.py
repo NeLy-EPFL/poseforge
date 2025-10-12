@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 import poseforge.pose_estimation.bodyseg.config as config
-from src.poseforge.pose_estimation.common import ResNetFeatureExtractor, DecoderBlock
+from poseforge.pose_estimation.common import ResNetFeatureExtractor, DecoderBlock
 
 
 class BodySegmentationModel(nn.Module):
@@ -14,7 +14,7 @@ class BodySegmentationModel(nn.Module):
         n_classes: int,
         feature_extractor: ResNetFeatureExtractor,
         final_upsampler_n_hidden_channels: int,
-        confidence_method: str | None = None,
+        confidence_method: str = "entropy",
     ):
         """
         Args:
@@ -24,10 +24,10 @@ class BodySegmentationModel(nn.Module):
             final_upsampler_n_hidden_channels (int): Number of hidden
                 channels in the final upsampling layer before
                 classification.
-            confidence_method (str, optional): Method to compute confidence
-                scores from the output logits. Options: "entropy"
-                (1 - normalized entropy in predicted distribution), "peak"
-                (max probability among classes), or None (not computed).
+            confidence_method (str): Method to compute confidence scores
+                from the output logits. Options: "entropy"
+                (1 - normalized entropy in predicted distribution), or
+                "peak" (max probability among classes).
         """
         super(BodySegmentationModel, self).__init__()
         self.n_classes = n_classes
@@ -35,18 +35,18 @@ class BodySegmentationModel(nn.Module):
         self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
         self.confidence_method = confidence_method
 
-        if confidence_method not in ["entropy", "peak", None]:
+        if confidence_method not in ["entropy", "peak"]:
             raise ValueError(
                 f"Invalid confidence_method {confidence_method}. "
-                'Must be "entropy", "peak", or None.'
+                'Must be "entropy" or "peak".'
             )
 
         # Create decoder (decoder1/2/3/4 mirror encoder layers 1/2/3/4)
         # Note that when upsampling, we actually run decoder4 first, decoder1 last
-        self.decoder4 = DecoderBlock(512, 256, 256)  # 512ch 8x8 -> 256ch 16x16
-        self.decoder3 = DecoderBlock(256, 128, 128)  # 256ch 16x16 -> 128ch 32x32
-        self.decoder2 = DecoderBlock(128, 64, 64)  # 128ch 32x32 -> 64ch 64x64
-        self.decoder1 = DecoderBlock(64, 64, 64)  # 64ch 64x64 -> 64ch 128x128
+        self.dec_layer4 = DecoderBlock(512, 256, 256)  # 512ch 8x8 -> 256ch 16x16
+        self.dec_layer3 = DecoderBlock(256, 128, 128)  # 256ch 16x16 -> 128ch 32x32
+        self.dec_layer2 = DecoderBlock(128, 64, 64)  # 128ch 32x32 -> 64ch 64x64
+        self.dec_layer1 = DecoderBlock(64, 64, 64)  # 64ch 64x64 -> 64ch 128x128
 
         # Final upsampling layer to reach input size
         self.final_upsampler = nn.Sequential(
@@ -61,6 +61,8 @@ class BodySegmentationModel(nn.Module):
         self.classifier = nn.Conv2d(
             self.final_upsampler_n_hidden_channels, self.n_classes, kernel_size=1
         )
+
+        self._first_time_forward = True
 
     @classmethod
     def create_architecture_from_config(
@@ -121,7 +123,7 @@ class BodySegmentationModel(nn.Module):
         )
         logging.info("Set up feature extractor from config")
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
             x (torch.Tensor): Input tensor (batch_size, 3, 256, 256)
@@ -129,40 +131,43 @@ class BodySegmentationModel(nn.Module):
         Returns:
             segmentation_logits (torch.Tensor): Output logits, tensor
                 (batch_size, n_classes, 256, 256)
+
+        We use a UNet-like architecture with skip connections:
+
+        Encoder (downsampling)     Decoder (upsampling)
+        ──────────────────────     ────────────────────
+          e0: 64ch 128x128        **d0: 64ch 128x128**    (end of upsampling core)
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer1: 64(up)+64(skip)->64 ch
+                ↓                         ↑(up)           64x64(up)+128x128(skip)->128x128
+          e1: 64ch 64x64            d1: 64ch 64x64
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer2: 128(up)+64(skip)->64 ch
+                ↓                         ↑(up)           32x32(up)+64x64(skip)->64x64
+          e2: 128ch 32x32           d2: 128ch 32x32
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer3: 256(up)+128(skip)->128 ch
+                ↓                         ↑(up)           16x16(up)+32x32(skip)->32x32
+          e3: 256ch 16x16           d3: 256ch 16x16
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer4: 512(up)+256(skip)->256 ch
+                ↓                         ↑(up)           8x8(up)+16x16(skip)->16x16
+          e4: 512ch 8x8             d4: 512ch 8x8
+                |                         ↑
+                └──(bottleneck/identity)──┘
         """
         # Run feature extractor
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
             x, return_intermediates=True
         )
 
-        # Decoder with skip connections
-        #  Encoder (downsampling)             Decoder (upsampling)
-        #  ──────────────────────             ────────────────────
-        #    e0:  64ch 128x128                  d0:  64ch 128x128
-        #              │ │                       ↑
-        #              │ └────────(skip)───────→(+)
-        #              ↓                         ↑(up)
-        #    e1:  64ch   64x64                  d1:  64ch   64x64
-        #              │ │                       ↑
-        #              │ └────────(skip)───────→(+)
-        #              ↓                         ↑(up)
-        #    e2: 128ch   32x32                  d2: 128ch   32x32
-        #              │ │                       ↑
-        #              │ └────────(skip)───────→(+)
-        #              ↓                         ↑(up)
-        #    e3: 256ch   16x16                  d3: 256ch   16x16
-        #              │ │                       ↑
-        #              │ └────────(skip)───────→(+)
-        #              ↓                         ↑(up)
-        #    e4: 512ch     8x8                  d4: 512ch     8x8
-        #              |                         ↑
-        #              └──(bottleneck/identity)──┘
-
         d4 = e4  # this is just the bottleneck
-        d3 = self.decoder4(d4, e3)
-        d2 = self.decoder3(d3, e2)
-        d1 = self.decoder2(d2, e1)
-        d0 = self.decoder1(d1, e0)
+
+        # Upsample with skip connections
+        d3 = self.dec_layer4(d4, e3)
+        d2 = self.dec_layer3(d3, e2)
+        d1 = self.dec_layer2(d2, e1)
+        d0 = self.dec_layer1(d1, e0)
 
         # Final upsampling and classification
         upsampled = self.final_upsampler(d0)
@@ -181,8 +186,27 @@ class BodySegmentationModel(nn.Module):
         elif self.confidence_method == "peak":
             probs = F.softmax(segmentation_logits, dim=1)  # (B, n_classes, H, W)
             confidence, dim = torch.max(probs, dim=1)  # (B, H, W)
-        else:
-            confidence = None
+
+        # If this is the first forward pass, check if the shapes are as expected
+        if self._first_time_forward:
+            batch_size = x.shape[0]
+            assert self.feature_extractor.input_size == (256, 256)
+            assert x.shape == (batch_size, 3, 256, 256)
+            assert e0.shape == (batch_size, 64, 128, 128)
+            assert e1.shape == (batch_size, 64, 64, 64)
+            assert e2.shape == (batch_size, 128, 32, 32)
+            assert e3.shape == (batch_size, 256, 16, 16)
+            assert e4.shape == (batch_size, 512, 8, 8)
+            assert d4.shape == (batch_size, 512, 8, 8)
+            assert d3.shape == (batch_size, 256, 16, 16)
+            assert d2.shape == (batch_size, 128, 32, 32)
+            assert d1.shape == (batch_size, 64, 64, 64)
+            assert d0.shape == (batch_size, 64, 128, 128)
+            upsample_hidden_channels = self.final_upsampler_n_hidden_channels
+            assert upsampled.shape == (batch_size, upsample_hidden_channels, 256, 256)
+            assert segmentation_logits.shape == (batch_size, self.n_classes, 256, 256)
+            assert confidence.shape == (batch_size, 256, 256)
+            self._first_time_forward = False
 
         return {"logits": segmentation_logits, "confidence": confidence}
 

@@ -18,9 +18,8 @@ from poseforge.util.plot import (
 )
 
 
-def set_up_figure(image_shape: tuple[int, int], n_subplots: int):
-    assert n_subplots in (2, 3)  # 2: image + segmap, 3: image + segmap + conf
-    fig, axes = plt.subplots(1, n_subplots, figsize=(n_subplots * 5, 5))
+def set_up_figure(image_shape: tuple[int, int]):
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])
@@ -30,12 +29,11 @@ def set_up_figure(image_shape: tuple[int, int], n_subplots: int):
     elements = {
         "ax_input_image": axes[0],
         "ax_pred_segmap": axes[1],
-        "ax_pred_conf": axes[2] if n_subplots == 3 else None,
+        "ax_pred_conf": axes[2],
     }
     elements["ax_input_image"].set_title("Input image")
     elements["ax_pred_segmap"].set_title("Predicted segmentation")
-    if n_subplots == 3:
-        elements["ax_pred_conf"].set_title("Confidence")
+    elements["ax_pred_conf"].set_title("Confidence")
 
     elements["im_input_image"] = elements["ax_input_image"].imshow(
         np.zeros(image_shape, dtype=np.uint8), vmin=0, vmax=1, cmap="gray"
@@ -43,11 +41,12 @@ def set_up_figure(image_shape: tuple[int, int], n_subplots: int):
     elements["im_pred_segmap"] = elements["ax_pred_segmap"].imshow(
         np.zeros((*image_shape, 3), dtype=np.uint8)
     )
-    if n_subplots == 3:
-        elements["im_pred_conf"] = elements["ax_pred_conf"].imshow(
-            np.zeros(image_shape, dtype=np.uint8), vmin=0, vmax=100, cmap="viridis_r"
-        )
-        elements["ax_pred_conf"].colorbar()
+    elements["im_pred_conf"] = elements["ax_pred_conf"].imshow(
+        np.zeros(image_shape, dtype=np.uint8), vmin=0, vmax=100, cmap="viridis"
+    )
+    # Create a colorbar for the confidence image. Use the figure-level
+    # colorbar API and pass the AxesImage returned by imshow.
+    fig.colorbar(elements["im_pred_conf"], ax=elements["ax_pred_conf"])
 
     return fig, elements
 
@@ -82,13 +81,11 @@ def worker_payload(
     pred_segmaps: np.ndarray,
     pred_confs: np.ndarray | None,
     color_palette: list[np.ndarray],
-    show_confidence: bool,
     label_alpha: float,
     out_dir: Path,
 ):
     fig, elements = set_up_figure(
-        image_shape=plt.imread(input_frame_paths[0]).shape[:2],
-        n_subplots=3 if show_confidence else 2,
+        image_shape=plt.imread(input_frame_paths[0]).shape[:2]
     )
 
     for i, frame_idx in enumerate(frame_indices):
@@ -111,7 +108,6 @@ def visualize_bodyseg_prediction(
     recording_dir: Path,
     pred_path: Path,
     output_path: Path,
-    show_confidence: bool = False,
     output_fps: int = 30,
     label_alpha: float = 0.6,
     n_workers: int = -1,
@@ -124,8 +120,7 @@ def visualize_bodyseg_prediction(
         class_labels = f["pred_segmap"].attrs["class_labels"].tolist()
         color_palette = get_segmentation_color_palette(len(class_labels))  #
         pred_segmaps = f["pred_segmap"]
-        if show_confidence:
-            pred_confs = f["pred_confidence"]
+        pred_confs = f["pred_confidence"]
 
         n_frames_per_worker = int(np.ceil(len(input_frame_paths) / n_workers_eff))
         payloads = []
@@ -138,9 +133,7 @@ def visualize_bodyseg_prediction(
                     int(path.stem.replace("frame_", "")) for path in input_paths_chunk
                 ]
                 pred_segmaps_chunk = pred_segmaps[start:end, :, :]
-                pred_confs_chunk = (
-                    pred_confs[start:end, :, :] if show_confidence else None
-                )
+                pred_confs_chunk = pred_confs[start:end, :, :]
 
                 payloads.append(
                     (
@@ -149,7 +142,6 @@ def visualize_bodyseg_prediction(
                         pred_segmaps_chunk,
                         pred_confs_chunk,
                         color_palette,
-                        show_confidence,
                         label_alpha,
                         Path(tmpdir),
                     )
@@ -181,7 +173,6 @@ if __name__ == "__main__":
     pred_path = pred_basedir / f"{trial}_model_prediction_not_flipped/bodyseg_pred.h5"
     output_path = pred_basedir / f"{trial}_model_prediction_not_flipped/viz.mp4"
 
-    show_confidence = False
     output_fps = 30
     label_alpha = 0.6
     n_workers = -1
@@ -190,7 +181,6 @@ if __name__ == "__main__":
         recording_dir=recording_dir,
         pred_path=pred_path,
         output_path=output_path,
-        show_confidence=show_confidence,
         output_fps=output_fps,
         label_alpha=label_alpha,
         n_workers=n_workers,
