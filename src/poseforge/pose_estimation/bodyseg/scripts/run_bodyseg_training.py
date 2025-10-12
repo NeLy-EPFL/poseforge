@@ -61,7 +61,7 @@ def save_configs(
 def train_bodyseg_model(
     n_epochs: int,
     model_architecture_config: config.ModelArchitectureConfig,
-    model_weights_config: config.ModelWeightsConfig | None,
+    model_weights_config: config.ModelWeightsConfig,
     loss_config: config.LossConfig,
     training_data_config: config.TrainingDataConfig,
     optimizer_config: config.OptimizerConfig,
@@ -121,52 +121,52 @@ def print_model_summary(training_data_config, model):
 if __name__ == "__main__":
     import tyro
 
-    # tyro.cli(
-    #     train_bodyseg_model,
-    #     prog=f"python {Path(__file__).name}",
-    #     description="Train a 3D body segmentation model using pretrained feature extractor.",
-    # )
+    tyro.cli(
+        train_bodyseg_model,
+        prog=f"python {Path(__file__).name}",
+        description="Train a 3D body segmentation model using pretrained feature extractor.",
+    )
 
     # Example using native Python function calls:
-    model_architecture_config = config.ModelArchitectureConfig()
-    model_weights_config = config.ModelWeightsConfig(
-        feature_extractor_weights="bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch001_step002000.feature_extractor.pth",
-        model_weights=None,
-    )
-    loss_config = config.LossConfig()
-    data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
-    train_data_dirs = [
-        data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
-        for fly in range(1, 5)  # flies 1-4
-        for trial in range(1, 6)  # trials 1-5
-    ]
-    val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
-    training_data_config = config.TrainingDataConfig(
-        train_data_dirs=[str(path) for path in train_data_dirs],
-        val_data_dirs=[str(path) for path in val_data_dirs],
-        input_image_size=(256, 256),
-        atomic_batch_n_samples=32,
-        atomic_batch_n_variants=4,
-        train_batch_size=32,
-        val_batch_size=32,
-        n_workers=8,
-    )
-    optimizer_config = config.OptimizerConfig()
-    training_artifacts_config = config.TrainingArtifactsConfig(
-        output_basedir="bulk_data/pose_estimation/bodyseg/trial_20251012a/",
-        logging_interval=10,  # 1000
-        checkpoint_interval=100,  # 1000
-        validation_interval=100,  # 1000
-        n_batches_per_validation=100,  # 300
-    )
-    train_bodyseg_model(
-        n_epochs=10,
-        model_architecture_config=model_architecture_config,
-        model_weights_config=model_weights_config,
-        loss_config=loss_config,
-        training_data_config=training_data_config,
-        optimizer_config=optimizer_config,
-        training_artifacts_config=training_artifacts_config,
-        seed=42,
-        half_batch_size_for_debugging=True,
-    )
+    # model_architecture_config = config.ModelArchitectureConfig()
+    # model_weights_config = config.ModelWeightsConfig(
+    #     feature_extractor_weights="bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch001_step002000.feature_extractor.pth",
+    #     model_weights=None,
+    # )
+    # loss_config = config.LossConfig()
+    # data_basedir = Path("bulk_data/pose_estimation/atomic_batches")
+    # train_data_dirs = [
+    #     data_basedir / f"BO_Gal4_fly{fly}_trial{trial:03d}"
+    #     for fly in range(1, 5)  # flies 1-4
+    #     for trial in range(1, 6)  # trials 1-5
+    # ]
+    # val_data_dirs = [data_basedir / f"BO_Gal4_fly1_trial001"]
+    # training_data_config = config.TrainingDataConfig(
+    #     train_data_dirs=[str(path) for path in train_data_dirs],
+    #     val_data_dirs=[str(path) for path in val_data_dirs],
+    #     input_image_size=(256, 256),
+    #     atomic_batch_n_samples=32,
+    #     atomic_batch_n_variants=4,
+    #     train_batch_size=32,
+    #     val_batch_size=32,
+    #     n_workers=8,
+    # )
+    # optimizer_config = config.OptimizerConfig()
+    # training_artifacts_config = config.TrainingArtifactsConfig(
+    #     output_basedir="bulk_data/pose_estimation/bodyseg/trial_20251011b/",
+    #     logging_interval=10,  # 1000
+    #     checkpoint_interval=100,  # 1000
+    #     validation_interval=100,  # 1000
+    #     n_batches_per_validation=100,  # 300
+    # )
+    # train_bodyseg_model(
+    #     n_epochs=10,
+    #     model_architecture_config=model_architecture_config,
+    #     model_weights_config=model_weights_config,
+    #     loss_config=loss_config,
+    #     training_data_config=training_data_config,
+    #     optimizer_config=optimizer_config,
+    #     training_artifacts_config=training_artifacts_config,
+    #     seed=42,
+    #     half_batch_size_for_debugging=True,
+    # )

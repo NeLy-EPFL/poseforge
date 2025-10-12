@@ -1,0 +1,76 @@
+#!/bin/bash -l
+
+#SBATCH --job-name bodyseg-training
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 100GB
+#SBATCH --time 48:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/bodyseg_training/output.log
+
+echo "Hello from $(hostname)"
+
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+cd $HOME/poseforge
+
+training_cli_path="src/poseforge/pose_estimation/bodyseg/scripts/run_bodyseg_training.py"
+training_trial_name="trial_20251012b"
+
+echo "Training starting at $(date)"
+
+python -u $training_cli_path \
+    --n_epochs 50 \
+    --seed 42 \
+    --model-architecture-config.n-classes 29 \
+    --model-architecture-config.final-upsampler-n-hidden-channels 32 \
+    --model-architecture-config.confidence-method entropy \
+    --model-weights-config.feature-extractor-weights \
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch009_step003055.feature_extractor.pth" \
+    --loss-config.weight-dice 1.0 \
+    --loss-config.weight-ce 1.0 \
+    --training-data-config.train-data-dirs \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial005" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly2_trial005" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly3_trial005" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial001" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial002" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial003" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial004" \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly4_trial005" \
+    --training-data-config.val-data-dirs \
+        "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001" \
+    --training-data-config.input-image-size 256 256 \
+    --training-data-config.atomic-batch-n-samples 32 \
+    --training-data-config.atomic-batch-n-variants 4 \
+    --training-data-config.train-batch-size 160 \
+    --training-data-config.val-batch-size 256 \
+    --training-data-config.n-workers 8 \
+    --optimizer-config.learning-rate-encoder 3e-5 \
+    --optimizer-config.learning-rate-deconv 3e-4 \
+    --optimizer-config.learning-rate-segmentation-head 3e-4 \
+    --optimizer-config.weight-decay 1e-5 \
+    --training-artifacts-config.output-basedir \
+        "bulk_data/pose_estimation/bodyseg/trial_20251012b/" \
+    --training-artifacts-config.logging-interval 10 \
+    --training-artifacts-config.checkpoint-interval 1000 \
+    --training-artifacts-config.validation-interval 1000 \
+    --training-artifacts-config.n-batches-per-validation 100
+
+echo "Training ends at $(date)"
