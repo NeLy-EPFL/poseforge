@@ -7,7 +7,6 @@ import shutil
 import tempfile
 import os
 import h5py
-from distinctipy import get_colors
 from collections import defaultdict
 from pathlib import Path
 from tqdm import tqdm
@@ -21,7 +20,10 @@ from poseforge.simulate_nmf.constants import (
     legs,
     leg_keypoints_canonical,
 )
-from poseforge.util import configure_matplotlib_style
+from poseforge.util.plot import (
+    configure_matplotlib_style,
+    get_segmentation_color_palette,
+)
 
 configure_matplotlib_style()
 
@@ -678,17 +680,7 @@ def visualize_subsegment(
     assert keys[0] == "Background"
     assert keys[1] == "OtherSegments"
     assert keys[2] == "Thorax"
-    color_palette = [
-        np.array([0.0, 0.0, 0.0]),  # Background
-        np.array([0.5, 0.5, 0.5]),  # OtherSegments
-        np.array([0.75, 0.75, 0.75]),  # Thorax
-    ]
-    color_palette += get_colors(
-        max_num_labels - 3,
-        exclude_colors=color_palette,
-        colorblind_type="Deuteranomaly",
-        rng=42,
-    )
+    color_palette = get_segmentation_color_palette(max_num_labels)
 
     # Make temp directory for visualizations
     temp_dir = Path(
