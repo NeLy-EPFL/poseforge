@@ -5,33 +5,7 @@ import logging
 from pathlib import Path
 
 import poseforge.pose_estimation.bodyseg.config as config
-from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
-
-
-class DecoderBlock(nn.Module):
-    def __init__(self, in_channels, skip_channels, out_channels):
-        super(DecoderBlock, self).__init__()
-        self.upsample = nn.ConvTranspose2d(
-            in_channels, in_channels, kernel_size=2, stride=2
-        )
-        self.conv1 = nn.Conv2d(
-            in_channels + skip_channels, out_channels, kernel_size=3, padding=1
-        )
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x, skip):
-        x = self.upsample(x)
-        x = torch.cat([x, skip], dim=1)  # Concatenate along channel dimension
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu(x)
-        return x
+from src.poseforge.pose_estimation.common import ResNetFeatureExtractor, DecoderBlock
 
 
 class BodySegmentationModel(nn.Module):
