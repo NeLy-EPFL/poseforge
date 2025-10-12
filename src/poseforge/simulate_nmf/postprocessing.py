@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.ndimage as ndimage
 import imageio.v2 as imageio
