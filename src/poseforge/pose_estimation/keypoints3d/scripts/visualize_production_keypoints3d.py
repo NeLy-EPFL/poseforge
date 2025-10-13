@@ -514,8 +514,8 @@ def visualize_predictions(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013a")
-    epochs_to_try = list(range(0, 21, 2))
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
+    epochs_to_try = list(range(0, 10, 2))
     recordings = ["20250613-fly1b-013"]
 
     for recording in recordings:
