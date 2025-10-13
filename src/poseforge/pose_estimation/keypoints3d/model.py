@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 import poseforge.pose_estimation.keypoints3d.config as config
-from poseforge.pose_estimation.feature_extractor import ResNetFeatureExtractor
+from poseforge.pose_estimation.common import ResNetFeatureExtractor, DecoderBlock
 
 
 class Pose2p5DModel(nn.Module):
@@ -41,9 +41,8 @@ class Pose2p5DModel(nn.Module):
         depth_max: float,
         xy_temperature: float,
         depth_temperature: float,
-        upsample_n_layers: int = 3,
-        upsample_n_hidden_channels: int = 256,
-        depth_n_hidden_channels: int = 256,
+        upsample_core_out_channels: int = 64,
+        depth_hidden_channels: int = 64,
         confidence_method: str = "entropy",
         groupnorm_n_groups: int = 32,
         pose_head_init_std: float = 1e-3,
@@ -61,10 +60,9 @@ class Pose2p5DModel(nn.Module):
                 heatmaps.
             depth_temperature (float): Temperature for soft-argmax in depth
                 logits.
-            upsample_n_layers (int): Number of upsampling layers (deconvs).
-            upsample_n_hidden_channels (int): Number of hidden channels in
+            upsample_core_out_channels (int): Number of hidden channels in
                 upsampling layers.
-            depth_n_hidden_channels (int): Number of hidden channels in
+            depth_hidden_channels (int): Number of hidden channels in
                 depth head.
             confidence_method (str): Method to compute confidence scores in
                 soft argmax of x-y heatmaps and depth logits. Options:
@@ -79,15 +77,13 @@ class Pose2p5DModel(nn.Module):
         """
         super().__init__()
         self.n_keypoints = n_keypoints
-        self.feature_extractor = feature_extractor
         self.depth_n_bins = depth_n_bins
         self.depth_min = depth_min
         self.depth_max = depth_max
         self.xy_temperature = xy_temperature
         self.depth_temperature = depth_temperature
-        self.upsample_n_layers = upsample_n_layers
-        self.upsample_n_hidden_channels = upsample_n_hidden_channels
-        self.depth_n_hidden_channels = depth_n_hidden_channels
+        self.upsample_core_out_channels = upsample_core_out_channels
+        self.depth_hidden_channels = depth_hidden_channels
         self.confidence_method = confidence_method.lower()
         self.groupnorm_n_groups = groupnorm_n_groups
         self.pose_head_init_std = pose_head_init_std
@@ -99,10 +95,10 @@ class Pose2p5DModel(nn.Module):
                 'Must be "entropy" or "peak".'
             )
         if (
-            (upsample_n_hidden_channels % groupnorm_n_groups) != 0
-            or (depth_n_hidden_channels % groupnorm_n_groups) != 0
-            or groupnorm_n_groups > upsample_n_hidden_channels
-            or groupnorm_n_groups > depth_n_hidden_channels
+            (upsample_core_out_channels % groupnorm_n_groups) != 0
+            or (depth_hidden_channels % groupnorm_n_groups) != 0
+            or groupnorm_n_groups > upsample_core_out_channels
+            or groupnorm_n_groups > depth_hidden_channels
         ):
             raise ValueError(
                 "groupnorm_n_groups must be a divisor of "
@@ -110,21 +106,39 @@ class Pose2p5DModel(nn.Module):
                 "and it cannot be greater than either of them."
             )
 
-        # Build upsampling core. This is the first level of processing after the ResNet
-        # feature extractor, shared by both the heatmap head and the depth head.
-        self.upsampling_core = self._build_upsampling_core()
+        self.feature_extractor = feature_extractor
+
+        # Create decoder core with skipped connection for upsampling
+        # We use decoder4/3/2 to mirror layers2/3/4 in the ResNet encoder
+        # Note that when upsampling, we actually go in the reverse order (4-3-2) from
+        # the bottleneck. We skip "decoder1" because decoder2 already produces a 64x64
+        # feature map (stride 4 compared to the input). This is already a good
+        # resolution to predict keypoint heatmaps from.
+        assert feature_extractor.output_channels == 512  # expected from ResNet18 layer4
+        self.dec_layer4 = DecoderBlock(512, 256, 256)  # 512ch 8x8 -> 256ch 16x16
+        self.dec_layer3 = DecoderBlock(256, 128, 128)  # 256ch 16x16 -> 128ch 32x32
+        # 128ch 32x32 -> 64ch 64x64
+        self.dec_layer2 = DecoderBlock(128, 64, upsample_core_out_channels)
 
         # Heatmap head for (x, y) keypoint locations
-        self.heatmap_head = self._build_heatmap_head()
+        self.heatmap_head = self._build_heatmap_head(
+            in_channels=upsample_core_out_channels, out_channels=n_keypoints
+        )
 
         # Depth head for distance from camera
-        self.depth_head = self._build_depth_head()
-        # Precompute depth bin centers
-        self.register_buffer(
-            "depth_bin_centers",
-            torch.linspace(depth_min, depth_max, depth_n_bins, dtype=torch.float32),
-            persistent=False,
+        self.depth_head = self._build_depth_head(
+            in_channels=upsample_core_out_channels,
+            hidden_channels=depth_hidden_channels,
+            n_keypoints=n_keypoints,
+            depth_n_bins=depth_n_bins,
         )
+
+        # Precompute depth bin centers
+        depth_bin_centers = torch.linspace(
+            depth_min, depth_max, depth_n_bins, dtype=torch.float32
+        )
+        self.register_buffer("depth_bin_centers", depth_bin_centers, persistent=False)
+        self._first_time_forward = True
 
     @classmethod
     def create_architecture_from_config(
@@ -148,9 +162,8 @@ class Pose2p5DModel(nn.Module):
             depth_max=architecture_config.depth_max,
             xy_temperature=architecture_config.xy_temperature,
             depth_temperature=architecture_config.depth_temperature,
-            upsample_n_layers=architecture_config.upsample_n_layers,
-            upsample_n_hidden_channels=architecture_config.upsample_n_hidden_channels,
-            depth_n_hidden_channels=architecture_config.depth_n_hidden_channels,
+            upsample_core_out_channels=architecture_config.upsample_core_out_channels,
+            depth_hidden_channels=architecture_config.depth_hidden_channels,
             confidence_method=architecture_config.confidence_method,
             groupnorm_n_groups=architecture_config.groupnorm_n_groups,
             pose_head_init_std=architecture_config.pose_head_init_std,
@@ -193,60 +206,36 @@ class Pose2p5DModel(nn.Module):
         )
         logging.info("Set up feature extractor from config")
 
-    def _build_upsampling_core(self) -> nn.Sequential:
-        layers = []
-        for i in range(self.upsample_n_layers):
-            if i == 0:
-                in_channels = self.feature_extractor.output_channels
-            else:
-                in_channels = self.upsample_n_hidden_channels
-            deconv = nn.ConvTranspose2d(
-                in_channels=in_channels,
-                out_channels=self.upsample_n_hidden_channels,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=False,  # no bias because groupnorm already normalizes it
-            )
-            groupnorm = nn.GroupNorm(
-                self.groupnorm_n_groups, self.upsample_n_hidden_channels
-            )
-            relu = nn.ReLU(inplace=True)
-
-            # Initialize layers weights using Kaiming normal initialization
-            nn.init.kaiming_normal_(deconv.weight, mode="fan_out", nonlinearity="relu")
-            nn.init.constant_(groupnorm.weight, 1)
-            nn.init.constant_(groupnorm.bias, 0)
-
-            layers.extend([deconv, groupnorm, relu])
-        return nn.Sequential(*layers)
-
-    def _build_heatmap_head(self) -> nn.Sequential:
+    def _build_heatmap_head(self, in_channels: int, out_channels: int) -> nn.Sequential:
+        # Use kernel_size=3 to collect some spatial information, but keep the same
+        # feature map size: padding = (k-1)//2, stride=1
         conv = nn.Conv2d(
-            self.upsample_n_hidden_channels, self.n_keypoints, kernel_size=1, bias=True
+            in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True
         )
-
         # Initialize conv layer weights using normal initialization with small std
         # (this is not followed by ReLU, so Kaiming init is not appropriate here)
         nn.init.normal_(conv.weight, std=self.pose_head_init_std)
         nn.init.zeros_(conv.bias)
-
         return conv
 
-    def _build_depth_head(self) -> nn.Sequential:
+    def _build_depth_head(
+        self,
+        in_channels: int,
+        hidden_channels: int,
+        n_keypoints: int,
+        depth_n_bins: int,
+    ) -> nn.Sequential:
         adaptive_pool = nn.AdaptiveAvgPool2d(1)
+        # Initialize conv layer weights using normal initialization with small std
+        # (this is not followed by ReLU, so Kaiming init is not appropriate here)
         conv = nn.Conv2d(
-            self.upsample_n_hidden_channels,
-            self.depth_n_hidden_channels,
-            kernel_size=1,
-            bias=False,
+            in_channels, hidden_channels, kernel_size=3, stride=1, padding=1, bias=False
         )
-        groupnorm = nn.GroupNorm(self.groupnorm_n_groups, self.depth_n_hidden_channels)
+        groupnorm = nn.GroupNorm(self.groupnorm_n_groups, hidden_channels)
         relu = nn.ReLU(inplace=True)
         flatten = nn.Flatten()
-        fc = nn.Linear(
-            self.depth_n_hidden_channels, self.n_keypoints * self.depth_n_bins
-        )
+        fc = nn.Linear(hidden_channels, n_keypoints * depth_n_bins)
+        reshape = nn.Unflatten(1, (n_keypoints, depth_n_bins))
 
         # Initialize layers weights using Kaiming normal initialization
         nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
@@ -256,7 +245,7 @@ class Pose2p5DModel(nn.Module):
         nn.init.normal_(fc.weight, std=self.pose_head_init_std)
         nn.init.zeros_(fc.bias)
 
-        return nn.Sequential(adaptive_pool, conv, groupnorm, relu, flatten, fc)
+        return nn.Sequential(adaptive_pool, conv, groupnorm, relu, flatten, fc, reshape)
 
     @staticmethod
     def _softmax_with_temp(
@@ -382,8 +371,7 @@ class Pose2p5DModel(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
-            x (torch.Tensor): Input tensor of shape (n_batches, n_channels,
-                n_rows, n_cols).
+            x (torch.Tensor): Input tensor (batch_size, 3, 256, 256).
 
         Returns:
             dict with keys:
@@ -400,46 +388,101 @@ class Pose2p5DModel(nn.Module):
                     predictions of shape (n_batches, n_keypoints).
                 "conf_depth": (torch.Tensor) Confidence scores for depth
                     predictions of shape (n_batches, n_keypoints).
+
+        We use a UNet-like architecture with skip connections:
+
+        Encoder (downsampling)     Decoder (upsampling)
+        ──────────────────────     ────────────────────
+          e0: 64ch
+                │
+                │
+                ↓                 **d1: upsample_core_out_channels 64x64**
+          e1: 64ch 64x64            (end of upsampling core)
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer2: 128(up)+64(skip)->upsample_core_out_channels
+                ↓                         ↑(up)           32x32(up)+64x64(skip)->64x64
+          e2: 128ch 32x32           d2: 128ch 32x32
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer3: 256(up)+128(skip)->128 ch
+                ↓                         ↑(up)           16x16(up)+32x32(skip)->32x32
+          e3: 256ch 16x16           d3: 256ch 16x16
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer4: 512(up)+256(skip)->256 ch
+                ↓                         ↑(up)           8x8(up)+16x16(skip)->16x16
+          e4: 512ch 8x8             d4: 512ch 8x8
+                |                         ↑
+                └──(bottleneck/identity)──┘
         """
-        batch_size, _, nrows_in, ncols_in = x.shape
+        # Run feature extractor
+        e0, e1, e2, e3, e4 = self.feature_extractor.forward(
+            x, return_intermediates=True
+        )
 
-        # Run (pretrained) feature extractor (e.g. ResNet-18)
-        features = self.feature_extractor(x)
+        d4 = e4  # this is just the bottleneck
 
-        # Run upsampling core (deconv layers)
-        up = self.upsampling_core(features)
+        # Upsample with skip connections
+        d3 = self.dec_layer4(d4, e3)
+        d2 = self.dec_layer3(d3, e2)
+        d1 = self.dec_layer2(d2, e1)  # (N, upsample_core_out_channels, 64, 64)
 
         # Compute x-y heatmaps
-        # Note heatmaps are basically matrices of logits
-        heatmaps = self.heatmap_head(up)  # (N, n_keypoints, nrows_out, ncols_out)
-        # Decode x-y coordinates from heatmaps using soft-argmax
-        # xy_output_coords: shape (N, n_keypoints, 2); xy_conf: shape (N, n_keypoints)
-        xy_output_coords, xy_conf = self._soft_argmax_2d(heatmaps)
+        # Compute logits using heatmap head
+        heatmaps = self.heatmap_head(d1)  # (N, n_keypoints, nrows_out, ncols_out)
+        # Decode x-y coordinates from logits using soft-argmax
+        # xy_px_out: x, y in heatmap pixel space, shape (N, n_keypoints, 2)
+        # xy_conf: shape (N, n_keypoints)
+        xy_px_out, xy_conf = self._soft_argmax_2d(heatmaps)
 
-        # Map to input image pixel coordinates (account for output stride)
-        _, _, nrows_out, ncols_out = heatmaps.shape
-        stride_rows = nrows_in / nrows_out
-        stride_cols = ncols_in / ncols_out
-        x_px_in = xy_output_coords[..., 0] * stride_cols
-        y_px_in = xy_output_coords[..., 1] * stride_rows
-        xy_input_coords = torch.stack([x_px_in, y_px_in], dim=-1)  # (N, n_keypoints, 2)
+        # Map to input image pixel coordinates (input images are 256x256, but heatmaps
+        # are predicted at 64x64, so there is a stride of 4)
+        stride = 4
+        xy_px_in = xy_px_out * stride  # (N, n_keypoints, 2)
 
-        # Compute depth distributions (logits)
-        depth_logits = self.depth_head(up).view(
-            batch_size, self.n_keypoints, self.depth_n_bins
-        )
+        # Compute depth distributions
+        # Compute logits using depth head
+        depth_logits = self.depth_head(d1)  # (N, n_keypoints, depth_n_bins)
+        # Decode depth from logits using soft-argmax
         # depth_pos and depth_conf both of shape (N, n_keypoints)
         depth_pos, depth_conf = self._soft_argmax_1d(depth_logits)
+
+        # If this is the first forward pass, check if the shapes are as expected
+        if self._first_time_forward:
+            batch_size = x.shape[0]
+            assert self.feature_extractor.input_size == (256, 256)
+            assert x.shape == (batch_size, 3, 256, 256)
+            assert e0.shape == (batch_size, 64, 128, 128)
+            assert e1.shape == (batch_size, 64, 64, 64)
+            assert e2.shape == (batch_size, 128, 32, 32)
+            assert e3.shape == (batch_size, 256, 16, 16)
+            assert e4.shape == (batch_size, 512, 8, 8)
+            assert d4.shape == (batch_size, 512, 8, 8)
+            assert d3.shape == (batch_size, 256, 16, 16)
+            assert d2.shape == (batch_size, 128, 32, 32)
+            assert d1.shape == (batch_size, self.upsample_core_out_channels, 64, 64)
+
+            heatmap_size = heatmaps.shape[-2:]
+            assert heatmaps.shape == (batch_size, self.n_keypoints, *heatmap_size)
+            assert xy_px_in.shape == (batch_size, self.n_keypoints, 2)
+            assert xy_conf.shape == (batch_size, self.n_keypoints)
+            assert xy_px_out.shape == (batch_size, self.n_keypoints, 2)
+            assert stride == self.feature_extractor.input_size[0] / heatmap_size[0]
+            assert stride == self.feature_extractor.input_size[1] / heatmap_size[1]
+
+            depth_n_bins = self.depth_n_bins
+            assert depth_logits.shape == (batch_size, self.n_keypoints, depth_n_bins)
+            assert depth_pos.shape == (batch_size, self.n_keypoints)
+            assert depth_conf.shape == (batch_size, self.n_keypoints)
+
+            self._first_time_forward = False
 
         return {
             "xy_heatmaps": heatmaps,
             "depth_logits": depth_logits,
-            "pred_xy": xy_input_coords,
+            "pred_xy": xy_px_in,
             "pred_depth": depth_pos,
             "conf_xy": xy_conf,
             "conf_depth": depth_conf,
-            "heatmap_stride_rows": stride_rows,
-            "heatmap_stride_cols": stride_cols,
+            "heatmap_stride": stride,
         }
 
 
@@ -455,7 +498,7 @@ class Pose2p5DLoss(nn.Module):
         xy_loss_weight: float = 4.0,
         depth_ce_loss_weight: float = 1.0,
         depth_l1_loss_weight: float = 0.25,
-        clamp_labels: bool = True,
+        oob_treatment: str = "drop",
     ):
         """
         Args:
@@ -470,8 +513,9 @@ class Pose2p5DLoss(nn.Module):
             depth_ce_loss_weight (float): Weight for cross-entropy term in
                 depth loss.
             depth_l1_loss_weight (float): Weight for L1 term in depth loss.
-            clamp_labels (bool): If True, clamp out-of-bounds labels for
-                both x-y and depth to the valid range.
+            oob_treatment (str): What to do with out-of-bounds depth
+                labels. Options: "clamp" (clamp to valid range), "drop"
+                (ignore OOB labels) or "ignore".
         """
         super().__init__()
         self.heatmap_loss_func = heatmap_loss_func.lower()
@@ -480,12 +524,17 @@ class Pose2p5DLoss(nn.Module):
         self.xy_loss_weight = xy_loss_weight
         self.depth_ce_loss_weight = depth_ce_loss_weight
         self.depth_l1_loss_weight = depth_l1_loss_weight
-        self.clamp_labels = clamp_labels
+        self.oob_treatment = oob_treatment.lower()
 
         # Check input validity
         if heatmap_loss_func not in ["mse", "kl"]:
             raise ValueError(
                 f'Invalid heatmap_loss: {heatmap_loss_func}. Must be "mse" or "kl".'
+            )
+        if oob_treatment not in ["clamp", "drop", "ignore"]:
+            raise ValueError(
+                f"Invalid depth_oob_treatment: {oob_treatment}. "
+                'Must be "clamp", "drop" or "ignore".'
             )
 
     @classmethod
@@ -505,7 +554,7 @@ class Pose2p5DLoss(nn.Module):
             xy_loss_weight=loss_config.xy_loss_weight,
             depth_ce_loss_weight=loss_config.depth_ce_loss_weight,
             depth_l1_loss_weight=loss_config.depth_l1_loss_weight,
-            clamp_labels=loss_config.clamp_labels,
+            oob_treatment=loss_config.oob_treatment,
         )
 
         logging.info("Created Pose2p5DLoss from loss config")
@@ -657,85 +706,92 @@ class Pose2p5DLoss(nn.Module):
         l1_loss = F.l1_loss(depth_expected, z_labels, reduction="mean")
         return l1_loss
 
-    @staticmethod
-    def _check_xy_labels(
-        xy_labels_heatmap: torch.Tensor,
-        heatmap_shape: tuple[int, int],
-        clamp_to_range: bool = False,
-    ) -> tuple[bool, torch.Tensor]:
-        """Check if x-y labels are within the heatmap dimensions. Log a
-        warning if any label is out of bounds.
-
-        Args:
-            xy_labels_heatmap (torch.Tensor): X-Y coordinates of shape
-                (batch_size, n_keypoints, 2) in heatmap pixel space (NOT
-                input image pixel space!).
-            heatmap_shape (tuple[int, int]): Heatmap dimensions
-                (n_rows, n_cols).
-            clamp_to_range (bool): If True, clamp out-of-bounds labels to
-                the valid range and return the clamped version of
-                xy_labels_heatmap. If False, the original labels are
-                returned.
-
-        Returns:
-            bool: True if any label is out of bounds, False otherwise.
-            torch.Tensor: Clamped version of xy_labels_heatmap if
-                clamp_to_range is True, original xy_labels_heatmap
-                otherwise.
-        """
-        n_rows, n_cols = heatmap_shape
-        min_xy = torch.tensor([0, 0], device=xy_labels_heatmap.device)
-        max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=xy_labels_heatmap.device)
-        is_bad = (xy_labels_heatmap < 0).any() or (xy_labels_heatmap > max_xy).any()
-        if is_bad:
-            logging.warning(
-                "Some x-y labels are outside the heatmap dimensions. "
-                "This may cause bad values in the loss."
-            )
-
-        if clamp_to_range:
-            xy_labels_heatmap = torch.clamp(xy_labels_heatmap, min=min_xy, max=max_xy)
-
-        return is_bad, xy_labels_heatmap
-
-    @staticmethod
-    def _check_depth_labels(
+    def _get_oob_masks(
+        self,
+        xy_labels_in_output_dim: torch.Tensor,
         depth_labels: torch.Tensor,
+        heatmap_size: tuple[int, int],
         bin_values: torch.Tensor,
-        clamp_to_range: bool = False,
-    ) -> tuple[bool, torch.Tensor]:
-        """Check if depth labels are within the range of depth bins. Log a
-        warning if any label is out of bounds.
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # heatmap_size is (n_rows, n_cols)
+        n_rows, n_cols = heatmap_size
+        # xy_oob: (batch_size,), .any(dim=1) over keypoints
+        xy_oob = (
+            (xy_labels_in_output_dim[..., 0] < 0)
+            | (xy_labels_in_output_dim[..., 0] >= n_cols)
+            | (xy_labels_in_output_dim[..., 1] < 0)
+            | (xy_labels_in_output_dim[..., 1] >= n_rows)
+        ).any(dim=1)
 
-        Args:
-            depth_labels (torch.Tensor): Ground truth depth values of shape
-                (batch_size, n_keypoints).
-            bin_values (torch.Tensor): Center values (i.e. depths) of each
-                discrete bin. Shape: (depth_n_bins,).
-            clamp_to_range (bool): If True, clamp out-of-bounds labels to
-                the valid range and return the clamped version of
-                depth_labels. If False, the clamping step is skipped and
-                the original labels are returned.
+        depth_too_small = depth_labels < bin_values[0]
+        depth_too_large = depth_labels > bin_values[-1]
+        depth_oob = (depth_too_small | depth_too_large).any(dim=1)  # (batch_size,)
 
-        Returns:
-            bool: True if any label is out of bounds, False otherwise.
-            torch.Tensor: Clamped version of depth_labels if clamp_to_range
-                is True, original depth_labels otherwise.
-        """
-        is_bad = (depth_labels < bin_values[0]).any() or (
-            depth_labels > bin_values[-1]
-        ).any()
-        if is_bad:
+        combined_oob = xy_oob | depth_oob
+        return xy_oob, depth_oob, combined_oob  # all (batch_size,)
+
+    def _treat_oob(
+        self,
+        xy_labels_in_output_dim: torch.Tensor,
+        depth_labels: torch.Tensor,
+        xy_heatmaps: torch.Tensor,
+        depth_logits: torch.Tensor,
+        heatmap_size: tuple[int, int],
+        bin_values: torch.Tensor,
+    ) -> dict[str, torch.Tensor] | None:
+        xy_oob, depth_oob, combined_oob = self._get_oob_masks(
+            xy_labels_in_output_dim, depth_labels, heatmap_size, bin_values
+        )
+        if combined_oob.any():
+            n_xy_oob = xy_oob.sum().item()
+            n_depth_oob = depth_oob.sum().item()
+            n_combined_oob = combined_oob.sum().item()
             logging.warning(
-                "Some depth labels are outside the range of depth bins. "
-                "This may cause bad values in the loss."
+                f"Found {n_combined_oob} samples with OOB labels "
+                f"({n_xy_oob} with OOB x-y, {n_depth_oob} with OOB depth) "
+                f"out of {xy_labels_in_output_dim.shape[0]} in the current batch. "
+                f"Using oob_treatment='{self.oob_treatment}'."
             )
 
-        if clamp_to_range:
-            dmin, dmax = bin_values[0], bin_values[-1]
-            depth_labels = torch.clamp(depth_labels, min=dmin, max=dmax)
+            device = xy_labels_in_output_dim.device
 
-        return is_bad, depth_labels
+            if self.oob_treatment == "clamp":
+                n_rows, n_cols = heatmap_size
+                min_xy = torch.tensor([0, 0], device=device)
+                max_xy = torch.tensor([n_cols - 1, n_rows - 1], device=device)
+                xy_labels_in_output_dim = torch.clamp(
+                    xy_labels_in_output_dim, min=min_xy, max=max_xy
+                )
+
+                min_depth = bin_values[0]
+                max_depth = bin_values[-1]
+                depth_labels = torch.clamp(depth_labels, min=min_depth, max=max_depth)
+
+            elif self.oob_treatment == "drop":
+                if combined_oob.all():
+                    logging.error(
+                        "All labels are out-of-bounds. This should be very alarming."
+                    )
+                    return None
+                if combined_oob.any():
+                    keep_mask = ~combined_oob  # (batch_size,)
+                    xy_labels_in_output_dim = xy_labels_in_output_dim[keep_mask, :, :]
+                    depth_labels = depth_labels[keep_mask, :]
+                    xy_heatmaps = xy_heatmaps[keep_mask, :, :, :]
+                    depth_logits = depth_logits[keep_mask, :, :]
+
+            elif self.oob_treatment == "ignore":
+                pass  # do nothing
+
+            else:
+                raise ValueError(f"Invalid oob_treatment: {self.oob_treatment}.")
+
+        return {
+            "xy_labels_in_output_dim": xy_labels_in_output_dim,
+            "depth_labels": depth_labels,
+            "xy_heatmaps": xy_heatmaps,
+            "depth_logits": depth_logits,
+        }
 
     def forward(
         self,
@@ -767,23 +823,43 @@ class Pose2p5DLoss(nn.Module):
         """
         xy_heatmaps = pred_dict["xy_heatmaps"]
         depth_logits = pred_dict["depth_logits"]
-        heatmap_stride_rows = pred_dict["heatmap_stride_rows"]
-        heatmap_stride_cols = pred_dict["heatmap_stride_cols"]
-        batch_size, n_keypoints, n_rows_out, n_cols_out = xy_heatmaps.shape
+        heatmap_stride = pred_dict["heatmap_stride"]
+        heatmap_size = xy_heatmaps.shape[-2:]
 
         # Convert xy labels (image coords) -> heatmap coords
-        xy_labels_heatmap = xy_labels.clone()
-        xy_labels_heatmap[..., 0] = xy_labels[..., 0] / heatmap_stride_cols
-        xy_labels_heatmap[..., 1] = xy_labels[..., 1] / heatmap_stride_rows
-        _, xy_labels_heatmap = self._check_xy_labels(
-            xy_labels_heatmap,
-            (n_rows_out, n_cols_out),
-            clamp_to_range=self.clamp_labels,
+        xy_labels_in_output_dim = xy_labels / heatmap_stride
+
+        # Treat out-of-bounds (OOB) labels according to self.oob_treatment
+        oob_treated_data = self._treat_oob(
+            xy_labels_in_output_dim,
+            depth_labels,
+            xy_heatmaps,
+            depth_logits,
+            heatmap_size,
+            bin_values,
         )
+        if oob_treated_data is None:
+            logging.error(
+                "All labels are out-of-bounds. Returning zero loss to avoid NaNs. "
+                "This should be very alarming."
+            )
+            device = xy_labels_in_output_dim.device
+            return {
+                "total_loss": torch.tensor(0.0, device=device),
+                "xy_heatmap_loss": torch.tensor(0.0, device=device),
+                "depth_ce_loss": torch.tensor(0.0, device=device),
+                "depth_l1_loss": torch.tensor(0.0, device=device),
+            }
+        xy_labels_in_output_dim = oob_treated_data["xy_labels_in_output_dim"]
+        depth_labels = oob_treated_data["depth_labels"]
+        xy_heatmaps = oob_treated_data["xy_heatmaps"]
+        depth_logits = oob_treated_data["depth_logits"]
 
         # Expand xy labels to heatmap labels
         heatmap_labels = self._expand_xy_labels_to_gaussian_heatmaps(
-            xy_labels_heatmap, (n_rows_out, n_cols_out), sigma=self.heatmap_sigma
+            xy_labels_in_output_dim,
+            heatmap_size,
+            sigma=self.heatmap_sigma,
         )
 
         # Compute x-y prediction loss on heatmaps
@@ -792,9 +868,6 @@ class Pose2p5DLoss(nn.Module):
         )
 
         # Compute depth losses
-        _, depth_labels = self._check_depth_labels(
-            depth_labels, bin_values, clamp_to_range=self.clamp_labels
-        )
         depth_ce_loss = self._compute_depth_ce_loss(
             depth_logits,
             depth_labels,
