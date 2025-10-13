@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from collections import defaultdict
 from typing import Callable
+from torchsummary import summary
 
 import poseforge.pose_estimation.keypoints3d.config as config
 from poseforge.util import get_hardware_availability
@@ -131,11 +132,16 @@ def test_keypoints3d_models(
     model.load_weights_from_config(
         config.ModelWeightsConfig(model_weights=model_checkpoint_path)
     )
+    print("========== Model Summary ==========")
+    summary(model, input_size=(3, *model.feature_extractor.input_size), device="cpu")
+
+    # Set up loss function if provided
     if loss_config_path:
         loss_func = Pose2p5DLoss.create_from_config(loss_config_path)
     else:
         loss_func = None
     pipeline = Pose2p5DPipeline(model, loss_func, device="cuda", use_float16=True)
+    assert next(model.parameters()).is_cuda, "Model is not on GPU"
 
     # Set up datasets
     datasets = _setup_datasets(
@@ -197,9 +203,7 @@ def test_keypoints3d_models(
             n_workers=plotting_n_workers,
         )
         visualizer.plot_keypoints_over_time(output_dir / "keypoint_pos_timeseries.png")
-        print(output_dir / "keypoint_pos_timeseries.png")
         visualizer.make_summary_video(output_dir / "keypoint_3d_visualization.mp4")
-        print(output_dir / "keypoint_3d_visualization.mp4")
 
 
 if __name__ == "__main__":
@@ -215,14 +219,15 @@ if __name__ == "__main__":
     ]
     simulation_data_basedir = "bulk_data/nmf_rendering"
     synthetic_videos_basedir = "bulk_data/style_transfer/production/translated_videos/"
-    model_architecture_config_path = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/configs/model_architecture_config.yaml"
-    model_checkpoint_path = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/checkpoints/epoch13_step9167.model.pth"
-    loss_config_path = (
-        "bulk_data/pose_estimation/keypoints3d/trial_20251007a/configs/loss_config.yaml"
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b/")
+    model_architecture_config_path = str(
+        model_dir / "configs/model_architecture_config.yaml"
     )
+    loss_config_path = str(model_dir / "configs/loss_config.yaml")
+    model_checkpoint_path = str(model_dir / "checkpoints/epoch8_step5000.model.pth")
+    output_basedir = model_dir / "inference"
     batch_size = 32
     original_image_size = (464, 464)
-    output_basedir = "bulk_data/pose_estimation/keypoints3d/trial_20251007a/inference/"
     simulations = {
         ("BO_Gal4_fly5_trial005", "segment_003", "subsegment_002"),
     }
