@@ -10,11 +10,7 @@ from pathlib import Path
 from torchsummary import summary
 
 import poseforge.pose.keypoints3d.config as config
-from poseforge.pose.keypoints3d import (
-    Pose2p5DModel,
-    Pose2p5DLoss,
-    Pose2p5DPipeline,
-)
+from poseforge.pose.keypoints3d import Pose2p5DModel, Pose2p5DLoss, Pose2p5DPipeline
 from poseforge.util import get_hardware_availability
 
 

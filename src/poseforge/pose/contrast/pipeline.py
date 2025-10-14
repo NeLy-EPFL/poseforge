@@ -14,11 +14,8 @@ from poseforge.pose.data.synthetic import (
     collapse_batch,
     init_atomic_dataset_and_dataloader,
 )
-from poseforge.pose.contrast.model import (
-    ContrastivePretrainingModel,
-    InfoNCELoss,
-)
-from poseforge.util import (
+from poseforge.pose.contrast.model import ContrastivePretrainingModel, InfoNCELoss
+from poseforge.util.sys import (
     clear_memory_cache,
     check_mixed_precision_status,
     set_random_seed,
@@ -275,7 +272,7 @@ class ContrastivePretrainingPipeline:
         # Check if loss function is provided
         if self.loss_func is None:
             raise ValueError("Loss function must be provided for training")
-        
+
         # Set models to evaluation mode
         self.model.eval()
 

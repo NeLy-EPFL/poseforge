@@ -9,15 +9,9 @@ from torchsummary import summary
 import poseforge.pose.keypoints3d.config as config
 from poseforge.util import get_hardware_availability
 from poseforge.pose.data.synthetic import SimulatedDataSequence
-from poseforge.pose.keypoints3d import (
-    Pose2p5DModel,
-    Pose2p5DLoss,
-    Pose2p5DPipeline,
-)
+from poseforge.pose.keypoints3d import Pose2p5DModel, Pose2p5DLoss, Pose2p5DPipeline
 from poseforge.pose.camera import CameraToWorldMapper
-from poseforge.pose.keypoints3d.visualizer import (
-    SynthDataKeypoints3DVisualizer,
-)
+from poseforge.pose.keypoints3d.visualizer import SynthDataKeypoints3DVisualizer
 
 
 logging.basicConfig(

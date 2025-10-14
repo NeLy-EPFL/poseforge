@@ -14,10 +14,7 @@ from PIL import Image
 from joblib import Parallel, delayed
 from pvio.video_io import write_frames_to_video
 
-from poseforge.pose.keypoints3d.invkin import (
-    run_seqikpy,
-    save_seqikpy_output,
-)
+from poseforge.pose.keypoints3d.invkin import run_seqikpy, save_seqikpy_output
 from poseforge.pose.keypoints3d.visualizer import (
     get_keypoint_color,
     get_skeleton_connections,

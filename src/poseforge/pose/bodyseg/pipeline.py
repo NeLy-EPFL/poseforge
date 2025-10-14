@@ -10,10 +10,7 @@ from itertools import chain
 from tqdm import tqdm
 
 import poseforge.pose.bodyseg.config as config
-from poseforge.pose.bodyseg.model import (
-    BodySegmentationModel,
-    CombinedDiceCELoss,
-)
+from poseforge.pose.bodyseg.model import BodySegmentationModel, CombinedDiceCELoss
 from poseforge.pose.data.synthetic import (
     init_atomic_dataset_and_dataloader,
     atomic_batches_to_simple_batch,
@@ -54,7 +51,7 @@ class BodySegmentationPipeline:
         else:
             self.device_type = "cpu"
         self.use_float16 = use_float16
-        
+
     def _get_half_batch(self, frames_batch, sim_data_batch):
         """Return half of the batch to save memory (for debugging only)."""
         half_batch_size = frames_batch.shape[0] // 2

@@ -110,6 +110,7 @@ def train_bodyseg_model(
 
     logging.info("Training complete")
 
+
 def print_model_summary(training_data_config, model):
     down_in_dim = (3, *training_data_config.input_image_size)
     print("============== Full Model Summary ===============")

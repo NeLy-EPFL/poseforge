@@ -14,10 +14,7 @@ from tqdm import tqdm
 from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
 
 import poseforge.pose.bodyseg.config as config
-from poseforge.pose.bodyseg import (
-    BodySegmentationModel,
-    BodySegmentationPipeline,
-)
+from poseforge.pose.bodyseg import BodySegmentationModel, BodySegmentationPipeline
 from poseforge.util.sys import get_hardware_availability
 from poseforge.util.data import OutputBuffer
 
