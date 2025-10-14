@@ -3,12 +3,12 @@ from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
 
-from poseforge.spotlight.flip_detection_model import (
+from poseforge.spotlight.flip_detection.model import (
     create_model,
     load_checkpoint,
     run_inference,
 )
-from poseforge.spotlight.flip_detection_dataset import get_transforms
+from poseforge.spotlight.flip_detection.dataset import get_transforms
 
 
 if __name__ == "__main__":

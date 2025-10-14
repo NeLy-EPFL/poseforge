@@ -11,23 +11,20 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # Import our custom modules
-from poseforge.spotlight.flip_detection_model import (
+from poseforge.spotlight.flip_detection.model import (
     create_model,
     count_parameters,
     save_checkpoint,
     load_checkpoint,
     run_inference,
 )
-from poseforge.spotlight.flip_detection_dataset import (
+from poseforge.spotlight.flip_detection.dataset import (
     create_data_loaders,
     get_class_distribution,
     build_dataset_dataframe,
     get_transforms,
 )
-from poseforge.spotlight.flip_detection_viz import (
-    evaluate_model,
-    save_training_plot,
-)
+from poseforge.spotlight.flip_detection.viz import evaluate_model, save_training_plot
 from poseforge.util import set_random_seed
 
 
