@@ -116,7 +116,7 @@ def test_bodyseg_model(
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012a")
-    training_stages = [model_dir / "checkpoints/epoch0_step3200.model.pth"]
+    training_stages = [model_dir / "checkpoints/epoch12_step18335.model.pth"]
     output_basedir = model_dir / "inference"
     output_basedir.mkdir(parents=True, exist_ok=True)
     batch_size = 192
