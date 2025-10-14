@@ -29,7 +29,7 @@ poetry install
 > (Do not try to run `pip install -e package-name` directly without `cd`ing into `package-name`. The current directory matters with `pip install -e`.)
 >
 > **Important:** This package also depends on spotlight-tools from [spotlight-control](https://github.com/NeLy-EPFL/spotlight-control) (TODO).
-> **Important:** This package also depends on spotlight-tools from [SeqIKPy](https://github.com/NeLy-EPFL/sequential-inverse-kinematics) (TODO).
+> **Important:** This package also depends on SeqIKPy from [SeqIKPy](https://github.com/NeLy-EPFL/sequential-inverse-kinematics) (TODO).
 
 ## Complete pipeline and code structure
 ### Part I: Simulate motion priors in NeuroMechFly and generate renderings
