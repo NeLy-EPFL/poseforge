@@ -28,7 +28,7 @@ cd $project_root
 # Training
 echo "Start running inference at $(date)"
 
-python -u src/poseforge/pose_estimation/scripts/run_feature_extractor_inference.py \
+python -u src/poseforge/pose/scripts/run_feature_extractor_inference.py \
     --sampling.batch-size 4096 \
     --model.training-stages \
         "epoch000_step000000" \

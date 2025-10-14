@@ -1,7 +1,7 @@
 from pathlib import Path
 from tqdm import tqdm
 
-from poseforge.simulate_nmf.data import load_kinematic_recording
+from poseforge.neuromechfly.data import load_kinematic_recording
 
 
 # Job execution parameters

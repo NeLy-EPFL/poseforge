@@ -29,28 +29,28 @@ poetry install
 > (Do not try to run `pip install -e package-name` directly without `cd`ing into `package-name`. The current directory matters with `pip install -e`.)
 >
 > **Important:** This package also depends on spotlight-tools from [spotlight-control](https://github.com/NeLy-EPFL/spotlight-control) (TODO).
-
+> **Important:** This package also depends on spotlight-tools from [SeqIKPy](https://github.com/NeLy-EPFL/sequential-inverse-kinematics) (TODO).
 
 ## Complete pipeline and code structure
 ### Part I: Simulate motion priors in NeuroMechFly and generate renderings
-1. Run `python src/poseforge/simulate_nmf/scripts/copy_kinematic_recording.py`
+1. Run `python src/poseforge/neuromechfly/scripts/copy_kinematic_recording.py`
     - This script scans data from Aymanns et al. (2022) from the NeLy lab server (also publicly available on Harvard Dataverse: https://doi.org/10.7910/DVN/QQMNQK), extracts key kinematic data, and saves them as pickle files.
-2. Run `python src/poseforge/simulate_nmf/scripts/run_simulation.py`
+2. Run `python src/poseforge/neuromechfly/scripts/run_simulation.py`
     - This script selects non-resting segments from the recorded kinematics from Aymanns et al. Then, it simulates the selected segments using [NeuroMechFly](https://neuromechfly.org/) and saves the visual renderings.
     - Because Aymanns et al. reports _tethered_ fly behaviors, replaying them on flat terrain might result in failures (e.g. fly flipping upside down).  This script includes code that filters out such periods and further splits each segment into several (though typically just one) subsegments.
 
 ### Part II: Preprocess Spotlight behavior recordings
-1. Run `python src/poseforge/spotlight_pipeline/scripts/extract_spotlight_frames.py`
+1. Run `python src/poseforge/spotlight/scripts/extract_spotlight_frames.py`
     - This script processes each Spotlight experimental trial by extracting, aligning, and cropping frames from the behavior video, and saving the processed frames as individual images in an output directory.
 
 > [!NOTE]
 > The following step is only for training the flip detection model. It should not be used during production.
 >
-> 2. Run `python src/poseforge/spotlight_pipeline/scripts/train_flip_detection_model.py`
+> 2. Run `python src/poseforge/spotlight/scripts/train_flip_detection_model.py`
     - This script trains a binary image classifier that detects whether the fly is flipped in the Spotlight arena.
     - Prerequisite: Manual labels of whether the fly is flipped must be supplied. This is done by creating a `manual_label/` subdirectory under the directory containing extracted frames from each Spotlight experimental trial, further creating a `manual_label/flipped` and a `manual_label/not_flipped` subdirectories, and copying the extracted frames into the appropriate folder.
 
-3. Run `python src/poseforge/spotlight_pipeline/scripts/detect_flipped_flies.py`
+3. Run `python src/poseforge/spotlight/scripts/detect_flipped_flies.py`
     - This script generates a label file indicating whether the fly is flipped in each extracted Spotlight behavioral frame. Those in which the fly is flipped will be excluded in subsequent steps.
 
 
@@ -84,37 +84,46 @@ poetry install
 
 
 ### Part IV: Contrastive pretraining on synthetic data
-1. Pre-shuffle the synthetic (and experimental) dataset using `src/poseforge/pose_estimation/scripts/preextract_atomic_batches.py`. This will save small "atomic batches" of data that are always used together during training.
+1. Pre-shuffle the synthetic (and experimental) dataset using `python src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py`. This will save small "atomic batches" of data that are always used together during training.
     - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, one can import the `extract_atomic_batches` function from this file and use it natively within Python (an example is included in the `__main__` section).
     - To run this on the SCITAS cluster (Jed), see `scripts_on_cluster/atomic_batch_extraction`.
 
 > [!NOTE]
 > The following step are only for pretraining the feature extractor with contrastive pretraining. It does not need to be rerun during production.
 > 
-> 2. Pretrain a ResNet18 feature extractor using `src/poseforge/pose_estimation/scripts/run_contrastive_pretraining.py`.
+> 2. Pretrain a ResNet18 feature extractor using `python src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py`.
 >     - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, invoke training natively within Python by uncommenting example code in the `__main__` section.
 >     - To train the model on the SCITAS cluster (Kuma), see `scripts_on_cluster/contrastive_pretraining_training`
 
 > [!NOTE]
 > The following steps are only for sanity-checking and visualizing the outcome of the constrastive pretraining step above. They do not need to be rerun during production. In inference time, the feature extractor will be used as a part of the pose estimation model.
 >
-> 3. Run inference using `src/poseforge/pose_estimation/scripts/run_feature_extractor_inference.py`.
+> 3. Run inference using `python src/poseforge/pose/contrast/scripts/run_feature_extractor_inference.py`.
 >      - The Python file above is a CLI (run it with `-h` to see the help message). An example call of the CLI is included in the `__main__` section of the script. Alternatively, invoke inference natively within Python by uncommenting example code in the `__main__` section.
 >      - To run inference on the SCITAS cluster (Kuma), see `scripts_on_cluster/contrastive_pretraining_inference`. Note that running inference on all data will produce 200–300 GB of data. For quick inspection, it probably suffice to run inference only for one trial, one fly (e.g. `fly5_trial005` reserved for testing).
-> 4. Run `python src/poseforge/pose_estimation/scripts/visualize_latents.py` to generate videos showing the latent-space trajectories of selected behavior snippets.
+> 4. Run `python src/poseforge/pose/contrast/scripts/visualize_latents.py` to generate videos showing the latent-space trajectories of selected behavior snippets.
 
 ### Part V: Generalized pose estimation
 #### Predicting 3D keypoint positions
 > [!NOTE]
 > The following steps are only for training the model and visualizing its performance on synthetic data. They do not need to be rerun during production.
 >
-> 1. Train 3D keypoint detection model using `python src/poseforge/pose_estimation/scripts/run_keypoints3d_training.py`.
+> 1. Train 3D keypoint detection model using `python src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py`.
 >     - This is a CLI (run `python run_keypoints3d_training.py -h` to see usage). However, the `__main__` section of this script also includes a commented-out example of how to run training directly within Python.
->     - See `scripts_on_cluster/keypoints3d_training/` for script(s) used to train the model on the SCITAS cluster. 
-> 2. Visualize the performance of the model on synthetic data using `src/poseforge/pose_estimation/scripts/test_keypoints3d_models.py`. Note that you must select a particular model checkpoint file, and it doesn't necessarily have to be final model after the last epoch (observe validation loss to help decide which epoch to use).
+>     - See `scripts_on_cluster/keypoints3d_training/` for running on the SCITAS cluster. 
+> 2. Visualize the performance of the model on synthetic data using `python src/poseforge/pose/keypoints3d/scripts/test_keypoints3d_models.py`. Note that you must select a particular model checkpoint file, and it doesn't necessarily have to be final model after the last epoch (observe validation loss to help decide which epoch to use).
 
-3. Run inference on Spotlight data using `python src/poseforge/pose_estimation/scripts/run_keypoints3d_inference.py`. This script actually runs prediction using the model state at the end of every other epoch. Combined with the next step, this is meant to help select the best checkpoint to use in production.
-4. Optionally, if you wish to visualize the output of the 3D keypoint detection model, run `python src/poseforge/pose_estimation/scripts/visualize_production_keypoints3d.py`. Use the output to decide which checkpoint to use for production-time inference.
+3. Run inference on Spotlight data by running `python src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_inference.py`. This script actually runs prediction using the model state at the end of every other epoch. Combined with the next step, this is meant to help select the best checkpoint to use in production.
+4. Optionally, if you wish to visualize the output of the 3D keypoint detection model, run `python src/poseforge/pose/keypoints3d/scripts/visualize_production_keypoints3d.py`. Use the output to decide which checkpoint to use for production-time inference.
+5. Run inverse kinematics by running `python src/poseforge/pose/keypoints3d/scripts/run_inverse_kinematics.py`. After inferring joint angles via IK, this script also runs forward kinematics to determine a new set of body-size-constrained 3D keypoint positions.
 
 #### Predicting 2D body segmentation map
-TODO
+> [!NOTE]
+> The following step is only for training the model; it does not have to be rerun in production.
+>
+> 1. Train the model: `python src/poseforge/pose/bodyseg/scripts/run_bodyseg_training.py`
+>     - See `scripts_on_cluster/bodyseg_training` for running on the SCITAS cluster.
+
+2. Run inference using trained mode: `python src/poseforge/pose/bodyseg/scripts/run_bodyseg_inference.py`
+    - Note: you must first select a checkpoint to use (for example, by inspecting the logs). Specify the checkpoint in the `if __name__ == "__main__"` section of this script.
+3. Optionally, visualize the results using `python src/poseforge/pose/bodyseg/scripts/visualize_bodyseg_predictions.py`. Similarly, you must specify a checkpoint to use. See the end of this script.

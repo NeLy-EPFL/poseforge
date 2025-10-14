@@ -22,7 +22,7 @@ echo "Training starting at $(date)"
 
 trial_name="trial_20251011a"
 
-python -u src/poseforge/pose_estimation/contrast/scripts/run_contrastive_pretraining.py \
+python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
     --seed 42 \
     --model-architecture-config.projection-head-hidden-dim 512 \
