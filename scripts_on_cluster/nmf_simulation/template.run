@@ -23,7 +23,7 @@ export PYOPENGL_PLATFORM="egl"
 
 # Define paths
 project_root="/home/$USER/poseforge"
-simulation_cli_path="src/poseforge/simulate_nmf/scripts/run_simulation.py"
+simulation_cli_path="src/poseforge/neuromechfly/scripts/run_simulation.py"
 
 # Setup
 cd $project_root

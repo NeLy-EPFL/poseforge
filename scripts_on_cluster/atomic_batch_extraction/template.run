@@ -19,7 +19,7 @@ conda activate poseforge
 
 # Define paths
 project_root="/home/$USER/poseforge"
-extraction_cli_path="src/poseforge/pose_estimation/scripts/preextract_atomic_batches.py"
+extraction_cli_path="src/poseforge/pose/scripts/preextract_atomic_batches.py"
 
 # Setup
 cd $project_root
