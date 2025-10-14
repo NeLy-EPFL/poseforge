@@ -346,10 +346,10 @@ class BodySegmentationPipeline:
             {
                 "params": list(
                     chain(
-                        self.model.decoder1.parameters(),
-                        self.model.decoder2.parameters(),
-                        self.model.decoder3.parameters(),
-                        self.model.decoder4.parameters(),
+                        self.model.dec_layer1.parameters(),
+                        self.model.dec_layer2.parameters(),
+                        self.model.dec_layer3.parameters(),
+                        self.model.dec_layer4.parameters(),
                     )
                 ),
                 "lr": optimizer_config.learning_rate_deconv,
@@ -389,10 +389,10 @@ class BodySegmentationPipeline:
             tensors={
                 "feature_extractor_params": self.model.feature_extractor.parameters(),
                 "decoder_params": chain(
-                    self.model.decoder1.parameters(),
-                    self.model.decoder2.parameters(),
-                    self.model.decoder3.parameters(),
-                    self.model.decoder4.parameters(),
+                    self.model.dec_layer1.parameters(),
+                    self.model.dec_layer2.parameters(),
+                    self.model.dec_layer3.parameters(),
+                    self.model.dec_layer4.parameters(),
                 ),
                 "final_upsampler_params": self.model.final_upsampler.parameters(),
                 "classifier_params": self.model.classifier.parameters(),

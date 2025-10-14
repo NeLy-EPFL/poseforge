@@ -68,7 +68,6 @@ def test_bodyseg_model(
 
     # Make an output buffer - output data for multiple videos will arrive out of sync
     def save_predictions(input_video_path, data_items):
-        has_confidence = data_items[0][1] is not None
         exp_trial_name = "_".join(input_video_path.parts[-3:])
         out_dir = output_basedir / exp_trial_name
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -76,12 +75,11 @@ def test_bodyseg_model(
             pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
             ds = f.create_dataset("pred_segmap", data=pred_segmaps, dtype="uint8")
             ds.attrs["class_labels"] = pipeline.class_labels
-            if has_confidence:
-                confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-                ds = f.create_dataset("pred_confidence", data=confs, dtype="uint8")
-                # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
-                ds.attrs["scale"] = 100
-                ds.attrs["method"] = model.confidence_method
+            confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
+            ds = f.create_dataset("pred_confidence", data=confs, dtype="uint8")
+            # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
+            ds.attrs["scale"] = 100
+            ds.attrs["method"] = model.confidence_method
 
     output_buffer = OutputBuffer(
         buckets_and_expected_sizes=dataset.n_frames_lookup,
@@ -94,16 +92,10 @@ def test_bodyseg_model(
         pred_dict = pipeline.inference(batch["frames"])
         logits = pred_dict["logits"]
         pred_seg = torch.argmax(logits, dim=1).to(torch.uint8).detach().cpu()
-        if pred_dict["confidence"] is None:
-            confidence = None
-        else:
-            confidence = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
+        confidence = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
 
         for i in range(logits.shape[0]):
-            data_item = (
-                pred_seg[i, :, :],
-                confidence[i, :, :] if confidence is not None else None,
-            )
+            data_item = (pred_seg[i, :, :], confidence[i, :, :])
             output_buffer.add_data(
                 bucket=batch["video_paths"][i],
                 index=batch["frame_indices"][i],
@@ -123,8 +115,8 @@ def test_bodyseg_model(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251011a")
-    training_stages = [model_dir / "checkpoints/epoch0_step3900.model.pth"]
+    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012a")
+    training_stages = [model_dir / "checkpoints/epoch0_step3200.model.pth"]
     output_basedir = model_dir / "inference"
     output_basedir.mkdir(parents=True, exist_ok=True)
     batch_size = 192

@@ -39,6 +39,7 @@ dependencies = [
     "torchcodec==0.7",  # torch 2.8 specifically works with torchcodec 0.7; hardcoding version for both
     "torchsummary>=1.5.1,<2",
     "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
+    # "seqikpy==1.0.3",  # developed by Gizem - use fixed version for better control
     "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",
     "parallel-video-io @ git+https://github.com/sibocw/parallel-video-io.git",
 ]

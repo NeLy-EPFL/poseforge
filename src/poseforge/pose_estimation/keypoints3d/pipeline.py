@@ -2,6 +2,7 @@ import torch
 import logging
 from time import time
 from collections import defaultdict
+from itertools import chain
 from tqdm import tqdm
 from datetime import datetime
 from pathlib import Path
@@ -14,11 +15,12 @@ from poseforge.pose_estimation.data.synthetic import (
     atomic_batches_to_simple_batch,
 )
 from poseforge.pose_estimation.keypoints3d import Pose2p5DModel, Pose2p5DLoss
-from poseforge.util import (
+from poseforge.util.sys import (
     clear_memory_cache,
     check_mixed_precision_status,
     set_random_seed,
 )
+from poseforge.util.ml import count_module_parameters, count_optimizer_parameters
 
 
 class Pose2p5DPipeline:
@@ -292,11 +294,44 @@ class Pose2p5DPipeline:
     def _create_optimizer(
         self, optimizer_config: config.OptimizerConfig
     ) -> torch.optim.Optimizer:
-        return torch.optim.Adam(
-            self.model.parameters(),
-            lr=optimizer_config.adam_lr,
-            weight_decay=optimizer_config.adam_weight_decay,
+        params = [
+            {
+                "params": self.model.feature_extractor.parameters(),
+                "lr": optimizer_config.learning_rate_encoder,
+            },
+            {
+                "params": list(
+                    chain(
+                        self.model.dec_layer2.parameters(),
+                        self.model.dec_layer3.parameters(),
+                        self.model.dec_layer4.parameters(),
+                    )
+                ),
+                "lr": optimizer_config.learning_rate_deconv,
+            },
+            {
+                "params": self.model.heatmap_head.parameters(),
+                "lr": optimizer_config.learning_rate_heatmap_head,
+            },
+            {
+                "params": self.model.depth_head.parameters(),
+                "lr": optimizer_config.learning_rate_depth_head,
+            },
+        ]
+
+        optimizer = torch.optim.AdamW(
+            params, weight_decay=optimizer_config.weight_decay
         )
+
+        # Check if all parameters are covered
+        n_params_optimizer = count_optimizer_parameters(optimizer)
+        n_params_model = count_module_parameters(self.model)
+        assert n_params_optimizer == n_params_model, (
+            f"Number of parameters in optimizer ({n_params_optimizer}) does not match "
+            f"number of parameters in model ({n_params_model})."
+        )
+
+        return optimizer
 
     @staticmethod
     def _init_training_dataset_and_dataloader(data_config: config.TrainingDataConfig):
@@ -311,7 +346,7 @@ class Pose2p5DPipeline:
             load_body_segment_maps=False,
             shuffle=True,
             n_workers=data_config.num_workers,
-            num_channels=3,
+            n_channels=3,
             pin_memory=True,
             drop_last=True,
         )
@@ -329,7 +364,7 @@ class Pose2p5DPipeline:
             load_body_segment_maps=False,
             shuffle=False,
             n_workers=data_config.num_workers,
-            num_channels=3,
+            n_channels=3,
             pin_memory=True,
             drop_last=True,
         )
@@ -426,7 +461,11 @@ class Pose2p5DPipeline:
             print_results=True,
             tensors={
                 "feature_extractor_params": self.model.feature_extractor.parameters(),
-                "upsampling_core_params": self.model.upsampling_core.parameters(),
+                "upsampling_core_params": chain(
+                    self.model.dec_layer2.parameters(),
+                    self.model.dec_layer3.parameters(),
+                    self.model.dec_layer4.parameters(),
+                ),
                 "xy_heatmap_head_params": self.model.heatmap_head.parameters(),
                 "depth_head_params": self.model.depth_head.parameters(),
             },
