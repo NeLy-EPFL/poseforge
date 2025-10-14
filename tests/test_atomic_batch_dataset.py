@@ -1,7 +1,7 @@
 import torch
 from pathlib import Path
 
-from poseforge.pose import AtomicBatchDataset
+from poseforge.pose.data.synthetic import AtomicBatchDataset
 
 
 def test_atomic_batch_dataset_loading():
