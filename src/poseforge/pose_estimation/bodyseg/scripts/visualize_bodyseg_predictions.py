@@ -109,11 +109,12 @@ def worker_payload(
     input_alpha: float,
     out_dir: Path,
 ):
-    logging.basicConfig(level=logging.INFO)
-
     # Skip if no frames to process
     if len(input_frame_paths) == 0:
         return
+
+    logging.basicConfig(level=logging.INFO)
+    configure_matplotlib_style()
 
     fig, elements = set_up_figure(
         image_shape=plt.imread(input_frame_paths[0]).shape[:2],
