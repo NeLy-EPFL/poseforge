@@ -1,6 +1,9 @@
 import matplotlib
+from poseforge.util.plot import configure_matplotlib_style
 
 matplotlib.use("Agg")
+configure_matplotlib_style()
+
 
 import numpy as np
 import h5py
@@ -15,10 +18,7 @@ from pathlib import Path
 from joblib import Parallel, delayed
 from pvio.video_io import write_frames_to_video
 
-from poseforge.util.plot import (
-    configure_matplotlib_style,
-    get_segmentation_color_palette,
-)
+from poseforge.util.plot import get_segmentation_color_palette
 
 logging.basicConfig(level=logging.INFO)
 
@@ -215,8 +215,6 @@ def visualize_bodyseg_prediction(
 
 
 if __name__ == "__main__":
-    configure_matplotlib_style()
-
     recording_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
     pred_basedir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012a/inference")
 
