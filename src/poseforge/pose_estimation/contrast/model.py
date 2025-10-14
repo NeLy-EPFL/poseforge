@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 import poseforge.pose_estimation.contrast.config as config
-from src.poseforge.pose_estimation.common import ResNetFeatureExtractor, DecoderBlock
+from poseforge.pose_estimation.common import ResNetFeatureExtractor
 
 
 class ContrastivePretrainingModel(nn.Module):

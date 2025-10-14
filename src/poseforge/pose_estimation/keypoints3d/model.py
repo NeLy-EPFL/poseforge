@@ -435,7 +435,8 @@ class Pose2p5DModel(nn.Module):
 
         # Map to input image pixel coordinates (input images are 256x256, but heatmaps
         # are predicted at 64x64, so there is a stride of 4)
-        stride = 4
+        stride = self.feature_extractor.input_size[0] / heatmap_size[0]
+        assert stride == 4, "Expected input size=256x256 and output heatmap size=64x64"
         xy_px_in = xy_px_out * stride  # (N, n_keypoints, 2)
 
         # Compute depth distributions
