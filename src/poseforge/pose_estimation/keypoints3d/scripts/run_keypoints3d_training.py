@@ -7,6 +7,7 @@ logging.basicConfig(
 
 import torch
 from pathlib import Path
+from torchsummary import summary
 
 import poseforge.pose_estimation.keypoints3d.config as config
 from poseforge.pose_estimation.keypoints3d import (
@@ -81,6 +82,10 @@ def train_keypoints3d_model(
     # Initialize model and loss function
     pose_model = _setup_model(model_architecture_config, model_weights_config)
     criterion = _setup_loss_func(loss_config)
+    print("========== Model Summary ==========")
+    summary(
+        pose_model, input_size=(3, *training_data_config.input_image_size), device="cpu"
+    )
 
     # Initialize learning pipeline
     pipeline = Pose2p5DPipeline(
@@ -109,8 +114,9 @@ if __name__ == "__main__":
     )
 
     # model_architecture_config = config.ModelArchitectureConfig()
+    # checkpoint_path = "bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch009_step003055.feature_extractor.pth"
     # model_weights_config = config.ModelWeightsConfig(
-    #     feature_extractor_weights="bulk_data/pose_estimation/contrastive_pretraining/trial_20251001a/checkpoints/checkpoint_epoch009_step003000.feature_extractor.pth",
+    #     feature_extractor_weights=str(checkpoint_path),
     #     model_weights=None,
     # )
     # loss_config = config.LossConfig()
@@ -133,11 +139,11 @@ if __name__ == "__main__":
     # )
     # optimizer_config = config.OptimizerConfig()
     # training_artifacts_config = config.TrainingArtifactsConfig(
-    #     output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20250106a/",
-    #     logging_interval=1000,
-    #     checkpoint_interval=1000,
-    #     validation_interval=1000,
-    #     n_batches_per_validation=300,
+    #     output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20251013a/",
+    #     logging_interval=100,
+    #     checkpoint_interval=100,
+    #     validation_interval=100,
+    #     n_batches_per_validation=30,
     # )
     # train_keypoints3d_model(
     #     n_epochs=30,

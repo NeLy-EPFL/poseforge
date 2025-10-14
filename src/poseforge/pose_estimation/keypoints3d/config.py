@@ -5,10 +5,6 @@ from poseforge.util import SerializableDataClass
 
 @dataclass(frozen=True)
 class ModelArchitectureConfig(SerializableDataClass):
-    # Number of hidden dimensions in the contrastive projection head (3-layer MLP)
-    projection_head_hidden_dim: int = 512
-    # Number of output dimensions in the contrastive projection head (3-layer MLP)
-    projection_head_output_dim: int = 256
     # Number of body keypoints to detect
     n_keypoints: int = 32
     # Number of bins to quantize depth values (distances from camera) into
@@ -21,12 +17,10 @@ class ModelArchitectureConfig(SerializableDataClass):
     xy_temperature: float = 0.8
     # Temperature param to regulate the "softness" of the predicted depth distributions
     depth_temperature: float = 0.8
-    # Number of layers in the core upsampling pathway of the 3D pose estimation model
-    upsample_n_layers: int = 3
     # Number of hidden channels in each deconv layer in the core upsampling pathway
-    upsample_n_hidden_channels: int = 256
+    upsample_core_out_channels: int = 64
     # Number of hidden channels in the head that predicts depth distributions
-    depth_n_hidden_channels: int = 256
+    depth_hidden_channels: int = 128
     # Method to compute confidence scores from predicted distr ("entropy" for entropy
     # over predicted distr, "peak" for highest predicted probability in the distr)
     confidence_method: str = "entropy"
@@ -63,9 +57,10 @@ class LossConfig(SerializableDataClass):
     depth_ce_loss_weight: float = 1.0
     # Weight for depth L1 loss term
     depth_l1_loss_weight: float = 0.25
-    # Whether to clamp predicted depth values to be within [depth_min, depth_max]
-    # (a warning will always be issued if predicted depths are out of bounds)
-    clamp_labels: bool = True
+    # How to handle out-of-bounds (OOB) depth labels (i.e. depth values outside
+    # [depth_min, depth_max]): "clamp" (clamp to valid range), "drop" (ignore OOB
+    # labels) or "ignore"
+    oob_treatment: str = "drop"
 
 
 @dataclass(frozen=True)
@@ -94,10 +89,16 @@ class TrainingDataConfig(SerializableDataClass):
 
 @dataclass(frozen=True)
 class OptimizerConfig(SerializableDataClass):
-    # Learning rate for Adam optimizer
-    adam_lr: float = 3e-4
-    # Weight decay for Adam optimizer
-    adam_weight_decay: float = 1e-4
+    # Learning rate for the pretrained feature extractor
+    learning_rate_encoder: float = 3e-5
+    # Learning rate for deconv layers in the upsampling core
+    learning_rate_deconv: float = 3e-4
+    # Learning rate for the x-y headmap head
+    learning_rate_heatmap_head: float = 3e-4
+    # Learning rate for the depth head
+    learning_rate_depth_head: float = 3e-4
+    # Weight decay for AdamW optimizer
+    weight_decay: float = 1e-5
 
 
 @dataclass(frozen=True)

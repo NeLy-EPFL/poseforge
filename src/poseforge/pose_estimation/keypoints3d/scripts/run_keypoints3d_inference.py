@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import h5py
 from torchvision.transforms import Resize
+from torchsummary import summary
 from pathlib import Path
 from collections import defaultdict
 from tqdm import tqdm
@@ -84,6 +85,8 @@ def run_keypoints3d_inference(
     model = Pose2p5DModel.create_architecture_from_config(architecture_config_path)
     model.load_weights_from_config(model_weights)
     pipeline = Pose2p5DPipeline(model, device="cuda", use_float16=True)
+    print("========== Model Summary ==========")
+    summary(pipeline.model, input_size=(3, *inference_image_size), device="cuda")
 
     # Set up camera mapper
     cam_mapper = CameraToWorldMapper(
@@ -170,8 +173,8 @@ def run_keypoints3d_inference(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251007a")
-    epochs_to_try = list(range(0, 21, 2))
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
+    epochs_to_try = list(range(0, 30, 2))
 
     for epoch in epochs_to_try:
         print(f"Running inference for epoch {epoch}")

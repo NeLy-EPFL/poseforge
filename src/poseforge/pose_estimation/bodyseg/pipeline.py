@@ -1,44 +1,51 @@
-import torch
 import logging
-from time import time
-from collections import defaultdict
-from itertools import chain
-from tqdm import tqdm
-from datetime import datetime
-from pathlib import Path
+import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from collections import defaultdict
+from time import time
+from datetime import datetime
+from pathlib import Path
+from itertools import chain
+from tqdm import tqdm
 
-import poseforge.pose_estimation.keypoints3d.config as config
+import poseforge.pose_estimation.bodyseg.config as config
+from poseforge.pose_estimation.bodyseg.model import (
+    BodySegmentationModel,
+    CombinedDiceCELoss,
+)
 from poseforge.pose_estimation.data.synthetic import (
     init_atomic_dataset_and_dataloader,
     atomic_batches_to_simple_batch,
 )
-from poseforge.pose_estimation.keypoints3d import Pose2p5DModel, Pose2p5DLoss
-from poseforge.util.sys import (
-    clear_memory_cache,
-    check_mixed_precision_status,
+from poseforge.util import (
     set_random_seed,
+    check_mixed_precision_status,
+    count_optimizer_parameters,
+    count_module_parameters,
+    clear_memory_cache,
 )
-from poseforge.util.ml import count_module_parameters, count_optimizer_parameters
 
 
-class Pose2p5DPipeline:
+class BodySegmentationPipeline:
+    # In the future, these can be written as metadata to atomic batch files
+    # fmt: off
+    class_labels = [
+        "Background", "OtherSegments", "Thorax", "LFCoxa", "LFFemur",
+        "LFTibia", "LFTarsus", "LMCoxa", "LMFemur", "LMTibia", "LMTarsus",
+        "LHCoxa", "LHFemur", "LHTibia", "LHTarsus", "RFCoxa", "RFFemur",
+        "RFTibia", "RFTarsus", "RMCoxa", "RMFemur", "RMTibia", "RMTarsus",
+        "RHCoxa", "RHFemur", "RHTibia", "RHTarsus", "LAntenna", "RAntenna",
+    ]
+    # fmt: on
+
     def __init__(
         self,
-        model: Pose2p5DModel,
-        loss_func: Pose2p5DLoss | None = None,
+        model: BodySegmentationModel,
+        loss_func: CombinedDiceCELoss | None = None,
         device: torch.device | str = "cuda",
         use_float16: bool = True,
     ):
-        """
-        Args:
-            model (Pose2p5DModel): Model to train.
-            loss_func (Pose2p5DLoss | None): Loss function. Not required if
-                performing inference only.
-            device (torch.device | str): Device to use for training.
-            use_float16 (bool): Whether to use mixed-precision in training.
-        """
         self.model = model.to(device)
         self.loss_func = loss_func.to(device) if loss_func else None
         self.device = device
@@ -47,6 +54,15 @@ class Pose2p5DPipeline:
         else:
             self.device_type = "cpu"
         self.use_float16 = use_float16
+        
+    def _get_half_batch(self, frames_batch, sim_data_batch):
+        """Return half of the batch to save memory (for debugging only)."""
+        half_batch_size = frames_batch.shape[0] // 2
+        frames_batch = frames_batch[:half_batch_size, ...]
+        sim_data_batch = {
+            k: v[:half_batch_size, ...] for k, v in sim_data_batch.items()
+        }
+        return frames_batch, sim_data_batch
 
     def train(
         self,
@@ -55,9 +71,18 @@ class Pose2p5DPipeline:
         optimizer_config: config.OptimizerConfig,
         artifacts_config: config.TrainingArtifactsConfig,
         seed: int = 42,
+        half_batch_size_for_debugging: bool = False,
     ):
         # Set seed for reproducibility
         set_random_seed(seed)
+
+        # If half_batch_size_for_debugging, cut batch sizes in half to save memory
+        self.half_batch_size_for_debugging = half_batch_size_for_debugging
+        if self.half_batch_size_for_debugging:
+            logging.warning(
+                "Debug mode: using half batch sizes for training and validation in "
+                "order to fit the model in memory for a GeForce RTX 3080 Ti."
+            )
 
         # Set up training and validation data
         train_ds, train_loader = self._init_training_dataset_and_dataloader(data_config)
@@ -99,21 +124,23 @@ class Pose2p5DPipeline:
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
                 train_loader
             ):
-                frames_collapsed, sim_data_collapsed = atomic_batches_to_simple_batch(
+                # Format data
+                frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
-
-                # Run models
-                with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred_dict = self.model(frames_collapsed)
-                    xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                    depth_labels = sim_data_collapsed["keypoint_pos"][:, :, 2]
-                    loss_dict = self.loss_func(
-                        pred_dict,
-                        xy_labels=xy_labels,
-                        depth_labels=depth_labels,
-                        bin_values=self.model.depth_bin_centers,  # buffered upon init
+                if self.half_batch_size_for_debugging:
+                    frames, sim_data = self._get_half_batch(frames, sim_data)
+                target_indices = sim_data["body_seg_maps"].long()  # (batch_size, H, W)
+                if target_indices.shape[1:] != frames.shape[2:]:
+                    raise ValueError(
+                        f"Target indices shape {target_indices.shape} does not match "
+                        f"input frames shape {frames.shape}"
                     )
+
+                # Forward pass with mixed precision
+                with torch.amp.autocast(self.device_type, enabled=self.use_float16):
+                    pred_dict = self.model(frames)
+                    loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                     # Check if float16 is used
                     if epoch_idx == 0 and step_idx == 0:
@@ -121,6 +148,8 @@ class Pose2p5DPipeline:
                             amp_scaler, subtitle="Model parameters at start of training"
                         )
                         self._check_amp_status_during_training(
+                            frames,
+                            target_indices,
                             pred_dict,
                             amp_scaler,
                             subtitle="Variables at start of training",
@@ -165,14 +194,11 @@ class Pose2p5DPipeline:
                     del (
                         atomic_batches_frames,
                         atomic_batches_sim_data,
-                        frames_collapsed,
-                        sim_data_collapsed,
-                        pred_dict,
-                        xy_labels,
-                        depth_labels,
+                        frames,
+                        sim_data,
+                        target_indices,
                     )
                     clear_memory_cache()
-
                     val_loss_dict = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
@@ -184,7 +210,6 @@ class Pose2p5DPipeline:
                         n_batches_per_epoch=n_batches_per_epoch,
                         val_loss_dict=val_loss_dict,
                     )
-                    clear_memory_cache()
 
                 # Save checkpoint
                 # (every log_interval steps and last step of each epoch)
@@ -214,29 +239,15 @@ class Pose2p5DPipeline:
     def validate(
         self, validation_data_loader: DataLoader, max_batches: int | None = None
     ):
-        """Run the model on the validation set and compute the average for
-        each loss term.
-
-        Args:
-            validation_data_loader (DataLoader): Validation data loader.
-            max_batches (int | None): Maximum number of batches to run. If
-                None, run all batches. This is handy if the validation set
-                is large and you want to run a quick validation.
-
-        Returns:
-            dict[str, float]: average loss values for each loss term.
-        """
         if max_batches is None:
             max_batches = len(validation_data_loader)
         if max_batches <= 0:
             raise ValueError("max_batches must be positive or None")
-        total_loss_dict = defaultdict(lambda: 0.0)
-
         if self.loss_func is None:
             raise ValueError("Loss function must be provided for validation")
 
+        total_loss_dict = defaultdict(lambda: 0.0)
         self.model.eval()
-        clear_memory_cache()
         with torch.no_grad():
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
                 tqdm(validation_data_loader, desc="Validation", disable=None)
@@ -244,41 +255,41 @@ class Pose2p5DPipeline:
                 if step_idx >= max_batches:
                     break
 
-                frames_collapsed, sim_data_collapsed = atomic_batches_to_simple_batch(
+                # Format data
+                frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
+                if self.half_batch_size_for_debugging:
+                    frames, sim_data = self._get_half_batch(frames, sim_data)
+                target_indices = sim_data["body_seg_maps"].long()  # (batch_size, H, W)
+                if target_indices.shape[1:] != frames.shape[2:]:
+                    raise ValueError(
+                        f"Target indices shape {target_indices.shape} does not match "
+                        f"input frames shape {frames.shape}"
+                    )
 
                 # Run model
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred_dict = self.model(frames_collapsed)
-                    xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                    depth_labels_adjusted = sim_data_collapsed["keypoint_pos"][:, :, 2]
-                    loss_dict = self.loss_func(
-                        pred_dict,
-                        xy_labels=xy_labels,
-                        depth_labels=depth_labels_adjusted,
-                        bin_values=self.model.depth_bin_centers,  # buffered upon init
-                    )
+                    pred_dict = self.model(frames)
+                    loss_dict = self.loss_func(pred_dict["logits"], target_indices)
+
                 # Accumulate losses
                 for key, loss in loss_dict.items():
                     total_loss_dict[key] += loss.item()
 
+        del (
+            atomic_batches_frames,
+            atomic_batches_sim_data,
+            frames,
+            sim_data,
+            target_indices,
+        )
         clear_memory_cache()
         self.model.train()
         n_steps_iterated = step_idx + 1
         return {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
 
     def inference(self, frames: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Run inference on a batch of frames. Note that this method
-        expects a simple batch of frames, not atomic batches.
-
-        Args:
-            frames (torch.Tensor): Input frames of shape
-                (n_batches, n_channels, n_rows, n_cols).
-
-        Returns:
-            dict[str, torch.Tensor]: Output of Pose2p5DModel.forward.
-        """
         input_device = frames.device
         self.model.eval()
         with torch.no_grad():
@@ -286,14 +297,47 @@ class Pose2p5DPipeline:
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                 pred_dict = self.model(frames)
         self.model.train()
-        return {
-            k: v.to(input_device) if isinstance(v, torch.Tensor) else v
-            for k, v in pred_dict.items()
-        }
+        return {key: tensor.to(input_device) for key, tensor in pred_dict.items()}
 
-    def _create_optimizer(
-        self, optimizer_config: config.OptimizerConfig
-    ) -> torch.optim.Optimizer:
+    def _init_training_dataset_and_dataloader(
+        self, data_config: config.TrainingDataConfig
+    ):
+        return init_atomic_dataset_and_dataloader(
+            data_dirs=data_config.train_data_dirs,
+            atomic_batch_n_samples=data_config.atomic_batch_n_samples,
+            atomic_batch_n_variants=data_config.atomic_batch_n_variants,
+            input_image_size=data_config.input_image_size,
+            batch_size=data_config.train_batch_size,
+            load_dof_angles=False,
+            load_keypoint_positions=False,
+            load_body_segment_maps=True,
+            shuffle=True,
+            n_workers=data_config.n_workers,
+            n_channels=3,
+            pin_memory=True,
+            drop_last=True,
+        )
+
+    def _init_validation_dataset_and_dataloader(
+        self, data_config: config.TrainingDataConfig
+    ):
+        return init_atomic_dataset_and_dataloader(
+            data_dirs=data_config.val_data_dirs,
+            atomic_batch_n_samples=data_config.atomic_batch_n_samples,
+            atomic_batch_n_variants=data_config.atomic_batch_n_variants,
+            input_image_size=data_config.input_image_size,
+            batch_size=data_config.val_batch_size,
+            load_dof_angles=False,
+            load_keypoint_positions=False,
+            load_body_segment_maps=True,
+            shuffle=False,
+            n_workers=data_config.n_workers,
+            n_channels=3,
+            pin_memory=True,
+            drop_last=True,
+        )
+
+    def _create_optimizer(self, optimizer_config: config.OptimizerConfig):
         params = [
             {
                 "params": self.model.feature_extractor.parameters(),
@@ -302,6 +346,7 @@ class Pose2p5DPipeline:
             {
                 "params": list(
                     chain(
+                        self.model.dec_layer1.parameters(),
                         self.model.dec_layer2.parameters(),
                         self.model.dec_layer3.parameters(),
                         self.model.dec_layer4.parameters(),
@@ -310,12 +355,13 @@ class Pose2p5DPipeline:
                 "lr": optimizer_config.learning_rate_deconv,
             },
             {
-                "params": self.model.heatmap_head.parameters(),
-                "lr": optimizer_config.learning_rate_heatmap_head,
-            },
-            {
-                "params": self.model.depth_head.parameters(),
-                "lr": optimizer_config.learning_rate_depth_head,
+                "params": list(
+                    chain(
+                        self.model.final_upsampler.parameters(),
+                        self.model.classifier.parameters(),
+                    )
+                ),
+                "lr": optimizer_config.learning_rate_segmentation_head,
             },
         ]
 
@@ -333,41 +379,69 @@ class Pose2p5DPipeline:
 
         return optimizer
 
-    @staticmethod
-    def _init_training_dataset_and_dataloader(data_config: config.TrainingDataConfig):
-        return init_atomic_dataset_and_dataloader(
-            data_dirs=data_config.train_data_dirs,
-            atomic_batch_n_samples=data_config.atomic_batch_n_samples,
-            atomic_batch_n_variants=data_config.atomic_batch_n_variants,
-            input_image_size=data_config.input_image_size,
-            batch_size=data_config.train_batch_size,
-            load_dof_angles=False,
-            load_keypoint_positions=True,
-            load_body_segment_maps=False,
-            shuffle=True,
-            n_workers=data_config.num_workers,
-            n_channels=3,
-            pin_memory=True,
-            drop_last=True,
+    def _check_amp_status_for_model_params(
+        self, grad_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
+    ):
+        return check_mixed_precision_status(
+            self.use_float16,
+            self.device,
+            print_results=True,
+            tensors={
+                "feature_extractor_params": self.model.feature_extractor.parameters(),
+                "decoder_params": chain(
+                    self.model.dec_layer1.parameters(),
+                    self.model.dec_layer2.parameters(),
+                    self.model.dec_layer3.parameters(),
+                    self.model.dec_layer4.parameters(),
+                ),
+                "final_upsampler_params": self.model.final_upsampler.parameters(),
+                "classifier_params": self.model.classifier.parameters(),
+            },
+            grad_scaler=grad_scaler,
+            subtitle=subtitle,
+        )
+
+    def _check_amp_status_during_training(
+        self,
+        input_images: torch.Tensor,
+        target: torch.Tensor,
+        pred_dict: torch.Tensor,
+        grad_scaler: torch.amp.GradScaler,
+        subtitle: str = "Variables during training",
+    ):
+        return check_mixed_precision_status(
+            self.use_float16,
+            self.device,
+            print_results=True,
+            tensors={
+                "input_images": input_images,
+                "target": target,
+                "pred": pred_dict["logits"],
+                "pred_conf": pred_dict["confidence"],
+            },
+            grad_scaler=grad_scaler,
+            subtitle=subtitle,
         )
 
     @staticmethod
-    def _init_validation_dataset_and_dataloader(data_config: config.TrainingDataConfig):
-        return init_atomic_dataset_and_dataloader(
-            data_dirs=data_config.val_data_dirs,
-            atomic_batch_n_samples=data_config.atomic_batch_n_samples,
-            atomic_batch_n_variants=data_config.atomic_batch_n_variants,
-            input_image_size=data_config.input_image_size,
-            batch_size=data_config.val_batch_size,
-            load_dof_angles=False,
-            load_keypoint_positions=True,
-            load_body_segment_maps=False,
-            shuffle=False,
-            n_workers=data_config.num_workers,
-            n_channels=3,
-            pin_memory=True,
-            drop_last=True,
-        )
+    def _save_checkpoint(
+        checkpoint_path_stem: Path,
+        model: BodySegmentationModel,
+        loss: CombinedDiceCELoss | None = None,
+        optimizer: torch.optim.Optimizer | None = None,
+        grad_scaler: torch.amp.GradScaler | None = None,
+    ) -> None:
+        path = checkpoint_path_stem.with_suffix(".model.pth")
+        torch.save(model.state_dict(), path)
+        if loss is not None:
+            path = checkpoint_path_stem.with_suffix(".loss.pth")
+            torch.save(loss.state_dict(), path)
+        if optimizer is not None:
+            path = checkpoint_path_stem.with_suffix(".optimizer.pth")
+            torch.save(optimizer.state_dict(), path)
+        if grad_scaler is not None:
+            path = checkpoint_path_stem.with_suffix(".grad_scaler.pth")
+            torch.save(grad_scaler.state_dict(), path)
 
     def _update_logs_training(
         self,
@@ -409,66 +483,3 @@ class Pose2p5DPipeline:
             log_str += f"{key}: {value:.4f}, "
             writer.add_scalar(f"val/loss/{key}", value, global_step_idx)
         logging.info(log_str)
-
-    @staticmethod
-    def _save_checkpoint(
-        checkpoint_path_stem: Path,
-        model: Pose2p5DModel,
-        loss: Pose2p5DLoss | None = None,
-        optimizer: torch.optim.Optimizer | None = None,
-        grad_scaler: torch.amp.GradScaler | None = None,
-    ) -> None:
-        path = checkpoint_path_stem.with_suffix(".model.pth")
-        torch.save(model.state_dict(), path)
-        if loss is not None:
-            path = checkpoint_path_stem.with_suffix(".loss.pth")
-            torch.save(loss.state_dict(), path)
-        if optimizer is not None:
-            path = checkpoint_path_stem.with_suffix(".optimizer.pth")
-            torch.save(optimizer.state_dict(), path)
-        if grad_scaler is not None:
-            path = checkpoint_path_stem.with_suffix(".grad_scaler.pth")
-            torch.save(grad_scaler.state_dict(), path)
-
-    def _check_amp_status_during_training(
-        self,
-        pred_dict: dict[str, torch.Tensor],
-        amp_scaler: torch.amp.GradScaler,
-        subtitle: str = "Variables during training",
-    ):
-        return check_mixed_precision_status(
-            self.use_float16,
-            self.device,
-            print_results=True,
-            tensors={
-                "pred_xy_heatmaps": pred_dict["xy_heatmaps"],
-                "pred_depth_logits": pred_dict["depth_logits"],
-                "pred_xy": pred_dict["pred_xy"],
-                "pred_depth": pred_dict["pred_depth"],
-                "pred_conf_xy": pred_dict["conf_xy"],
-                "pred_conf_depth": pred_dict["conf_depth"],
-            },
-            grad_scaler=amp_scaler,
-            subtitle=subtitle,
-        )
-
-    def _check_amp_status_for_model_params(
-        self, amp_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
-    ):
-        return check_mixed_precision_status(
-            self.use_float16,
-            self.device,
-            print_results=True,
-            tensors={
-                "feature_extractor_params": self.model.feature_extractor.parameters(),
-                "upsampling_core_params": chain(
-                    self.model.dec_layer2.parameters(),
-                    self.model.dec_layer3.parameters(),
-                    self.model.dec_layer4.parameters(),
-                ),
-                "xy_heatmap_head_params": self.model.heatmap_head.parameters(),
-                "depth_head_params": self.model.depth_head.parameters(),
-            },
-            grad_scaler=amp_scaler,
-            subtitle=subtitle,
-        )

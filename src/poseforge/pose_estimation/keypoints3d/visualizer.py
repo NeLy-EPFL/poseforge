@@ -85,8 +85,7 @@ class SynthDataKeypoints3DVisualizer:
         self.marker_size = marker_size
         self.n_workers = n_workers
 
-        self.stride_x = preds["heatmap_stride_cols"][0]
-        self.stride_y = preds["heatmap_stride_rows"][0]
+        self.stride = preds["heatmap_stride"][0]
         # (variants, frames, keypoints, H, W)
         self.pred_xy_heatmaps = preds["xy_heatmaps"]
         # (variants, frames, keypoints, depth_bins)
@@ -219,8 +218,7 @@ class SynthDataKeypoints3DVisualizer:
             label_world_xyz=self.label_world_xyz,
             keypoints_order=self.keypoints_order,
             # Parameters
-            stride_x=self.stride_x,
-            stride_y=self.stride_y,
+            stride=self.stride,
             depth_min=self.depth_min,
             depth_max=self.depth_max,
             depth_n_bins=self.depth_n_bins,
@@ -362,8 +360,7 @@ def update_heatmap_data(
     variant_idx: int,
     pred_xy_heatmaps: np.ndarray,
     label_xy: np.ndarray,
-    stride_x: int,
-    stride_y: int,
+    stride: int,
     n_keypoints: int,
     marker_size: int,
     cmap,
@@ -394,8 +391,8 @@ def update_heatmap_data(
 
     # Plot label points
     for kp_idx in range(n_keypoints):
-        label_x = label_xy[frame_idx, kp_idx, 0] / stride_x
-        label_y = label_xy[frame_idx, kp_idx, 1] / stride_y
+        label_x = label_xy[frame_idx, kp_idx, 0] / stride
+        label_y = label_xy[frame_idx, kp_idx, 1] / stride
         ax.scatter(
             label_x,
             label_y,
@@ -476,39 +473,37 @@ def update_3d_skeleton_data(
 
     skeleton_connections = get_skeleton_connections(keypoints_order)
 
-    # Plot ground truth
+    # Plot ground truth (legs)
     gt_points = label_world_xyz[frame_idx]
     for connection in skeleton_connections:
         if connection[0] < n_keypoints and connection[1] < n_keypoints:
             start_point = gt_points[connection[0]]
             end_point = gt_points[connection[1]]
             keypoint_name = keypoints_order[connection[0]]
-            line_color = get_keypoint_color(keypoint_name)
             ax.plot3D(
                 [start_point[0], end_point[0]],
                 [start_point[1], end_point[1]],
                 [start_point[2], end_point[2]],
-                color=line_color,
-                linewidth=3,
+                color="gray",
+                linewidth=2,
             )
 
-    # Plot antennae keypoints
-    if n_keypoints >= 2:
-        for i in range(2):
-            antenna_idx = n_keypoints - 2 + i
-            antenna_point = gt_points[antenna_idx]
-            keypoint_name = keypoints_order[antenna_idx]
-            point_color = get_keypoint_color(keypoint_name)
-            ax.scatter(
-                antenna_point[0],
-                antenna_point[1],
-                antenna_point[2],
-                color=point_color,
-                s=marker_size,
-            )
+    # Plot antennae keypoints (antennae)
+    for i in range(2):
+        antenna_idx = n_keypoints - 2 + i
+        antenna_point = gt_points[antenna_idx]
+        keypoint_name = keypoints_order[antenna_idx]
+        ax.scatter(
+            antenna_point[0],
+            antenna_point[1],
+            antenna_point[2],
+            color="gray",
+            s=marker_size,
+        )
 
     # Plot predictions
-    if variant_idx is not None:
+    if variant_idx is not None:  # None indicates this is the ground truth panel
+        # Plot legs
         pred_points = pred_world_xyz[variant_idx, frame_idx]
         for connection in skeleton_connections:
             if connection[0] < n_keypoints and connection[1] < n_keypoints:
@@ -524,19 +519,19 @@ def update_3d_skeleton_data(
                     linewidth=2,
                 )
 
-        if n_keypoints >= 2:
-            for i in range(2):
-                antenna_idx = n_keypoints - 2 + i
-                antenna_point = pred_points[antenna_idx]
-                keypoint_name = keypoints_order[antenna_idx]
-                point_color = get_keypoint_color(keypoint_name)
-                ax.scatter(
-                    antenna_point[0],
-                    antenna_point[1],
-                    antenna_point[2],
-                    color=point_color,
-                    s=marker_size,
-                )
+        # Plot antennae
+        for i in range(2):
+            antenna_idx = n_keypoints - 2 + i
+            antenna_point = pred_points[antenna_idx]
+            keypoint_name = keypoints_order[antenna_idx]
+            point_color = get_keypoint_color(keypoint_name)
+            ax.scatter(
+                antenna_point[0],
+                antenna_point[1],
+                antenna_point[2],
+                color=point_color,
+                s=marker_size,
+            )
 
     # Set viewing angle
     azimuth = np.cos(2 * np.pi * frame_idx / CAMERA_PAN_PERIOD) * AZIMUTH_AMPLITUDE
@@ -722,8 +717,7 @@ def render_frames_with_reused_figure(
     label_depth: np.ndarray,
     label_world_xyz: np.ndarray,
     keypoints_order: list[str],
-    stride_x: int,
-    stride_y: int,
+    stride: int,
     depth_min: float,
     depth_max: float,
     depth_n_bins: int,
@@ -758,8 +752,7 @@ def render_frames_with_reused_figure(
                 variant_idx,
                 pred_xy_heatmaps,
                 label_xy,
-                stride_x,
-                stride_y,
+                stride,
                 n_keypoints,
                 marker_size,
                 cmap,
@@ -818,8 +811,7 @@ def render_frames_parallel(
     label_world_xyz: np.ndarray,  # (n_frames, n_keypoints, 3)
     keypoints_order: list[str],  # list of keypoint names
     # Parameters
-    stride_x: int,
-    stride_y: int,
+    stride: int,
     depth_min: float,
     depth_max: float,
     depth_n_bins: int,
@@ -845,8 +837,7 @@ def render_frames_parallel(
             label_depth,
             label_world_xyz,
             keypoints_order,
-            stride_x,
-            stride_y,
+            stride,
             depth_min,
             depth_max,
             depth_n_bins,
@@ -888,8 +879,7 @@ def render_frames_parallel(
             label_depth,
             label_world_xyz,
             keypoints_order,
-            stride_x,
-            stride_y,
+            stride,
             depth_min,
             depth_max,
             depth_n_bins,
@@ -919,8 +909,7 @@ def render_frame_chunk_worker(
     label_depth: np.ndarray,
     label_world_xyz: np.ndarray,
     keypoints_order: list[str],
-    stride_x: int,
-    stride_y: int,
+    stride: int,
     depth_min: float,
     depth_max: float,
     depth_n_bins: int,
@@ -969,8 +958,7 @@ def render_frame_chunk_worker(
                 variant_idx,
                 pred_xy_heatmaps,
                 label_xy,
-                stride_x,
-                stride_y,
+                stride,
                 n_keypoints,
                 marker_size,
                 cmap,
@@ -1039,8 +1027,7 @@ def render_frames_sequential(
     label_world_xyz: np.ndarray,  # (n_frames, n_keypoints, 3)
     keypoints_order: list[str],  # list of keypoint names
     # Parameters
-    stride_x: int,
-    stride_y: int,
+    stride: int,
     depth_min: float,
     depth_max: float,
     depth_n_bins: int,
@@ -1075,8 +1062,7 @@ def render_frames_sequential(
         label_depth,
         label_world_xyz,
         keypoints_order,
-        stride_x,
-        stride_y,
+        stride,
         depth_min,
         depth_max,
         depth_n_bins,

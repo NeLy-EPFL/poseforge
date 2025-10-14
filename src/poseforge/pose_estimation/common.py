@@ -47,11 +47,14 @@ class ResNetFeatureExtractor(nn.Module):
         self.resnet = models.resnet18(weights=backbone_weights)
 
         # Find out the output size of the ResNet feature extractor
+        self.input_size = (256, 256)  # input image size (height, width), fixed
         self.output_channels = 512  # ResNet-18 layer4 output channels
 
         # Load weights for this very nn.Module if provided
         if my_module_weights is not None:
             self.load_state_dict(my_module_weights)
+
+        self._first_time_forward = True
 
     @staticmethod
     def _apply_imagenet_normalization(
@@ -122,16 +125,57 @@ class ResNetFeatureExtractor(nn.Module):
         #           -> layer1 -> layer2 -> layer3 -> layer4
         #           -> avgpool -> fc
         # Discard the avgpool and fc; keep everything up to the last conv layer
-        conv1_out = self.resnet.conv1(x_norm)
-        bn1_out = self.resnet.bn1(conv1_out)
-        x0 = self.resnet.relu(bn1_out)
-        x0_maxpool_out = self.resnet.maxpool(x0)
-        x1 = self.resnet.layer1(x0_maxpool_out)
-        x2 = self.resnet.layer2(x1)
-        x3 = self.resnet.layer3(x2)
-        x4 = self.resnet.layer4(x3)
+        conv1_out = self.resnet.conv1(x_norm)  # (batch_size, 64, 128, 128)
+        bn1_out = self.resnet.bn1(conv1_out)  # same shape
+        x0 = self.resnet.relu(bn1_out)  # same shape
+        x0_maxpool_out = self.resnet.maxpool(x0)  # (batch_size, 64, 64, 64)
+        x1 = self.resnet.layer1(x0_maxpool_out)  # (batch_size, 64, 64, 64)
+        x2 = self.resnet.layer2(x1)  # (batch_size, 128, 32, 32)
+        x3 = self.resnet.layer3(x2)  # (batch_size, 256, 16, 16)
+        x4 = self.resnet.layer4(x3)  # (batch_size, 512, 8, 8)
+
+        # If this is the first forward pass, check if the shapes are as expected
+        if self._first_time_forward:
+            batch_size = x.shape[0]
+            assert x.shape == (batch_size, 3, *self.input_size)
+            assert x_norm.shape == (batch_size, 3, *self.input_size)
+            assert conv1_out.shape == (batch_size, 64, 128, 128)
+            assert bn1_out.shape == (batch_size, 64, 128, 128)
+            assert x0.shape == (batch_size, 64, 128, 128)
+            assert x0_maxpool_out.shape == (batch_size, 64, 64, 64)
+            assert x1.shape == (batch_size, 64, 64, 64)
+            assert x2.shape == (batch_size, 128, 32, 32)
+            assert x3.shape == (batch_size, 256, 16, 16)
+            assert x4.shape == (batch_size, 512, 8, 8)
+            self._first_time_forward = False
 
         if return_intermediates:
             return x0, x1, x2, x3, x4
         else:
             return x4
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self, in_channels, skip_channels, out_channels):
+        super(DecoderBlock, self).__init__()
+        self.upsample = nn.ConvTranspose2d(
+            in_channels, in_channels, kernel_size=2, stride=2
+        )
+        self.conv1 = nn.Conv2d(
+            in_channels + skip_channels, out_channels, kernel_size=3, padding=1
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x, skip):
+        x = self.upsample(x)
+        x = torch.cat([x, skip], dim=1)  # Concatenate along channel dimension
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu(x)
+        return x

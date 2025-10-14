@@ -7,49 +7,84 @@ logging.basicConfig(
 
 import numpy as np
 import torch
-import torch.nn as nn
 import h5py
-from dataclasses import dataclass
+from torchsummary import summary
+from collections import defaultdict
 from time import time
 from pathlib import Path
 
-from poseforge.pose_estimation import SimulatedDataSequence, ResNetFeatureExtractor
-from poseforge.pose_estimation.contrast import (
-    ContrastivePretrainingPipeline,
-    ContrastiveProjectionHead,
-)
+from poseforge.pose_estimation.contrast import ContrastivePretrainingModel
+from poseforge.pose_estimation.data.synthetic import SimulatedDataSequence
+from poseforge.pose_estimation.contrast import ContrastivePretrainingPipeline
 from poseforge.util import get_hardware_availability
 
 
-def load_trained_weights(
-    feature_extractor: nn.Module,
-    projection_head: nn.Module,
-    checkpoint_dir: Path,
+def load_model(
+    model_dir: Path,
     training_stage: str,
-    device: torch.device,
-) -> tuple[nn.Module, nn.Module]:
-    filename_stem = f"checkpoint_{training_stage}"
-    feature_extractor_path = checkpoint_dir / f"{filename_stem}.feature_extractor.pth"
-    projection_head_path = checkpoint_dir / f"{filename_stem}.projection_head.pth"
-    if not feature_extractor_path.is_file() or not projection_head_path.is_file():
-        raise FileNotFoundError(
-            f"Checkpoint not found in {checkpoint_dir} for {training_stage}. "
-            f"Expected files: {feature_extractor_path} and {projection_head_path}"
+    print_summary: bool = False,
+    input_size: tuple[int, int, int] = (3, 256, 256),
+) -> ContrastivePretrainingModel:
+    """Initialize models (feature extractor & projection head) and load
+    trained weights.
+
+    Args:
+        model_dir (Path): Directory containing model checkpoints and config
+            files.
+        training_stage (Path): Training stage identifier (can be
+            e.g., "epoch000_step015000" or "untrained").
+        print_summary (bool): Whether to print model summaries.
+        input_size (tuple[int, int, int]): Input size for model summary.
+
+    Returns:
+        Initialized ContrastivePretrainingModel with loaded weights.
+    """
+    checkpoint_dir = Path(model_dir) / "checkpoints"
+    configs_dir = Path(model_dir) / "configs"
+    contrastive_learning_model = (
+        ContrastivePretrainingModel.create_architecture_from_config(
+            configs_dir / "model_architecture_config.yaml"
         )
-    feature_extractor_weights = torch.load(feature_extractor_path, map_location=device)
-    projection_head_weights = torch.load(projection_head_path, map_location=device)
-    feature_extractor.load_state_dict(feature_extractor_weights)
-    projection_head.load_state_dict(projection_head_weights)
-    return feature_extractor, projection_head
+    )
+
+    # Load weights
+    if training_stage != "untrained":
+        feature_extractor_checkpoint_path = (
+            checkpoint_dir / f"checkpoint_{training_stage}.feature_extractor.pth"
+        )
+        projection_head_checkpoint_path = (
+            checkpoint_dir / f"checkpoint_{training_stage}.projection_head.pth"
+        )
+        contrastive_learning_model.feature_extractor.load_state_dict(
+            torch.load(feature_extractor_checkpoint_path, map_location="cpu")
+        )
+        contrastive_learning_model.projection_head.load_state_dict(
+            torch.load(projection_head_checkpoint_path, map_location="cpu")
+        )
+
+    if print_summary:
+        print("========== Feature Extractor Summary ==========")
+        summary(
+            contrastive_learning_model.feature_extractor,
+            input_size=input_size,
+            device="cpu",
+        )
+        print("=========== Projection Head Summary ===========")
+        summary(
+            contrastive_learning_model.projection_head,
+            input_size=(contrastive_learning_model.feature_extractor.output_channels,),
+            device="cpu",
+        )
+
+    return contrastive_learning_model
 
 
 def predict_for_dataset(
     pipeline: ContrastivePretrainingPipeline,
     dataset: SimulatedDataSequence,
     batch_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    h_features_pooled_all, z_features_all = [], []
-
+) -> dict[str, torch.Tensor]:
+    pred_dict_all = defaultdict(list)
     n_batches = 0
     start_time = time()
     for frames, _ in dataset.generate_batches(batch_size):
@@ -57,17 +92,15 @@ def predict_for_dataset(
         # h_features: (n_variants * n_frames, n_channels=512, *output_feature_map_size)
         # h_features_pooled: (n_variants * n_frames, feature_dim)
         # z_features: (n_variants * n_frames, feature_dim)
-        h_features, h_features_pooled, z_features = pipeline.inference(frames)
-
-        # Reshape back to separate variants and frames
-        n_samples_this_batch = frames.shape[0] // dataset.n_variants
-        h_features_pooled = h_features_pooled.view(
-            dataset.n_variants, n_samples_this_batch, -1
-        )
-        z_features = z_features.view(dataset.n_variants, n_samples_this_batch, -1)
-
-        h_features_pooled_all.append(h_features_pooled)
-        z_features_all.append(z_features)
+        pred_dict = pipeline.inference(frames)
+        for key, tensor in pred_dict.items():
+            # Reshape back to separate variants and frames
+            shape = tensor.shape
+            total_samples_x_variants = shape[0]
+            n_samples_this_batch = total_samples_x_variants // dataset.n_variants
+            assert total_samples_x_variants % dataset.n_variants == 0
+            tensor = tensor.view(dataset.n_variants, n_samples_this_batch, *shape[1:])
+            pred_dict_all[key].append(tensor)
         n_batches += 1
 
     walltime = time() - start_time
@@ -75,7 +108,7 @@ def predict_for_dataset(
         f"Processed dataset {dataset.sim_name} in {n_batches} batches. "
         f"Time taken: {walltime:.2f} seconds."
     )
-    return torch.cat(h_features_pooled_all, dim=1), torch.cat(z_features_all, dim=1)
+    return {key: torch.cat(tensors, dim=1) for key, tensors in pred_dict_all.items()}
 
 
 def initialize_output_hdf_file(output_path: Path, n_variants: int, n_frames: int):
@@ -87,73 +120,35 @@ def initialize_output_hdf_file(output_path: Path, n_variants: int, n_frames: int
         f.attrs["n_frames"] = n_frames
 
 
-@dataclass
-class SamplingConfig:
-    # Number of different frames to include in each batch. Note that n_variants variants
-    # of each frame will be included, so effective batch size = batch_size * n_variants.
-    # This must be a multiple of `atomic_epoch_nsamples` in `AtomicBatchDataset`.
-    batch_size: int
-
-
-@dataclass
-class ModelConfig:
-    # Training stages to evaluate
-    training_stages: list[str]
-    # Directory under which checkpoints for the specified training stages are stored
-    checkpoint_dir: str
-    # Number of hidden dimensions in the contrastive projection head (3-layer MLP)
-    projection_head_hidden_dim: int = 512
-    # Number of output dimensions in the contrastive projection head (3-layer MLP)
-    projection_head_output_dim: int = 256
-
-
-@dataclass
-class DataConfig:
-    # Style transfer models (including epochs) to use
-    style_transfer_models: list[str]
-    # Root directory to synthetic videos generated by style transfer models. This is
-    # expected to contain the following file structure:
-    # {exp_trial}/segment_{segid}/subsegment_{subsegid}/translated_{model}.mp4
-    synthetic_videos_basedir: str
-    # Subdirectories to synthetic videos, in case we don't want to process all of them.
-    # These must be directories under synthetic_videos_basedir.
-    # If None, process all data.
-    synthetic_videos_subdirs: list[str] | None = None
-    # Frame size (height, width)
-    image_size: tuple[int, int] = (256, 256)
-    # Number of channels in input images (3 to use pretrained ResNet weights)
-    num_channels: int = 3
-
-
-@dataclass
-class OutputConfig:
-    # Directory to save inference outputs
-    inference_output_dir: str
-
-
 def run_feature_extractor_inference(
-    sampling: SamplingConfig, model: ModelConfig, data: DataConfig, output: OutputConfig
+    synthetic_videos_basedir: str,
+    pretraining_model_dir: str,
+    training_stages: list[str],
+    style_transfer_models: list[str],
+    batch_size: int = 1024,
+    synthetic_videos_subdirs: list[str] | None = None,
 ):
     """Run inference using a trained contrastive pretraining model to
     extract features from synthetic videos."""
     # System setup
-    get_hardware_availability(check_gpu=True, print_results=True)
+    avail = get_hardware_availability(check_gpu=True, print_results=False)
+    if len(avail["gpus"]) == 0:
+        raise RuntimeError("No GPU available. Cannot run inference.")
+    device = torch.device("cuda")
 
     # Convert paths to Path objects
-    synthetic_videos_basedir = Path(data.synthetic_videos_basedir)
-    inference_output_dir = Path(output.inference_output_dir)
-    checkpoint_dir = Path(model.checkpoint_dir)
+    synthetic_videos_basedir = Path(synthetic_videos_basedir)
+    pretraining_model_dir = Path(pretraining_model_dir)
+    inference_output_dir = pretraining_model_dir / "inference"
 
     # Find all simulations to process
-    if data.synthetic_videos_subdirs is None:
+    if synthetic_videos_subdirs is None:
         synthetic_videos_subdirs = list(synthetic_videos_basedir.glob("*"))
     else:
-        synthetic_videos_subdirs = [
-            Path(subdir) for subdir in data.synthetic_videos_subdirs
-        ]
+        synthetic_videos_subdirs = [Path(subdir) for subdir in synthetic_videos_subdirs]
     simulations_to_use = []
     for subdir in synthetic_videos_subdirs:
-        for path in subdir.rglob(f"translated_{data.style_transfer_models[0]}.mp4"):
+        for path in subdir.rglob(f"translated_{style_transfer_models[0]}.mp4"):
             # sim_info: (exp_trial, segment, subsegment)
             sim_info = path.absolute().parent.parts[-3:]
             simulations_to_use.append(sim_info)
@@ -163,31 +158,10 @@ def run_feature_extractor_inference(
         sim_name = f"{exp_trial}/{segment}/{subsegment}"
         synthetic_video_paths = [
             synthetic_videos_basedir / sim_name / f"translated_{model}.mp4"
-            for model in data.style_transfer_models
+            for model in style_transfer_models
         ]
         dataset = SimulatedDataSequence(synthetic_video_paths, sim_name=sim_name)
         datasets.append(dataset)
-
-    # Initialize models (feature extractor & projection head) and load trained weights
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Extractor output is global-pooled to 1x1 (see ContrastivePretrainingPipeline)
-    feature_extractor = ResNetFeatureExtractor(weights=None).to(device)
-    projection_head_input_dim = feature_extractor.output_channels * 1 * 1
-    projection_head = ContrastiveProjectionHead(
-        input_dim=projection_head_input_dim,
-        hidden_dim=model.projection_head_hidden_dim,
-        output_dim=model.projection_head_output_dim,
-    ).to(device)
-
-    # Initialize contrastive pretraining pipeline
-    # Note: one can also do this with just the raw nn.Module's alone, but the
-    # `.inference(batch)` method is just a little more convenient.
-    contrastive_pipeline = ContrastivePretrainingPipeline(
-        feature_extractor=feature_extractor,
-        projection_head=projection_head,
-        device=device,
-        use_float16=True,
-    )
 
     # Initialize h5 files to save extracted features
     for dataset in datasets:
@@ -195,27 +169,24 @@ def run_feature_extractor_inference(
         initialize_output_hdf_file(output_path, dataset.n_variants, dataset.n_frames)
 
     # Run inference on test data and save outputs
-    for training_stage in model.training_stages:
+    for stage_idx, training_stage in enumerate(training_stages):
         logging.info(
             f"Running model from epoch {training_stage} on {len(datasets)} datasets"
         )
 
-        # Load checkpoint weights
-        feature_extractor, projection_head = load_trained_weights(
-            feature_extractor,
-            projection_head,
-            checkpoint_dir,
-            training_stage,
-            device=device,
+        # Load model and initialize pipeline
+        contrastive_learning_model = load_model(
+            pretraining_model_dir, training_stage, print_summary=(stage_idx == 0)
+        ).to(device)
+        pipeline = ContrastivePretrainingPipeline(
+            contrastive_learning_model, device=device, use_float16=True
         )
-        contrastive_pipeline.feature_extractor = feature_extractor
-        contrastive_pipeline.projection_head = projection_head
 
         for dataset in datasets:
-            # h/z_features: (n_variants, n_frames, feature_dim)
-            h_features_pooled, z_features = predict_for_dataset(
-                contrastive_pipeline, dataset, batch_size=sampling.batch_size
-            )
+            pred_dict = predict_for_dataset(pipeline, dataset, batch_size=batch_size)
+            h_features_pooled = pred_dict["h_features_pooled"]
+            z_features = pred_dict["z_features"]
+
             # Save to h5
             output_path = (
                 inference_output_dir / dataset.sim_name / "contrastive_latents.h5"
@@ -233,88 +204,37 @@ def run_feature_extractor_inference(
 if __name__ == "__main__":
     import tyro
 
-    tyro.cli(
-        run_feature_extractor_inference,
-        prog=f"python {Path(__file__).name}",
-        description="Run inference using a contrastively pretrained feature extractor.",
-    )
-
-    # Example CLI command to run this script:
-    # python -u src/poseforge/pose_estimation/scripts/run_feature_extractor_inference.py \
-    #     --sampling.batch-size 1024 \
-    #     --model.training-stages \
-    #         "epoch000_step000000" \
-    #         "epoch000_step015000" \
-    #         "epoch001_step000000" \
-    #         "epoch001_step015000" \
-    #         "epoch002_step000000" \
-    #         "epoch002_step015000" \
-    #         "epoch003_step000000" \
-    #         "epoch003_step015000" \
-    #         "epoch004_step000000" \
-    #         "epoch004_step015000" \
-    #         "epoch005_step000000" \
-    #     --model.checkpoint-dir \
-    #         "bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/checkpoints" \
-    #     --model.projection_head_hidden_dim 512 \
-    #     --model.projection_head_output_dim 256 \
-    #     --data.synthetic-videos-basedir \
-    #         "bulk_data/style_transfer/production/translated_videos" \
-    #     --data.synthetic-videos-subdirs \
-    #         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005/segment_000" \
-    #         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005/segment_001" \
-    #     --data.style-transfer-models \
-    #         "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121" \
-    #         "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200" \
-    #         "ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1_epoch161" \
-    #         "ngf32_netGstylegan2_batsize4_lambGAN0.1_epoch161" \
-    #         "ngf32_netGstylegan2_batsize4_lambGAN0.5_epoch141" \
-    #         "ngf32_netGstylegan2_batsize4_lambGAN1.0_epoch161" \
-    #         "ngf48_netGstylegan2_batsize2_lambGAN0.1_epoch141" \
-    #         "ngf48_netGstylegan2_batsize4_lambGAN0.1_epoch141" \
-    #     --data.image-size 256 256 \
-    #     --data.num-channels 3 \
-    #     --output.inference-output-dir \
-    #         "bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/inference_cli"
+    # tyro.cli(
+    #     run_feature_extractor_inference,
+    #     prog=f"python {Path(__file__).name}",
+    #     description="Run inference using a contrastively pretrained feature extractor.",
+    # )
 
     # Example call using function directly (no CLI)
-    # sampling_config = SamplingConfig(batch_size=1024)
-    # training_stages = [
-    #     "epoch000_step000000",
-    #     "epoch000_step000050",
-    #     "epoch000_step000100",
-    # ]
-    # model_config = ModelConfig(
-    #     training_stages=training_stages,
-    #     checkpoint_dir="bulk_data/pose_estimation/contrastive_pretraining/first_run_on_workstation/checkpoints",
-    #     projection_head_hidden_dim=512,
-    #     projection_head_output_dim=256,
-    # )
-    # style_transfer_models = [
-    #     "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
-    #     "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200",
-    #     "ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1_epoch161",
-    #     "ngf32_netGstylegan2_batsize4_lambGAN0.1_epoch161",
-    #     "ngf32_netGstylegan2_batsize4_lambGAN0.5_epoch141",
-    #     "ngf32_netGstylegan2_batsize4_lambGAN1.0_epoch161",
-    #     "ngf48_netGstylegan2_batsize2_lambGAN0.1_epoch141",
-    #     "ngf48_netGstylegan2_batsize4_lambGAN0.1_epoch141",
-    # ]
-    # data_config = DataConfig(
-    #     synthetic_videos_basedir="bulk_data/style_transfer/production/translated_videos/",
-    #     synthetic_videos_subdirs=[
-    #         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005"
-    #     ],
-    #     style_transfer_models=style_transfer_models,
-    #     image_size=(256, 256),
-    #     num_channels=3,
-    # )
-    # output_config = OutputConfig(
-    #     inference_output_dir="bulk_data/pose_estimation/contrastive_pretraining/trial0/inference"
-    # )
-    # run_feature_extractor_inference(
-    #     sampling=sampling_config,
-    #     model=model_config,
-    #     data=data_config,
-    #     output=output_config,
-    # )
+    training_stages = ["untrained", "epoch000_step002000"]
+    style_transfer_models = [
+        "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
+        "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200",
+        "ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1_epoch161",
+        "ngf32_netGstylegan2_batsize4_lambGAN0.1_epoch161",
+        "ngf32_netGstylegan2_batsize4_lambGAN0.5_epoch141",
+        "ngf32_netGstylegan2_batsize4_lambGAN1.0_epoch161",
+        "ngf48_netGstylegan2_batsize2_lambGAN0.1_epoch141",
+        "ngf48_netGstylegan2_batsize4_lambGAN0.1_epoch141",
+    ]
+    synthetic_videos_basedir = "bulk_data/style_transfer/production/translated_videos/"
+    synthetic_videos_subdirs = [
+        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005/segment_003"
+    ]
+    pretraining_model_dir = (
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/"
+    )
+    batch_size = 1024
+    run_feature_extractor_inference(
+        synthetic_videos_basedir=synthetic_videos_basedir,
+        pretraining_model_dir=pretraining_model_dir,
+        training_stages=training_stages,
+        style_transfer_models=style_transfer_models,
+        batch_size=batch_size,
+        synthetic_videos_subdirs=synthetic_videos_subdirs,
+    )
