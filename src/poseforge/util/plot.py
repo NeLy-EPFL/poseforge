@@ -8,6 +8,7 @@ def configure_matplotlib_style():
 
     matplotlib.style.use("fast")
     plt.rcParams["font.family"] = "Arial"
+    plt.rcParams["pdf.fonttype"] = 42
     # suppress matplotlib font manager warnings
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
