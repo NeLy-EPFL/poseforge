@@ -156,6 +156,7 @@ def process_trial(
         metadata = {
             "frame_id": int(frame_id),
             "original_dim": original_frame.shape,
+            "cropped_dim": cropped_frame.shape,
             "rotation": {
                 "original_thorax_pt": list(original_thorax_pt),
                 "angle_radians": float(rot_angle_rad),
