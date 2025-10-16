@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import imageio
+import json
 from pathlib import Path
 from tqdm import tqdm
 
@@ -151,15 +152,34 @@ def process_trial(
             continue
         cropped_frame, cropped_keypoints = crop_output
 
-        # Save cropped frame to output directory
+        # Create metadata dictionary with transformation parameters
+        metadata = {
+            "frame_id": int(frame_id),
+            "original_dim": original_frame.shape,
+            "rotation": {
+                "original_thorax_pt": list(original_thorax_pt),
+                "angle_radians": float(rot_angle_rad),
+            },
+            "crop": {
+                "rotated_thorax_pt": list(rotated_thorax_pt),
+                "crop_dim": crop_dim,
+                "x_offset": crop_x_offset,
+                "y_offset": crop_y_offset,
+            },
+        }
+
+        # Save cropped frame and metadata to output directory
         successful_frame_ids.append(frame_id)
         output_frame_path = output_dir / f"frame_{frame_id:09d}.jpg"
+        output_metadata_path = output_dir / f"frame_{frame_id:09d}.metadata.json"
         imageio.imwrite(
             output_frame_path,
             cropped_frame,
             quality=output_jpeg_quality,
             subrectangles=True,
         )
+        with open(output_metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
 
     num_out_of_bound_frames = len(usable_frame_ids) - len(successful_frame_ids)
     print(
