@@ -145,6 +145,10 @@ def crop_image_and_keypoints(
         return None
 
     cropped = image[y_min:y_max, x_min:x_max]
-    shifted_keypoints = keypoints - np.array([x_min, y_min])
+    
+    if keypoints is None:
+        shifted_keypoints = None
+    else:
+        shifted_keypoints = keypoints - np.array([x_min, y_min])
 
     return cropped, shifted_keypoints
