@@ -81,6 +81,10 @@ def test_bodyseg_model(
                 int(p.stem.split("_")[1])
                 for p in dataset.frame_sortings[input_video_path]
             ]
+            # These are the actual, raw frame IDs from the original video assigned by
+            # the Spotlight recording software. They may not be contiguous because
+            # frames where the fly is upside down or too close to the edge, etc. are
+            # already removed.
             f.create_dataset("frame_ids", data=frame_ids, dtype="int")
 
     output_buffer = OutputBuffer(
