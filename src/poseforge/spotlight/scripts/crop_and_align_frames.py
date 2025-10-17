@@ -24,8 +24,8 @@ def process_trial(
     output_dir: Path,
     edge_tolerance_mm: float = 4.0,
     crop_dim: int = 900,
-    crop_x_offset: int = 0,
-    crop_y_offset: int = 0,
+    crop_shift_x: int = 0,
+    crop_shift_y: int = 0,
     output_jpeg_quality: int = 95,
 ):
     """
@@ -42,8 +42,8 @@ def process_trial(
             for a frame to be considered usable.
         crop_dim (int): Size (in pixels) of the square crop around the
             thorax.
-        crop_x_offset (int): Horizontal offset for cropping.
-        crop_y_offset (int): Vertical offset for cropping.
+        crop_shift_x (int): Horizontal offset for cropping.
+        crop_shift_y (int): Vertical offset for cropping.
         output_jpeg_quality (int): Quality of the saved JPEG files (1-100).
     """
     # Define paths to processed data and metadata
@@ -133,39 +133,36 @@ def process_trial(
             original_neck_pt,
             original_thorax_pt,
         )
-        rotated_frame = rotate_image_around_point(
+        rotated_frame, rotation_params = rotate_image_around_point(
             original_frame, original_thorax_pt, rot_angle_rad
         )
         rotated_thorax_pt = rotated_keypoints[thorax_index, :]
 
         # Crop image and keypoints around thorax
-        crop_output = crop_image_and_keypoints(
+        crop_result = crop_image_and_keypoints(
             rotated_frame,
             rotated_keypoints,
             rotated_thorax_pt,
             crop_dim,
-            crop_x_offset,
-            crop_y_offset,
+            shift_x=crop_shift_x,
+            shift_y=crop_shift_y,
         )
-        if crop_output is None:
+        if crop_result is None:
             # Skip frames that cannot be cropped (e.g., out of bounds)
             continue
-        cropped_frame, cropped_keypoints = crop_output
+        cropped_frame, cropped_keypoints, crop_params = crop_result
 
         # Create metadata dictionary with transformation parameters
         metadata = {
             "frame_id": int(frame_id),
-            "original_dim": original_frame.shape,
-            "cropped_dim": cropped_frame.shape,
             "rotation": {
                 "original_thorax_pt": list(original_thorax_pt),
                 "angle_radians": float(rot_angle_rad),
+                **rotation_params,
             },
             "crop": {
                 "rotated_thorax_pt": list(rotated_thorax_pt),
-                "crop_dim": crop_dim,
-                "x_offset": crop_x_offset,
-                "y_offset": crop_y_offset,
+                **crop_params,
             },
         }
 
@@ -192,14 +189,14 @@ def process_trial(
 if __name__ == "__main__":
     # Find all recording directories
     spotlight_data_dir = Path("bulk_data/behavior_images/spotlight")
-    recording_directories = sorted(list(spotlight_data_dir.glob("20250613-fly1b-*")))
+    recording_directories = sorted(list(spotlight_data_dir.glob("20250613-fly1b-005")))
     output_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
 
     # Set processing parameters
     edge_tolerance_mm = 4.0
     crop_dim = 900
-    crop_x_offset = 0
-    crop_y_offset = 0
+    crop_shift_x = 0
+    crop_shift_y = 0
 
     # Process each trial
     for i, recording_dir in enumerate(recording_directories):
@@ -215,6 +212,6 @@ if __name__ == "__main__":
             output_dir,
             edge_tolerance_mm=edge_tolerance_mm,
             crop_dim=crop_dim,
-            crop_x_offset=crop_x_offset,
-            crop_y_offset=crop_y_offset,
+            crop_shift_x=crop_shift_x,
+            crop_shift_y=crop_shift_y,
         )
