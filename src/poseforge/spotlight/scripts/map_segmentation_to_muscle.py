@@ -188,6 +188,9 @@ def process_spotlight_trial(
             grp.attrs["input_transform_metadata_path"] = str(
                 input_kwargs["input_transform_metadata_path"].absolute()
             )
+            grp.attrs["has_non_background_feature"] = results[
+                "has_non_background_feature"
+            ]
             grp.attrs.update(results["cropping_metadata"])
 
     return segmap_by_muscle_frameid
@@ -199,7 +202,7 @@ def process_single_muscle_frame(
     input_transform_metadata_path: Path,
     padding: int,
     suppress_size_mismatch_warning: bool,
-    viz_output_path: Path,
+    viz_output_path: Path | None,
     segs_to_visualize_indices: list[int],
     viz_vmin: float,
     viz_vmax: float,
@@ -261,11 +264,12 @@ def process_single_muscle_frame(
     # portion. Crop the image based on the bounding box of non-background features,
     # but add some padding in case we want to slightly adjust the segmap in later
     # postprocessing steps.
-    muscle_image_cropped, segmap_cropped, cropping_metadata = (
+    has_feature, muscle_image_cropped, segmap_cropped, cropping_metadata = (
         crop_image_and_segmap_by_feature(muscle_image, segmap_before_alignment, padding)
     )
 
     mapping_results = {
+        "has_non_background_feature": has_feature,
         "muscle_image_cropped": muscle_image_cropped,
         "segmap_cropped": segmap_cropped,
         "cropping_metadata": cropping_metadata,
@@ -287,10 +291,47 @@ def process_single_muscle_frame(
     return mapping_results
 
 
-def crop_image_and_segmap_by_feature(muscle_image, segmap_before_alignment, padding):
-    """Crop muscle image and segmap to a rough bounding box around non-background
-    features, with some padding."""
-    ys, xs = np.where(segmap_before_alignment > 0)  # background label is 0
+def crop_image_and_segmap_by_feature(
+    muscle_image, segmap_before_alignment, padding
+) -> tuple[bool, np.ndarray, np.ndarray, dict[str, list[int]]]:
+    """Crop muscle image and segmap to a rough bounding box around
+    non-background features with some padding. The extent of the
+    non-background features is returned in the metadata as
+    `segmap_feature_bbox_*` and the actual crop box used is returned
+    as `crop_box_*`.
+
+    Args:
+        muscle_image: np.ndarray, shape (H, W)
+        segmap_before_alignment: np.ndarray, shape (H, W)
+        padding: int, number of pixels to pad around the bounding box
+
+    Returns:
+        has_feature: bool, whether any non-background feature is found
+        muscle_image_cropped: np.ndarray, shape (h, w)
+        segmap_cropped: np.ndarray, shape (h, w)
+        cropping_metadata: dict, contains the following keys:
+            - "segmap_feature_bbox_row_range": [min_row, max_row]
+            - "segmap_feature_bbox_col_range": [min_col, max_col]
+            - "crop_box_row_range": [crop_row_min, crop_row_max]
+            - "crop_box_col_range": [crop_col_min, crop_col_max]
+    """
+    non_background_mask = segmap_before_alignment > 0  # background label is 0
+
+    if non_background_mask.sum() == 0:
+        # If segmap contains only background, return the original images without
+        # cropping. Use a flag to indicate no features are found.
+        muscle_image_cropped = muscle_image
+        segmap_cropped = segmap_before_alignment
+        cropping_metadata = {
+            "segmap_feature_bbox_row_range": [0, muscle_image.shape[0]],
+            "segmap_feature_bbox_col_range": [0, muscle_image.shape[1]],
+            "crop_box_row_range": [0, muscle_image.shape[0]],
+            "crop_box_col_range": [0, muscle_image.shape[1]],
+        }
+        has_feature = False
+        return has_feature, muscle_image_cropped, segmap_cropped, cropping_metadata
+
+    ys, xs = np.where(non_background_mask)
     feature_row_min = ys.min()
     feature_row_max = ys.max()
     feature_col_min = xs.min()
@@ -311,7 +352,8 @@ def crop_image_and_segmap_by_feature(muscle_image, segmap_before_alignment, padd
         "crop_box_row_range": [crop_row_min, crop_row_max],
         "crop_box_col_range": [crop_col_min, crop_col_max],
     }
-    return muscle_image_cropped, segmap_cropped, cropping_metadata
+    has_feature = True
+    return has_feature, muscle_image_cropped, segmap_cropped, cropping_metadata
 
 
 if __name__ == "__main__":

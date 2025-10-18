@@ -189,7 +189,7 @@ def process_trial(
 if __name__ == "__main__":
     # Find all recording directories
     spotlight_data_dir = Path("bulk_data/behavior_images/spotlight")
-    recording_directories = sorted(list(spotlight_data_dir.glob("20250613-fly1b-005")))
+    recording_directories = sorted(list(spotlight_data_dir.glob("20250613-fly1b-*")))
     output_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
 
     # Set processing parameters
