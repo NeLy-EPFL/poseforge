@@ -320,6 +320,10 @@ def crop_image_and_segmap_by_feature(
     if non_background_mask.sum() == 0:
         # If segmap contains only background, return the original images without
         # cropping. Use a flag to indicate no features are found.
+        logging.warning(
+            "Segmap contains only background. Returning original images without "
+            "cropping. This should not happen - check upstream processing."
+        )
         muscle_image_cropped = muscle_image
         segmap_cropped = segmap_before_alignment
         cropping_metadata = {
