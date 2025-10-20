@@ -47,3 +47,4 @@ if __name__ == "__main__":
         pipeline.apply_initial_mapping(n_workers=-1)
         pipeline.apply_fine_alignment(n_workers=-1)
         pipeline.apply_morph_denoising(n_workers=-1)
+        pipeline.apply_mask_dilation(dilation_size=7, n_workers=-1)

@@ -199,7 +199,9 @@ class MuscleSegmentationPipeline:
             viz_output_dir = self.debug_plots_dir / "morph_denoising"
             viz_output_dir.mkdir(parents=True, exist_ok=True)
         input_kwargs_all_frames = self._prepare_morph_denoising_inputs(
-            morph_kernel, n_iterations, viz_output_dir=viz_output_dir
+            morph_kernel,
+            n_iterations,
+            viz_output_dir=viz_output_dir,
         )
         results_all_frames = Parallel(n_jobs=n_workers, verbose=1)(
             delayed(_denoise_mask_for_each_class_single_frame)(**kwargs)
@@ -221,6 +223,52 @@ class MuscleSegmentationPipeline:
                 n_pixels_per_class = denoised_masks.sum(axis=(1, 2))
                 for label, n_pixels in zip(class_labels, n_pixels_per_class):
                     ds.attrs[f"n_pixels_{label}"] = n_pixels
+
+    def apply_mask_dilation(
+        self,
+        dilation_size: int,
+        n_workers: int = -1,
+    ):
+        """
+        Apply morphological dilation to morphologically denoised masks.
+
+        This method dilates the masks to expand the segmented regions. It operates
+        on the masks produced by apply_morph_denoising.
+
+        Args:
+            dilation_size: Size of the structuring element for morphological dilation.
+            n_workers: Number of parallel workers for processing frames.
+        """
+        dilation_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (dilation_size, dilation_size)
+        )
+
+        if self.debug_plots_dir is None:
+            viz_output_dir = None
+        else:
+            viz_output_dir = self.debug_plots_dir / "mask_dilation"
+            viz_output_dir.mkdir(parents=True, exist_ok=True)
+
+        input_kwargs_all_frames = self._prepare_mask_dilation_inputs(
+            dilation_kernel, viz_output_dir=viz_output_dir
+        )
+        results_all_frames = Parallel(n_jobs=n_workers, verbose=1)(
+            delayed(_dilate_masks_single_frame)(**kwargs)
+            for kwargs in tqdm(
+                input_kwargs_all_frames, disable=None, desc="Mask dilation"
+            )
+        )
+
+        with h5py.File(self.output_path, "a") as f:
+            for frame_key, results in zip(f.keys(), results_all_frames):
+                grp = f[frame_key]
+                dilated_masks = results["dilated_masks"]
+                grp.create_dataset(
+                    "masks_dilated",
+                    data=dilated_masks.astype(np.bool_),
+                    compression="gzip",
+                    shuffle=True,
+                )
 
     def _collect_muscle_image_paths(self) -> dict[int, Path]:
         """Collect muscle image file paths indexed by frame ID.
@@ -256,11 +304,15 @@ class MuscleSegmentationPipeline:
         """Match muscle frames to behavior frames using sync ratio.
 
         Args:
-            muscle_path_by_muscle_frameid: Dict mapping muscle frame IDs to paths.
+            muscle_path_by_muscle_frameid: Dict mapping muscle frame IDs to
+                paths.
             behavior_frame_ids: List of available behavior frame IDs.
 
         Returns:
-            Tuple of (segmap_stack_indices_by_muscle_frameid, metadata_paths_by_muscle_frameid).
+            segmap_stack_indices_by_muscle_frameid: Mapping of muscle frame
+                IDs to segmentation map stack indices.
+            metadata_paths_by_muscle_frameid: Mapping of muscle frame IDs
+                to metadata paths.
         """
         segmap_stack_idx_by_muscle_frameid = {}
         metadata_path_by_muscle_frameid = {}
@@ -461,6 +513,39 @@ class MuscleSegmentationPipeline:
                     "class_labels": class_labels,
                     "morph_kernel": morph_kernel,
                     "n_iterations": n_iterations,
+                    "muscle_vrange": self.muscle_vrange,
+                    "viz_output_path": viz_output_path,
+                    "muscle_image": muscle_image,
+                    "segs_to_visualize_indices": self.segs_to_visualize_indices,
+                }
+                input_kwargs_all_frames.append(kwargs)
+
+        return input_kwargs_all_frames
+
+    def _prepare_mask_dilation_inputs(
+        self,
+        dilation_kernel: np.ndarray,
+        viz_output_dir: Path | None = None,
+    ) -> list[dict]:
+        input_kwargs_all_frames = []
+        with h5py.File(self.output_path, "a") as f:
+            class_labels = list(f.attrs["class_labels"])
+            for frame_key in f.keys():
+                grp = f[frame_key]
+                # Use the denoised masks as input
+                denoised_masks = grp["masks_morph_denoised"][:]
+                muscle_image = grp["muscle_image_cropped"][:]
+
+                if viz_output_dir:
+                    frame_id = int(frame_key.split("_")[-1])
+                    viz_output_path = viz_output_dir / f"frame_{frame_id:06d}.jpg"
+                else:
+                    viz_output_path = None
+
+                kwargs = {
+                    "denoised_masks": denoised_masks,
+                    "class_labels": class_labels,
+                    "dilation_kernel": dilation_kernel,
                     "muscle_vrange": self.muscle_vrange,
                     "viz_output_path": viz_output_path,
                     "muscle_image": muscle_image,
@@ -820,7 +905,9 @@ def _denoise_mask_for_each_class_single_frame(
         if class_label.lower() == "background":
             denoised_mask = mask
         else:
-            denoised_mask = _denoise_mask_by_morph(mask, morph_kernel, n_iterations)
+            denoised_mask = _denoise_mask_by_morph(
+                mask, morph_kernel, n_iterations
+            )
         denoised_masks.append(denoised_mask)
         labels.append(class_label)
     denoised_masks = np.stack(denoised_masks, axis=0)
@@ -882,3 +969,60 @@ def _denoise_mask_by_morph(mask, morph_kernel, n_iterations):
     denoised_mask = labels_im == largest_component
 
     return denoised_mask
+
+
+def _dilate_masks_single_frame(
+    denoised_masks: np.ndarray,
+    class_labels: list[str],
+    dilation_kernel: np.ndarray,
+    muscle_vrange: tuple[int, int] | None = None,
+    viz_output_path: Path | None = None,
+    muscle_image: np.ndarray | None = None,
+    segs_to_visualize_indices: list[int] | None = None,
+):
+    """
+    Dilate denoised masks for a single frame.
+
+    Args:
+        denoised_masks: np.ndarray, shape (n_classes, H, W), denoised binary masks
+        class_labels: list[str], class labels corresponding to each mask
+        dilation_kernel: np.ndarray, structuring element for dilation
+        muscle_vrange: tuple[int, int] | None, min/max values for muscle visualization
+        viz_output_path: Path | None, optional path to save visualization
+        muscle_image: np.ndarray | None, muscle image for visualization
+        segs_to_visualize_indices: list[int] | None, indices of segments to visualize
+
+    Returns:
+        dict containing dilated_masks and labels
+    """
+    dilated_masks = []
+    labels = []
+    
+    for i, class_label in enumerate(class_labels):
+        mask = denoised_masks[i].astype(np.uint8)
+        
+        if class_label.lower() == "background":
+            # Don't dilate background
+            dilated_mask = mask.astype(bool)
+        else:
+            # Apply dilation
+            dilated_mask = cv2.dilate(mask, dilation_kernel, iterations=1).astype(bool)
+        
+        dilated_masks.append(dilated_mask)
+        labels.append(class_label)
+    
+    dilated_masks = np.stack(dilated_masks, axis=0)
+
+    # Visualize dilated masks
+    if viz_output_path is not None:
+        masks_for_viz = np.stack(
+            [dilated_masks[i] for i in segs_to_visualize_indices], axis=0
+        ).astype(np.bool_)
+        draw_mask_contours(
+            image=muscle_image,
+            masks=masks_for_viz,
+            muscle_vrange=muscle_vrange,
+            output_path=viz_output_path,
+        )
+
+    return {"dilated_masks": dilated_masks, "labels": labels}
