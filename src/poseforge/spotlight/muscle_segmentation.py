@@ -83,6 +83,12 @@ def process_muscle_segmentation(
     )
     with open(dual_recording_metadata_path, "r") as f:
         sync_ratio = yaml.safe_load(f)["sync_ratio"]
+    if int(sync_ratio) != sync_ratio:
+        raise ValueError(
+            f"Sync ratio must be an integer, got {sync_ratio} from "
+            f"{dual_recording_metadata_path}"
+        )
+    sync_ratio = int(sync_ratio)
 
     # Match muscle frames to behavior frames
     behavior_frame_to_stack_idx = {

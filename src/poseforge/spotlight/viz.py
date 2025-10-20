@@ -28,10 +28,11 @@ def draw_mask_contours(
             RGB and have pixel value in the range [0, 1].
         masks: Binary mask(s) as a HxW numpy array, must be of shape
             (n_masks, H, W) or (H, W).
-        color: Color for the contours as (B, G, R) tuples, ranged between 0
-            and 255. If None, defaults to red. If a single color is given,
-            all masks will be drawn in that color. If a list of colors is
-            given, it must match the number of masks.
+        color: Color for the contours as (B, G, R) tuples. The range (0-1
+            vs. 0-255) should be consistent with the input image.
+            If None, defaults to red. If a single color is given, all masks
+            will be drawn in that color. If a list of colors is given, it
+            must match the number of masks.
         muscle_vrange: Min and max values for rendering grayscale images.
             Only used if image is (H, W).
         output_path: If provided, saves the output image to this path.

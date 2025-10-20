@@ -127,7 +127,7 @@ def crop_image_and_keypoints(image, keypoints, center, crop_dim, shift_x=0, shif
 
     Args:
         image: numpy array, shape (H, W)
-        keypoints: numpy array, shape (N, 2)
+        keypoints: numpy array, shape (N, 2), or None
         center: tuple or array-like, (x, y) center of crop
         crop_dim: int, size of the square crop
         shift_x: int, shift in x (columns) from center
