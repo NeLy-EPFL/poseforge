@@ -89,8 +89,11 @@ class MuscleSegmentationPipeline:
             padding,
             seg_labels,
         )
-        results_all_frames = self._run_initial_mapping_parallel(
-            input_kwargs_all_frames, n_workers
+        results_all_frames = Parallel(n_jobs=n_workers, verbose=1)(
+            delayed(_map_segmap_to_muscle_single_frame)(**kwargs)
+            for kwargs in tqdm(
+                input_kwargs_all_frames, disable=None, desc="Mapping segmap"
+            )
         )
 
         # Save mapped segmaps and cropped muscle images to H5 file
@@ -166,6 +169,58 @@ class MuscleSegmentationPipeline:
                 )
                 grp.attrs["template_matching_x_shift"] = result["x_shift"]
                 grp.attrs["template_matching_y_shift"] = result["y_shift"]
+
+    def apply_morph_denoising(
+        self,
+        kernel_size: int = 5,
+        n_iterations: int = 2,
+        n_workers: int = -1,
+    ):
+        """
+        Apply morphological denoising to fine-aligned segmentation maps.
+
+        This method uses morphological opening and closing to remove small
+        artifacts and smooth the segmentation masks. Then, it keeps only
+        the largest connected component for each class label.
+
+        Args:
+            kernel_size: Size of the structuring element for morphological
+                operations.
+            n_iterations: Number of iterations for opening and closing.
+            n_workers: Number of parallel workers for processing frames.
+        """
+        morph_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+        )
+
+        if self.debug_plots_dir is None:
+            viz_output_dir = None
+        else:
+            viz_output_dir = self.debug_plots_dir / "morph_denoising"
+            viz_output_dir.mkdir(parents=True, exist_ok=True)
+        input_kwargs_all_frames = self._prepare_morph_denoising_inputs(
+            morph_kernel, n_iterations, viz_output_dir=viz_output_dir
+        )
+        results_all_frames = Parallel(n_jobs=n_workers, verbose=1)(
+            delayed(_denoise_mask_for_each_class_single_frame)(**kwargs)
+            for kwargs in tqdm(
+                input_kwargs_all_frames, disable=None, desc="Morph. denoising"
+            )
+        )
+        with h5py.File(self.output_path, "a") as f:
+            class_labels = list(f.attrs["class_labels"])
+            for frame_key, results in zip(f.keys(), results_all_frames):
+                grp = f[frame_key]
+                denoised_masks = results["denoised_masks"]
+                ds = grp.create_dataset(
+                    "masks_morph_denoised",
+                    data=denoised_masks.astype(np.bool_),
+                    compression="gzip",
+                    shuffle=True,
+                )
+                n_pixels_per_class = denoised_masks.sum(axis=(1, 2))
+                for label, n_pixels in zip(class_labels, n_pixels_per_class):
+                    ds.attrs[f"n_pixels_{label}"] = n_pixels
 
     def _collect_muscle_image_paths(self) -> dict[int, Path]:
         """Collect muscle image file paths indexed by frame ID.
@@ -261,6 +316,7 @@ class MuscleSegmentationPipeline:
             segs_to_visualize_indices = [
                 i for i, x in enumerate(seg_labels) if x in segs_to_visualize_names
             ]
+        self.segs_to_visualize_indices = segs_to_visualize_indices
 
         muscle_frame_ids = list(segmap_by_muscle_frameid.keys())
         input_kwargs_all_frames = []
@@ -289,30 +345,6 @@ class MuscleSegmentationPipeline:
             )
 
         return input_kwargs_all_frames
-
-    def _run_initial_mapping_parallel(
-        self, input_kwargs_all_frames: list[dict], n_workers: int
-    ) -> list[dict]:
-        """Run parallel processing of muscle frame mapping.
-
-        Args:
-            input_kwargs_all_frames: List of kwargs for each frame.
-            n_workers: Number of parallel workers.
-
-        Returns:
-            List of processing results for each frame.
-        """
-        logging.info(
-            f"Processing {len(input_kwargs_all_frames)} muscle frames "
-            f"with {n_workers} workers"
-        )
-        results_all_frames = Parallel(n_jobs=n_workers, verbose=1)(
-            delayed(_map_segmap_to_muscle_single_frame)(**kwargs)
-            for kwargs in tqdm(
-                input_kwargs_all_frames, disable=None, desc="Mapping segmap"
-            )
-        )
-        return results_all_frames
 
     def _save_initial_mapping_results(
         self,
@@ -399,6 +431,40 @@ class MuscleSegmentationPipeline:
                     "foreground_class_indices": foreground_class_indices,
                     "muscle_vrange": muscle_vrange,
                     "viz_output_path": viz_output_path,
+                }
+                input_kwargs_all_frames.append(kwargs)
+
+        return input_kwargs_all_frames
+
+    def _prepare_morph_denoising_inputs(
+        self,
+        morph_kernel: np.ndarray,
+        n_iterations: int,
+        viz_output_dir: Path | None = None,
+    ) -> list[dict]:
+        input_kwargs_all_frames = []
+        with h5py.File(self.output_path, "a") as f:
+            class_labels = list(f.attrs["class_labels"])
+            for frame_key in f.keys():
+                grp = f[frame_key]
+                segmap = grp["segmap_fine_aligned"][:]
+                muscle_image = grp["muscle_image_cropped"][:]
+
+                if viz_output_dir:
+                    frame_id = int(frame_key.split("_")[-1])
+                    viz_output_path = viz_output_dir / f"frame_{frame_id:06d}.jpg"
+                else:
+                    viz_output_path = None
+
+                kwargs = {
+                    "segmap": segmap,
+                    "class_labels": class_labels,
+                    "morph_kernel": morph_kernel,
+                    "n_iterations": n_iterations,
+                    "muscle_vrange": self.muscle_vrange,
+                    "viz_output_path": viz_output_path,
+                    "muscle_image": muscle_image,
+                    "segs_to_visualize_indices": self.segs_to_visualize_indices,
                 }
                 input_kwargs_all_frames.append(kwargs)
 
@@ -735,3 +801,84 @@ def _find_optimal_translation_by_template_matching(muscle_image, mask, search_li
     y_shift = max_loc[1] - search_limit
 
     return x_shift, y_shift, correlation_matrix
+
+
+def _denoise_mask_for_each_class_single_frame(
+    segmap: np.ndarray,
+    class_labels: list[str],
+    morph_kernel: int,
+    n_iterations: int,
+    muscle_vrange: tuple[int, int] | None = None,
+    viz_output_path: Path | None = None,
+    muscle_image: np.ndarray | None = None,
+    segs_to_visualize_indices: list[int] | None = None,
+):
+    denoised_masks = []
+    labels = []
+    for i, class_label in enumerate(class_labels):
+        mask = segmap == i
+        if class_label.lower() == "background":
+            denoised_mask = mask
+        else:
+            denoised_mask = _denoise_mask_by_morph(mask, morph_kernel, n_iterations)
+        denoised_masks.append(denoised_mask)
+        labels.append(class_label)
+    denoised_masks = np.stack(denoised_masks, axis=0)
+
+    if viz_output_path is not None:
+        masks_for_viz = np.stack(
+            [denoised_masks[i] for i in segs_to_visualize_indices], axis=0
+        ).astype(np.bool_)
+        draw_mask_contours(
+            image=muscle_image,
+            masks=masks_for_viz,
+            muscle_vrange=muscle_vrange,
+            output_path=viz_output_path,
+        )
+
+    return {"denoised_masks": denoised_masks, "labels": labels}
+
+
+def _denoise_mask_by_morph(mask, morph_kernel, n_iterations):
+    """
+    Denoise a binary mask using morphological operations:
+    1. Morphological opening to remove small objects
+    2. Morphological closing to fill small holes
+    3. Keep only the largest connected component
+
+    Args:
+        mask: np.ndarray, binary mask to denoise
+        morph_kernel: Structuring element for morphological operations
+        n_iterations: Number of iterations for opening and closing
+
+    Returns:
+        denoised_mask: np.ndarray, denoised binary mask
+    """
+    # Morphological opening
+    opened_mask = cv2.morphologyEx(
+        mask.astype(np.uint8),
+        cv2.MORPH_OPEN,
+        morph_kernel,
+        iterations=n_iterations,
+    )
+
+    # Morphological closing
+    closed_mask = cv2.morphologyEx(
+        opened_mask,
+        cv2.MORPH_CLOSE,
+        morph_kernel,
+        iterations=n_iterations,
+    )
+
+    # Keep only the largest connected component
+    num_labels, labels_im = cv2.connectedComponents(closed_mask.astype(np.uint8))
+    if num_labels <= 1:
+        # No foreground components found
+        return np.zeros_like(mask, dtype=bool)
+
+    largest_component = 1 + np.argmax(
+        [np.sum(labels_im == label_id) for label_id in range(1, num_labels)]
+    )
+    denoised_mask = labels_im == largest_component
+
+    return denoised_mask
