@@ -319,7 +319,6 @@ def _generate_debug_visualizations(
     debug_plots_dir: Path,
 ) -> None:
     """Generate debug visualizations for all processing steps.
-
     Args:
         muscle_frame_id: Frame ID for naming output files
         muscle_cropped: Cropped muscle image for visualization background
