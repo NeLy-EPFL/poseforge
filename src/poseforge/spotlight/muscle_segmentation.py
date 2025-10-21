@@ -310,6 +310,91 @@ def _load_and_map_segmentation_to_muscle_space(
     return muscle_image, segmap_mapped
 
 
+def _generate_debug_visualizations(
+    muscle_frame_id: int,
+    muscle_cropped: np.ndarray,
+    segmap_cropped: np.ndarray,
+    foreground_mask: np.ndarray,
+    x_shift: int,
+    y_shift: int,
+    corr_matrix: np.ndarray,
+    search_limit: int,
+    denoised_masks: np.ndarray,
+    final_masks: np.ndarray,
+    dilation_kernel_size: int,
+    muscle_vrange: tuple[int, int],
+    segs_to_visualize_ids: list[int],
+    debug_plots_dir: Path,
+) -> None:
+    """Generate debug visualizations for all processing steps.
+    
+    Args:
+        muscle_frame_id: Frame ID for naming output files
+        muscle_cropped: Cropped muscle image for visualization background
+        segmap_cropped: Cropped segmentation map after initial mapping
+        foreground_mask: Binary mask of foreground segments for template matching
+        x_shift: Horizontal shift from template matching
+        y_shift: Vertical shift from template matching
+        corr_matrix: Correlation matrix from template matching
+        search_limit: Search limit used in template matching
+        denoised_masks: Masks after morphological denoising
+        final_masks: Final masks (after optional dilation)
+        dilation_kernel_size: Dilation kernel size (1 means no dilation)
+        muscle_vrange: Value range for muscle image normalization
+        segs_to_visualize_ids: Segment IDs to include in visualizations
+        debug_plots_dir: Directory to save debug plots
+    """
+    # Step 1: Initial mapping visualization
+    initial_mapping_dir = debug_plots_dir / "01_initial_mapping"
+    initial_mapping_dir.mkdir(parents=True, exist_ok=True)
+    masks = []
+    for seg_value in segs_to_visualize_ids:
+        masks.append(segmap_cropped == seg_value)
+    draw_mask_contours(
+        image=muscle_cropped,
+        masks=np.stack(masks, axis=0),
+        muscle_vrange=muscle_vrange,
+        output_path=initial_mapping_dir / f"frame_{muscle_frame_id:06d}.jpg",
+    )
+
+    # Step 2: Fine alignment visualization
+    fine_alignment_dir = debug_plots_dir / "02_fine_alignment"
+    fine_alignment_dir.mkdir(parents=True, exist_ok=True)
+    draw_template_matching_viz(
+        muscle_image=muscle_cropped,
+        foreground_mask=foreground_mask,
+        x_shift=x_shift,
+        y_shift=y_shift,
+        corr_matrix=corr_matrix,
+        search_limit=search_limit,
+        output_path=fine_alignment_dir / f"frame_{muscle_frame_id:06d}.jpg",
+        muscle_vrange=muscle_vrange,
+    )
+
+    # Step 3: Morphological denoising visualization
+    morph_denoising_dir = debug_plots_dir / "03_morph_denoising"
+    morph_denoising_dir.mkdir(parents=True, exist_ok=True)
+    masks_for_viz = denoised_masks[segs_to_visualize_ids]
+    draw_mask_contours(
+        image=muscle_cropped,
+        masks=masks_for_viz,
+        muscle_vrange=muscle_vrange,
+        output_path=morph_denoising_dir / f"frame_{muscle_frame_id:06d}.jpg",
+    )
+
+    # Step 4: Dilation visualization (if applied)
+    if dilation_kernel_size != 1:
+        dilation_dir = debug_plots_dir / "04_mask_dilation"
+        dilation_dir.mkdir(parents=True, exist_ok=True)
+        masks_for_viz = final_masks[segs_to_visualize_ids]
+        draw_mask_contours(
+            image=muscle_cropped,
+            masks=masks_for_viz,
+            muscle_vrange=muscle_vrange,
+            output_path=dilation_dir / f"frame_{muscle_frame_id:06d}.jpg",
+        )
+
+
 def _process_single_frame(
     muscle_frame_id: int,
     muscle_path: Path,
@@ -393,57 +478,24 @@ def _process_single_frame(
         muscle_cropped, muscle_masks, muscle_roi_sizes
     )
 
-    # Debug visualizations for each step
+    # Generate debug visualizations
     if debug_plots_dir is not None and segs_to_visualize_ids is not None:
-        # Step 1: Initial mapping visualization
-        initial_mapping_dir = debug_plots_dir / "01_initial_mapping"
-        initial_mapping_dir.mkdir(parents=True, exist_ok=True)
-        masks = []
-        for seg_value in segs_to_visualize_ids:
-            masks.append(segmap_cropped == seg_value)
-        draw_mask_contours(
-            image=muscle_cropped,
-            masks=np.stack(masks, axis=0),
-            muscle_vrange=muscle_vrange,
-            output_path=initial_mapping_dir / f"frame_{muscle_frame_id:06d}.jpg",
-        )
-
-        # Step 2: Fine alignment visualization
-        fine_alignment_dir = debug_plots_dir / "02_fine_alignment"
-        fine_alignment_dir.mkdir(parents=True, exist_ok=True)
-        draw_template_matching_viz(
-            muscle_image=muscle_cropped,
+        _generate_debug_visualizations(
+            muscle_frame_id=muscle_frame_id,
+            muscle_cropped=muscle_cropped,
+            segmap_cropped=segmap_cropped,
             foreground_mask=foreground_mask,
             x_shift=x_shift,
             y_shift=y_shift,
             corr_matrix=corr_matrix,
             search_limit=search_limit,
-            output_path=fine_alignment_dir / f"frame_{muscle_frame_id:06d}.jpg",
+            denoised_masks=denoised_masks,
+            final_masks=final_masks,
+            dilation_kernel_size=dilation_kernel_size,
             muscle_vrange=muscle_vrange,
+            segs_to_visualize_ids=segs_to_visualize_ids,
+            debug_plots_dir=debug_plots_dir,
         )
-
-        # Step 3: Morphological denoising visualization
-        morph_denoising_dir = debug_plots_dir / "03_morph_denoising"
-        morph_denoising_dir.mkdir(parents=True, exist_ok=True)
-        masks_for_viz = denoised_masks[segs_to_visualize_ids]
-        draw_mask_contours(
-            image=muscle_cropped,
-            masks=masks_for_viz,
-            muscle_vrange=muscle_vrange,
-            output_path=morph_denoising_dir / f"frame_{muscle_frame_id:06d}.jpg",
-        )
-
-        # Step 4: Dilation visualization (if applied)
-        if dilation_kernel_size != 1:
-            dilation_dir = debug_plots_dir / "04_mask_dilation"
-            dilation_dir.mkdir(parents=True, exist_ok=True)
-            masks_for_viz = final_masks[segs_to_visualize_ids]
-            draw_mask_contours(
-                image=muscle_cropped,
-                masks=masks_for_viz,
-                muscle_vrange=muscle_vrange,
-                output_path=dilation_dir / f"frame_{muscle_frame_id:06d}.jpg",
-            )
 
     # Prepare output
     datasets = {
