@@ -79,7 +79,6 @@ def process_muscle_segmentation(
             Path to save muscle segmentation outputs to (in H5 format).
         muscle_traces_segments (list[str]):
             List of body segments to extract fluorescence traces for.
-            Defaults to all leg segments.
         alignment_foreground_segments (list[str]):
             For template matching, it's useful to only consider certain
             body segments (e.g. legs) as the foreground. This is because
@@ -199,7 +198,7 @@ def process_muscle_segmentation(
             "alignment_foreground_segment_ids": alignment_foreground_segment_ids,
             "search_limit": template_matching_search_limit,
             "morph_kernel_size": morph_denoise_kernel_size,
-            "morph_iterations": morph_denoise_n_iterations,
+            "morph_n_iterations": morph_denoise_n_iterations,
             "dilation_kernel_size": dilation_kernel_size,
             "muscle_vrange": muscle_vrange,
             "seg_labels": seg_labels,
@@ -257,7 +256,7 @@ def _process_single_frame(
     alignment_foreground_segment_ids: list[int],
     search_limit: int,
     morph_kernel_size: int,
-    morph_iterations: int,
+    morph_n_iterations: int,
     dilation_kernel_size: int,
     muscle_vrange: tuple[int, int],
     seg_labels: list[str],
@@ -270,15 +269,14 @@ def _process_single_frame(
         See `process_muscle_segmentation`.
 
     Returns:
-        datasets_dict (dict[str, np.ndarray]):
+        datasets (dict[str, np.ndarray]):
             Contains cropped images, aligned segmaps, masks, etc.
-        attributes_dict (dict[str, any]):
+        attributes (dict[str, any]):
             Contains metadata like shifts, pixel counts, file paths, etc.
     """
 
     # Step 1: Load and map segmentation to muscle space
     muscle_image = imageio.imread(muscle_path)
-    segmap = segmap
 
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
@@ -348,7 +346,7 @@ def _process_single_frame(
         cv2.MORPH_ELLIPSE, (morph_kernel_size, morph_kernel_size)
     )
     denoised_masks = _denoise_masks(
-        segmap_aligned, seg_labels, morph_kernel, morph_iterations
+        segmap_aligned, seg_labels, morph_kernel, morph_n_iterations
     )
 
     # Step 4: Dilate masks to provide extra margin for alignment errors
@@ -411,7 +409,7 @@ def _process_single_frame(
         )
 
         # Step 4: Dilation visualization (if applied)
-        if dilation_kernel_size is not None:
+        if dilation_kernel_size != 1:
             dilation_dir = debug_plots_dir / "04_mask_dilation"
             dilation_dir.mkdir(parents=True, exist_ok=True)
             masks_for_viz = final_masks[segs_to_visualize_ids]
@@ -432,7 +430,7 @@ def _process_single_frame(
         "muscle_traces": muscle_traces,
     }
 
-    if dilation_kernel_size is not None:
+    if dilation_kernel_size != 1:
         datasets["masks_dilated"] = final_masks.astype(np.bool_)
 
     attributes = {
