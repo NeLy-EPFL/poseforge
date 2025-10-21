@@ -6,13 +6,11 @@ import imageio.v2 as imageio
 import logging
 import cv2
 from pathlib import Path
-from collections import defaultdict
 from scipy import ndimage
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
 from poseforge.spotlight.input_transform import reverse_rotation_and_crop
-from poseforge.neuromechfly.constants import legs
 from poseforge.spotlight.viz import draw_mask_contours, draw_template_matching_viz
 
 
@@ -26,84 +24,41 @@ leg_segment_names = [
 antennal_segment_names = ["LAntenna", "RAntenna"]
 
 
-def extract_muscle_trace(
-    muscle_segmentation_path: Path, body_segments: list[str], use_dilated: bool = True
-):
-    with h5py.File(muscle_segmentation_path, "r") as f:
-        # Get indices of requested body segments in the stack of masks
-        class_labels = list(f.attrs["class_labels"])
-        segment_stack_indices = []
-        for segment in body_segments:
-            if segment not in class_labels:
-                logging.critical(
-                    f"Body segment '{segment}' not found in segmentation labels: "
-                    f"{class_labels}"
-                )
-            segment_stack_indices.append(class_labels.index(segment))
-        if len(segment_stack_indices) != len(body_segments):
-            raise ValueError("Some body segments not found in segmentation labels.")
+def _extract_muscle_trace_single_frame(muscle_image, masks, roi_sizes):
+    assert masks.shape[0] == len(roi_sizes)
 
-        # Check which processed step to use depending on the use_dilated flag
-        if use_dilated:
-            if "masks_dilated" not in f[list(f.keys())[0]]:
-                raise ValueError(
-                    "Dilated masks not found in muscle segmentation file. "
-                    "Set use_dilated=False or re-run muscle segmentation with "
-                    "dilation enabled."
-                )
-            dataset_name = "masks_dilated"
+    muscle_traces = []
+    for i in range(masks.shape[0]):
+        mask = masks[i, ...]
+        assert mask.shape == muscle_image.shape
+        selected_pixels = muscle_image[mask]
+        # Use ROI area before dilation regardless of whether dilated masks are
+        # used. The dilation allows some margin of error for the alignment, but
+        # the (projected) size of the physical muscle shouldn't change.
+        area = roi_sizes[i]
+        # Set muscle activation to NaN if no ROI is detected for this segment
+        if area == 0:
+            activation = np.nan
         else:
-            dataset_name = "masks_morph_denoised"
+            activation = selected_pixels.mean()
+        muscle_traces.append(activation)
 
-        # Extract muscle traces for each requested body segment
-        muscle_traces = defaultdict(dict)
-        muscle_pixel_values = defaultdict(dict)
-        empty_mask_counter = defaultdict(int)
-        for frame_key in sorted(f.keys()):
-            muscle_frame_id = int(frame_key.split("_")[-1])
-            grp = f[frame_key]
-            muscle_image = grp["muscle_image_cropped"][:]
-            for idx, label in zip(segment_stack_indices, body_segments):
-                mask = grp[dataset_name][idx, ...]
-                assert mask.shape == muscle_image.shape
-                selected_pixels = muscle_image[mask]
-                # Use ROI area before dilation regardless of whether dilated masks are
-                # used. The dilation allows some margin of error for the alignment, but
-                # the (projected) size of the physical muscle shouldn't change.
-                area = grp.attrs[f"n_pixels_pre_dilation_{label}"]
-                # Set muscle activation to NaN if no ROI is detected for this segment
-                if area == 0:
-                    activation = np.nan
-                    empty_mask_counter[label] += 1
-                else:
-                    activation = selected_pixels.mean()
-                muscle_traces[label][muscle_frame_id] = activation
-                muscle_pixel_values[label][muscle_frame_id] = selected_pixels.copy()
-
-        # Log summary of empty masks
-        n_frames = len(f.keys())
-        for label, count in empty_mask_counter.items():
-            if count > 0:
-                logging.warning(
-                    f"Segment '{label}' had {count} out of {n_frames} frames with "
-                    "empty masks. Muscle activations set to NaN for these frames."
-                )
-
-    return muscle_traces, muscle_pixel_values
+    return np.array(muscle_traces)
 
 
 def process_muscle_segmentation(
     spotlight_trial_dir: Path,
-    aligned_behavior_image_dir: Path,
+    preprocessed_behavior_image_dir: Path,
     bodyseg_prediction_path: Path,
     output_path: Path,
-    foreground_classes_for_alignment: list[str],
+    muscle_traces_segments: list[str],
+    alignment_foreground_segments: list[str] = leg_segment_names,
     muscle_vrange: tuple[int, int] = (200, 1000),
-    padding: int = 100,
-    search_limit: int = 50,
-    morph_kernel_size: int = 5,
-    morph_iterations: int = 1,
-    dilation_size: int | None = None,
+    crop_padding: int = 100,
+    template_matching_search_limit: int = 50,
+    morph_denoise_kernel_size: int = 5,
+    morph_denoise_n_iterations: int = 1,
+    dilation_kernel_size: int = 1,
     debug_plots_dir: Path | None = None,
     n_workers: int = -1,
 ):
@@ -111,29 +66,64 @@ def process_muscle_segmentation(
     Process muscle segmentation mapping all steps for each frame in parallel.
 
     Args:
-        spotlight_trial_dir: Path to spotlight trial directory
-        aligned_behavior_image_dir: Path to aligned behavior images
-        bodyseg_prediction_path: Path to bodyseg predictions H5 file
-        output_path: Output H5 file path
-        muscle_vrange: Min/max values for muscle image visualization
-        padding: Padding around bounding box for cropping
-        foreground_classes_for_alignment: Classes to use for template
-            matching foreground
-        search_limit: Max pixel offset for template matching
-        morph_kernel_size: Kernel size for morphological operations
-        morph_iterations: Number of morphological iterations
-        dilation_size: Dilation kernel size (None to skip dilation)
-        debug_plots_dir: Optional directory for debug visualizations
-        n_workers: Number of parallel workers
+        spotlight_trial_dir (Path):
+            Path to spotlight trial directory. This is the "save" directory
+            set in the spotlight recording software.
+        preprocessed_behavior_image_dir (Path):
+            Path to directory containing preprocessed behavior images -
+            i.e. after rotating and cropping so that the fly is centered
+            and facing up.
+        bodyseg_prediction_path (Path):
+            Path to H5 file containing predictions from the bodyseg model.
+        output_path (Path):
+            Path to save muscle segmentation outputs to (in H5 format).
+        muscle_traces_segments (list[str]):
+            List of body segments to extract fluorescence traces for.
+            Defaults to all leg segments.
+        alignment_foreground_segments (list[str]):
+            For template matching, it's useful to only consider certain
+            body segments (e.g. legs) as the foreground. This is because
+            the muscle images mainly show fluorescence from the legs, and
+            other body segments may only introduce noise. This argument
+            specifies which body segments to use as foreground for
+            template matching. Defaults to all leg segments.
+        muscle_vrange (tuple[int, int]):
+            Min/max values to normalize muscle images to. This is used for
+            template matching and for visualization.
+        crop_padding (int):
+            For space efficiency, we crop muscle images, body segmentation
+            maps, and masks to a bounding box around the non-background
+            parts of the segmentation map (with some padding on all sides).
+            This argument specifies the padding size in pixels.
+            Defaults to 100.
+        template_matching_search_limit (int):
+            Maximum pixel offset to search in each direction during
+            template matching for fine alignment. Defaults to 50.
+        morph_denoise_kernel_size (int):
+            Kernel size for denoising based on morphological transforms.
+            Defaults to 5.
+        morph_denoise_n_iterations (int):
+            Number of iterations for denoising based on morphological
+            transforms. Defaults to 1.
+        dilation_kernel_size (int):
+            After masks are denoised, we may want to dilate them to provide
+            extra margin of error for alignment inaccuracies. This argument
+            specifies the dilation kernel size. If set to 1, no dilation is
+            performed. Defaults to 1.
+        debug_plots_dir (Path | None):
+            If provided, debug visualizations for each processing step
+            will be saved to this directory. Defaults to None (no plots).
+        n_workers (int):
+            Number of parallel workers to use (see n_jobs convention in
+            joblib). Defaults to -1 (use all available CPU cores).
     """
-    logging.info("Processing muscle segmentation mapping")
-
     # Input validation
     if not spotlight_trial_dir.is_dir():
         raise ValueError(f"Spotlight trial directory not found: {spotlight_trial_dir}")
-    if not aligned_behavior_image_dir.is_dir():
+    if not preprocessed_behavior_image_dir.is_dir():
         raise ValueError(
-            f"Aligned behavior image directory not found: {aligned_behavior_image_dir}"
+            f"Preprocessed behavior image directory not found: "
+            f"{preprocessed_behavior_image_dir}"
         )
     if not bodyseg_prediction_path.is_file():
         raise ValueError(
@@ -173,7 +163,18 @@ def process_muscle_segmentation(
         frame_id: idx for idx, frame_id in enumerate(behavior_frame_ids)
     }
 
-    frame_tasks = []
+    # Get class indices for given lists of segment names
+    alignment_foreground_segment_ids = [  # for template matching
+        seg_labels.index(label) for label in alignment_foreground_segments
+    ]
+    muscle_traces_segment_ids = [  # for muscle trace extraction
+        seg_labels.index(label) for label in muscle_traces_segments
+    ]
+    visualized_segment_ids = [  # for drawing ROIs in debug plots
+        seg_labels.index(label) for label in leg_segment_names + antennal_segment_names
+    ]
+
+    input_kwargs_all_tasks = []
     for muscle_frame_id, muscle_path in muscle_path_by_frameid.items():
         behavior_frame_id = (muscle_frame_id + 1) * sync_ratio
         if behavior_frame_id not in behavior_frame_to_stack_idx:
@@ -183,84 +184,84 @@ def process_muscle_segmentation(
         segmap = pred_segmaps[segmap_idx]
 
         metadata_path = (
-            aligned_behavior_image_dir.parent.parent
+            preprocessed_behavior_image_dir.parent.parent
             / "all"
             / f"frame_{behavior_frame_id:09d}.metadata.json"
         )
 
-        frame_tasks.append(
-            {
-                "muscle_frame_id": muscle_frame_id,
-                "muscle_path": muscle_path,
-                "segmap": segmap,
-                "metadata_path": metadata_path,
-            }
-        )
+        input_kwargs = {
+            "muscle_frame_id": muscle_frame_id,
+            "muscle_path": muscle_path,
+            "segmap": segmap,
+            "metadata_path": metadata_path,
+            "padding": crop_padding,
+            "muscle_traces_segment_ids": muscle_traces_segment_ids,
+            "alignment_foreground_segment_ids": alignment_foreground_segment_ids,
+            "search_limit": template_matching_search_limit,
+            "morph_kernel_size": morph_denoise_kernel_size,
+            "morph_iterations": morph_denoise_n_iterations,
+            "dilation_kernel_size": dilation_kernel_size,
+            "muscle_vrange": muscle_vrange,
+            "seg_labels": seg_labels,
+            "segs_to_visualize_ids": visualized_segment_ids,
+            "debug_plots_dir": debug_plots_dir,
+        }
+        input_kwargs_all_tasks.append(input_kwargs)
 
-    logging.info(f"Processing {len(frame_tasks)} frames with {n_workers} workers")
-
-    # Get foreground class indices for template matching
-    foreground_class_indices = [
-        seg_labels.index(label) for label in foreground_classes_for_alignment
-    ]
-
-    # Setup debug visualization
-    segs_to_visualize_indices = None
+    # Setup debug visualization directory
     if debug_plots_dir is not None:
         debug_plots_dir.mkdir(parents=True, exist_ok=True)
-        segs_to_visualize_indices = [
-            seg_labels.index(label)
-            for label in leg_segment_names + antennal_segment_names
-        ]
 
     # Process all frames in parallel
-    results = Parallel(n_jobs=n_workers, verbose=1)(
-        delayed(_process_single_frame)(
-            task=task,
-            padding=padding,
-            foreground_class_indices=foreground_class_indices,
-            search_limit=search_limit,
-            morph_kernel_size=morph_kernel_size,
-            morph_iterations=morph_iterations,
-            dilation_size=dilation_size,
-            muscle_vrange=muscle_vrange,
-            seg_labels=seg_labels,
-            segs_to_visualize_indices=segs_to_visualize_indices,
-            debug_plots_dir=debug_plots_dir,
+    parallel_processor = Parallel(n_jobs=n_workers, verbose=1)
+    logging.info(
+        f"Processing {len(input_kwargs_all_tasks)} frames "
+        f"with {parallel_processor._effective_n_jobs} workers"
+    )
+    results_all_tasks = parallel_processor(
+        delayed(_process_single_frame)(**input_kwargs)
+        for input_kwargs in tqdm(
+            input_kwargs_all_tasks, disable=None, desc="Processing frames"
         )
-        for task in tqdm(frame_tasks, desc="Processing frames")
     )
 
     # Save results to H5 file
+    logging.info(f"Saving results to: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(output_path, "w") as f:
-        f.attrs["class_labels"] = seg_labels
-
-        for task, (result_datasets, result_attributes) in zip(frame_tasks, results):
-            if result_datasets is None:  # Frame failed processing
-                continue
-
-            grp = f.create_group(f"muscle_frame_{task['muscle_frame_id']:06d}")
-
-            # Save all datasets
+        for input_kwargs, (result_datasets, result_attributes) in tqdm(
+            zip(input_kwargs_all_tasks, results_all_tasks),
+            disable=None,
+            total=len(results_all_tasks),
+            desc="Saving results",
+        ):
+            muscle_frame_id = input_kwargs["muscle_frame_id"]
+            grp = f.create_group(f"muscle_frame_{muscle_frame_id:06d}")
             for key, data in result_datasets.items():
                 grp.create_dataset(key, data=data, compression="gzip", shuffle=True)
             grp.attrs.update(result_attributes)
+            grp.attrs["all_segments"] = seg_labels
+            grp.attrs["alignment_foreground_segments"] = alignment_foreground_segments
+            grp.attrs["muscle_traces_segments"] = muscle_traces_segments
 
     logging.info(f"Saved results to {output_path}")
 
 
 def _process_single_frame(
-    task: dict,
+    muscle_frame_id: int,
+    muscle_path: Path,
+    segmap: np.ndarray,
+    metadata_path: Path,
     padding: int,
-    foreground_class_indices: list[int],
+    muscle_traces_segment_ids: list[int],
+    alignment_foreground_segment_ids: list[int],
     search_limit: int,
     morph_kernel_size: int,
     morph_iterations: int,
-    dilation_size: int | None,
+    dilation_kernel_size: int,
     muscle_vrange: tuple[int, int],
     seg_labels: list[str],
-    segs_to_visualize_indices: list[int] | None,
+    segs_to_visualize_ids: list[int] | None,
     debug_plots_dir: Path | None,
 ) -> tuple[dict, dict]:
     """Process all segmentation steps for a single frame.
@@ -269,27 +270,42 @@ def _process_single_frame(
         See `process_muscle_segmentation`.
 
     Returns:
-        Tuple of (datasets_dict, attributes_dict) where:
-        - datasets_dict: Contains cropped images, aligned segmaps, masks, etc.
-        - attributes_dict: Contains metadata like shifts, pixel counts, file paths
+        datasets_dict (dict[str, np.ndarray]):
+            Contains cropped images, aligned segmaps, masks, etc.
+        attributes_dict (dict[str, any]):
+            Contains metadata like shifts, pixel counts, file paths, etc.
     """
 
-    muscle_frame_id = task["muscle_frame_id"]
-
     # Step 1: Load and map segmentation to muscle space
-    muscle_image = imageio.imread(task["muscle_path"])
-    segmap = task["segmap"]
+    muscle_image = imageio.imread(muscle_path)
+    segmap = segmap
 
-    with open(task["metadata_path"], "r") as f:
+    with open(metadata_path, "r") as f:
         metadata = json.load(f)
 
     # Resize and reverse transform segmap to muscle space
     size_before_transform = tuple(metadata["rotation"]["input_size"])
     if size_before_transform != muscle_image.shape:
+        # The muscle image and the behavior image (whose size is specified by
+        # size_before_transform) can be slightly different. This is because the behavior
+        # camera cannot record at any image size. The image size is rounded to the
+        # nearest allowed value (multiple of 64). If this happens, we crop the two
+        # images to the same size.
+        # ! ONLY ONE CASE IS HANDLED HERE - THIS ISSUE WILL BE FIXED IN SPOTLIGHT
+        # ! CONTROL SOFTWARE AND THIS CODEPATH WILL BE REMOVED IN THE FUTURE.
+        assert size_before_transform[0] == muscle_image.shape[0]
+        assert size_before_transform[1] == 1472
+        assert muscle_image.shape[1] == 1500
         muscle_image = muscle_image[
             : size_before_transform[0], : size_before_transform[1]
         ]
 
+    # The behavior image preprocessing step (rotation + crop) does NOT change the size
+    # of the image. The preprocessed image can still be rather large (e.g. 900x900).
+    # However, the pose models (including bodyseg) first resize the input to a smaller
+    # working dimension (e.g. 256x256). The output segmap is therefore at this smaller
+    # size. Before reversing the preprocessing transforms, we need to first resize the
+    # segmap back to the preprocessed image size.
     size_after_crop = metadata["crop"]["output_size"]
     zoom_factor = (
         size_after_crop[0] / segmap.shape[0],
@@ -297,6 +313,7 @@ def _process_single_frame(
     )
     segmap_resized = ndimage.zoom(segmap, zoom_factor, order=0)
 
+    # Reverse the preprocessing transforms (rotation + crop) applied to behavior images
     segmap_mapped = reverse_rotation_and_crop(
         segmap_resized,
         rotation_params=metadata["rotation"],
@@ -308,7 +325,6 @@ def _process_single_frame(
     has_feature, muscle_cropped, segmap_cropped, crop_metadata = _crop_by_features(
         muscle_image, segmap_mapped, padding
     )
-
     if not has_feature:
         logging.warning(
             f"No non-background features found in muscle frame {muscle_frame_id}. "
@@ -318,7 +334,7 @@ def _process_single_frame(
 
     # Step 2: Fine alignment via template matching
     muscle_norm = _normalize_muscle_image(muscle_cropped, muscle_vrange)
-    foreground_mask = np.isin(segmap_cropped, foreground_class_indices)
+    foreground_mask = np.isin(segmap_cropped, alignment_foreground_segment_ids)
 
     x_shift, y_shift, corr_matrix = _template_match(
         muscle_norm, foreground_mask, search_limit
@@ -335,21 +351,32 @@ def _process_single_frame(
         segmap_aligned, seg_labels, morph_kernel, morph_iterations
     )
 
-    # Step 4: Optional dilation
-    final_masks = denoised_masks
-    if dilation_size is not None:
+    # Step 4: Dilate masks to provide extra margin for alignment errors
+    if dilation_kernel_size == 1:
+        final_masks = denoised_masks
+    else:
         dilation_kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (dilation_size, dilation_size)
+            cv2.MORPH_ELLIPSE, (dilation_kernel_size, dilation_kernel_size)
         )
         final_masks = _dilate_masks(denoised_masks, seg_labels, dilation_kernel)
 
+    # Step 5: Extract muscle traces for requested segments
+    muscle_masks = final_masks[muscle_traces_segment_ids, ...]
+    # Use ROI area before dilation regardless of whether dilated masks are used. The
+    # dilation allows some margin of error for the alignment, but the (projected) size
+    # of the physical muscle shouldn't change.
+    muscle_roi_sizes = [denoised_masks[i].sum() for i in muscle_traces_segment_ids]
+    muscle_traces = _extract_muscle_trace_single_frame(
+        muscle_cropped, muscle_masks, muscle_roi_sizes
+    )
+
     # Debug visualizations for each step
-    if debug_plots_dir is not None and segs_to_visualize_indices is not None:
+    if debug_plots_dir is not None and segs_to_visualize_ids is not None:
         # Step 1: Initial mapping visualization
         initial_mapping_dir = debug_plots_dir / "01_initial_mapping"
         initial_mapping_dir.mkdir(parents=True, exist_ok=True)
         masks = []
-        for seg_value in segs_to_visualize_indices:
+        for seg_value in segs_to_visualize_ids:
             masks.append(segmap_cropped == seg_value)
         draw_mask_contours(
             image=muscle_cropped,
@@ -375,7 +402,7 @@ def _process_single_frame(
         # Step 3: Morphological denoising visualization
         morph_denoising_dir = debug_plots_dir / "03_morph_denoising"
         morph_denoising_dir.mkdir(parents=True, exist_ok=True)
-        masks_for_viz = denoised_masks[segs_to_visualize_indices]
+        masks_for_viz = denoised_masks[segs_to_visualize_ids]
         draw_mask_contours(
             image=muscle_cropped,
             masks=masks_for_viz,
@@ -384,10 +411,10 @@ def _process_single_frame(
         )
 
         # Step 4: Dilation visualization (if applied)
-        if dilation_size is not None:
+        if dilation_kernel_size is not None:
             dilation_dir = debug_plots_dir / "04_mask_dilation"
             dilation_dir.mkdir(parents=True, exist_ok=True)
-            masks_for_viz = final_masks[segs_to_visualize_indices]
+            masks_for_viz = final_masks[segs_to_visualize_ids]
             draw_mask_contours(
                 image=muscle_cropped,
                 masks=masks_for_viz,
@@ -402,14 +429,15 @@ def _process_single_frame(
         "segmap_fine_aligned": segmap_aligned,
         "template_matching_correlation_matrix": corr_matrix,
         "masks_morph_denoised": denoised_masks.astype(np.bool_),
+        "muscle_traces": muscle_traces,
     }
 
-    if dilation_size is not None:
+    if dilation_kernel_size is not None:
         datasets["masks_dilated"] = final_masks.astype(np.bool_)
 
     attributes = {
-        "muscle_image_path": str(task["muscle_path"].absolute()),
-        "input_transform_metadata_path": str(task["metadata_path"].absolute()),
+        "muscle_image_path": str(muscle_path.absolute()),
+        "input_transform_metadata_path": str(metadata_path.absolute()),
         "has_non_background_feature": has_feature,
         "template_matching_x_shift": x_shift,
         "template_matching_y_shift": y_shift,
@@ -434,8 +462,18 @@ def _crop_by_features(
         padding: Number of pixels to pad around the bounding box
 
     Returns:
-        Tuple of (has_feature, muscle_cropped, segmap_cropped, crop_metadata)
-        where crop_metadata contains bounding box information.
+        has_feature (bool):
+            Whether any non-background features were found.
+        muscle_cropped (np.ndarray):
+            Cropped muscle image, shape (h, w)
+        segmap_cropped (np.ndarray):
+            Cropped segmentation map, shape (h, w)
+        crop_metadata (dict):
+            Contains bounding box information:
+            - segmap_feature_bbox_row_range: [min_row, max_row]
+            - segmap_feature_bbox_col_range: [min_col, max_col]
+            - crop_box_row_range: [crop_min_row, crop_max_row]
+            - crop_box_col_range: [crop_min_col, crop_max_col]
     """
     non_background_mask = segmap > 0
 
@@ -485,7 +523,12 @@ def _template_match(
         search_limit: Maximum pixel offset to search in any direction
 
     Returns:
-        Tuple of (x_shift, y_shift, correlation_matrix)
+        x_shift: int
+            Optimal column-wise translation to be applied to the segmap.
+        y_shift: int
+            Optimal row-wise translation to be applied to the segmap.
+        correlation_matrix: np.ndarray
+            Cross-correlation matrix of the template matching.
     """
     n_rows, n_cols = muscle_image.shape
 
@@ -524,7 +567,7 @@ def _denoise_masks(
         n_iterations: Number of iterations for opening and closing
 
     Returns:
-        Array of denoised binary masks, shape (n_classes, H, W)
+        Array of denoised binary masks, shape (len(class_labels), H, W)
     """
     denoised_masks = []
 
@@ -564,7 +607,7 @@ def _dilate_masks(
 
     Args:
         masks: Binary masks to dilate, shape (n_classes, H, W)
-        class_labels: List of class names (background class is skipped)
+        class_labels: List of class names
         dilation_kernel: Structuring element for dilation
 
     Returns:
