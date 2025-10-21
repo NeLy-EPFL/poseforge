@@ -246,6 +246,70 @@ def process_muscle_segmentation(
     logging.info(f"Saved results to {output_path}")
 
 
+def _load_and_map_segmentation_to_muscle_space(
+    muscle_path: Path, segmap: np.ndarray, metadata_path: Path
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load muscle image & map segmentation from behavior to muscle space.
+    
+    Args:
+        See `process_muscle_segmentation`.
+        
+    Returns:
+        muscle_image (np.ndarray):
+            Loaded muscle image, cropped to where segmentation map
+            indicates non-background features are.
+        segmap_mapped (np.ndarray):
+            Segmentation map transformed to muscle image space, also
+            cropped to match the muscle image.
+    """
+    # Load muscle image and metadata
+    muscle_image = imageio.imread(muscle_path)
+    
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+
+    # Handle size mismatch between muscle and behavior images
+    size_before_transform = tuple(metadata["rotation"]["input_size"])
+    if size_before_transform != muscle_image.shape:
+        # The muscle image and the behavior image (whose size is specified by
+        # size_before_transform) can be slightly different. This is because the behavior
+        # camera cannot record at any image size. The image size is rounded to the
+        # nearest allowed value (multiple of 64). If this happens, we crop the two
+        # images to the same size.
+        # ! ONLY ONE CASE IS HANDLED HERE - THIS ISSUE WILL BE FIXED IN SPOTLIGHT
+        # ! CONTROL SOFTWARE AND THIS CODEPATH WILL BE REMOVED IN THE FUTURE.
+        assert size_before_transform[0] == muscle_image.shape[0]
+        assert size_before_transform[1] == 1472
+        assert muscle_image.shape[1] == 1500
+        muscle_image = muscle_image[
+            : size_before_transform[0], : size_before_transform[1]
+        ]
+
+    # Resize segmap from model working resolution back to preprocessed image size
+    # The behavior image preprocessing step (rotation + crop) does NOT change the size
+    # of the image. The preprocessed image can still be rather large (e.g. 900x900).
+    # However, the pose models (including bodyseg) first resize the input to a smaller
+    # working dimension (e.g. 256x256). The output segmap is therefore at this smaller
+    # size. Before reversing the preprocessing transforms, we need to first resize the
+    # segmap back to the preprocessed image size.
+    size_after_crop = metadata["crop"]["output_size"]
+    zoom_factor = (
+        size_after_crop[0] / segmap.shape[0],
+        size_after_crop[1] / segmap.shape[1],
+    )
+    segmap_resized = ndimage.zoom(segmap, zoom_factor, order=0)
+
+    # Reverse the preprocessing transforms (rotation + crop) applied to behavior images
+    segmap_mapped = reverse_rotation_and_crop(
+        segmap_resized,
+        rotation_params=metadata["rotation"],
+        crop_params=metadata["crop"],
+        fill_value=0,
+    )
+    
+    return muscle_image, segmap_mapped
+
+
 def _process_single_frame(
     muscle_frame_id: int,
     muscle_path: Path,
@@ -276,47 +340,8 @@ def _process_single_frame(
     """
 
     # Step 1: Load and map segmentation to muscle space
-    muscle_image = imageio.imread(muscle_path)
-
-    with open(metadata_path, "r") as f:
-        metadata = json.load(f)
-
-    # Resize and reverse transform segmap to muscle space
-    size_before_transform = tuple(metadata["rotation"]["input_size"])
-    if size_before_transform != muscle_image.shape:
-        # The muscle image and the behavior image (whose size is specified by
-        # size_before_transform) can be slightly different. This is because the behavior
-        # camera cannot record at any image size. The image size is rounded to the
-        # nearest allowed value (multiple of 64). If this happens, we crop the two
-        # images to the same size.
-        # ! ONLY ONE CASE IS HANDLED HERE - THIS ISSUE WILL BE FIXED IN SPOTLIGHT
-        # ! CONTROL SOFTWARE AND THIS CODEPATH WILL BE REMOVED IN THE FUTURE.
-        assert size_before_transform[0] == muscle_image.shape[0]
-        assert size_before_transform[1] == 1472
-        assert muscle_image.shape[1] == 1500
-        muscle_image = muscle_image[
-            : size_before_transform[0], : size_before_transform[1]
-        ]
-
-    # The behavior image preprocessing step (rotation + crop) does NOT change the size
-    # of the image. The preprocessed image can still be rather large (e.g. 900x900).
-    # However, the pose models (including bodyseg) first resize the input to a smaller
-    # working dimension (e.g. 256x256). The output segmap is therefore at this smaller
-    # size. Before reversing the preprocessing transforms, we need to first resize the
-    # segmap back to the preprocessed image size.
-    size_after_crop = metadata["crop"]["output_size"]
-    zoom_factor = (
-        size_after_crop[0] / segmap.shape[0],
-        size_after_crop[1] / segmap.shape[1],
-    )
-    segmap_resized = ndimage.zoom(segmap, zoom_factor, order=0)
-
-    # Reverse the preprocessing transforms (rotation + crop) applied to behavior images
-    segmap_mapped = reverse_rotation_and_crop(
-        segmap_resized,
-        rotation_params=metadata["rotation"],
-        crop_params=metadata["crop"],
-        fill_value=0,
+    muscle_image, segmap_mapped = _load_and_map_segmentation_to_muscle_space(
+        muscle_path, segmap, metadata_path
     )
 
     # Crop to bounding box
