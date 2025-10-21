@@ -9,6 +9,7 @@ from pathlib import Path
 from scipy import ndimage
 from tqdm import tqdm
 from joblib import Parallel, delayed
+from filelock import FileLock
 
 from poseforge.spotlight.input_transform import reverse_rotation_and_crop
 from poseforge.spotlight.viz import draw_mask_contours, draw_template_matching_viz
@@ -204,56 +205,47 @@ def process_muscle_segmentation(
             "seg_labels": seg_labels,
             "segs_to_visualize_ids": visualized_segment_ids,
             "debug_plots_dir": debug_plots_dir,
+            "output_h5_path": output_path,
         }
         input_kwargs_all_tasks.append(input_kwargs)
 
-    # Setup debug visualization directory
+    # Setup output directories
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     if debug_plots_dir is not None:
         debug_plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Process all frames in parallel
+    # Create H5 file with global metadata upfront
+    logging.info(f"Creating H5 file: {output_path}")
+    with h5py.File(output_path, "w") as f:
+        # Set global attributes that all workers will need
+        f.attrs["all_segments"] = seg_labels
+        f.attrs["alignment_foreground_segments"] = alignment_foreground_segments
+        f.attrs["muscle_traces_segments"] = muscle_traces_segments
+
+    # Process all frames in parallel, with each worker writing directly to H5
     parallel_processor = Parallel(n_jobs=n_workers, verbose=1)
     logging.info(
         f"Processing {len(input_kwargs_all_tasks)} frames "
         f"with {parallel_processor._effective_n_jobs} workers"
     )
-    results_all_tasks = parallel_processor(
-        delayed(_process_single_frame)(**input_kwargs)
+    parallel_processor(
+        delayed(_process_and_save_single_frame)(**input_kwargs)
         for input_kwargs in tqdm(
             input_kwargs_all_tasks, disable=None, desc="Processing frames"
         )
     )
 
-    # Save results to H5 file
-    logging.info(f"Saving results to: {output_path}")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(output_path, "w") as f:
-        for input_kwargs, (result_datasets, result_attributes) in tqdm(
-            zip(input_kwargs_all_tasks, results_all_tasks),
-            disable=None,
-            total=len(results_all_tasks),
-            desc="Saving results",
-        ):
-            muscle_frame_id = input_kwargs["muscle_frame_id"]
-            grp = f.create_group(f"muscle_frame_{muscle_frame_id:06d}")
-            for key, data in result_datasets.items():
-                grp.create_dataset(key, data=data, compression="gzip", shuffle=True)
-            grp.attrs.update(result_attributes)
-            grp.attrs["all_segments"] = seg_labels
-            grp.attrs["alignment_foreground_segments"] = alignment_foreground_segments
-            grp.attrs["muscle_traces_segments"] = muscle_traces_segments
-
-    logging.info(f"Saved results to {output_path}")
+    logging.info(f"Completed processing and saved results to {output_path}")
 
 
 def _load_and_map_segmentation_to_muscle_space(
     muscle_path: Path, segmap: np.ndarray, metadata_path: Path
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load muscle image & map segmentation from behavior to muscle space.
-    
+
     Args:
         See `process_muscle_segmentation`.
-        
+
     Returns:
         muscle_image (np.ndarray):
             Loaded muscle image, cropped to where segmentation map
@@ -264,7 +256,7 @@ def _load_and_map_segmentation_to_muscle_space(
     """
     # Load muscle image and metadata
     muscle_image = imageio.imread(muscle_path)
-    
+
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
 
@@ -306,11 +298,128 @@ def _load_and_map_segmentation_to_muscle_space(
         crop_params=metadata["crop"],
         fill_value=0,
     )
-    
+
     return muscle_image, segmap_mapped
 
 
-def _process_single_frame(
+def _generate_debug_visualizations(
+    muscle_frame_id: int,
+    muscle_cropped: np.ndarray,
+    segmap_cropped: np.ndarray,
+    foreground_mask: np.ndarray,
+    x_shift: int,
+    y_shift: int,
+    corr_matrix: np.ndarray,
+    search_limit: int,
+    denoised_masks: np.ndarray,
+    final_masks: np.ndarray,
+    dilation_kernel_size: int,
+    muscle_vrange: tuple[int, int],
+    segs_to_visualize_ids: list[int],
+    debug_plots_dir: Path,
+) -> None:
+    """Generate debug visualizations for all processing steps.
+
+    Args:
+        muscle_frame_id: Frame ID for naming output files
+        muscle_cropped: Cropped muscle image for visualization background
+        segmap_cropped: Cropped segmentation map after initial mapping
+        foreground_mask: Binary mask of foreground segments for template matching
+        x_shift: Horizontal shift from template matching
+        y_shift: Vertical shift from template matching
+        corr_matrix: Correlation matrix from template matching
+        search_limit: Search limit used in template matching
+        denoised_masks: Masks after morphological denoising
+        final_masks: Final masks (after optional dilation)
+        dilation_kernel_size: Dilation kernel size (1 means no dilation)
+        muscle_vrange: Value range for muscle image normalization
+        segs_to_visualize_ids: Segment IDs to include in visualizations
+        debug_plots_dir: Directory to save debug plots
+    """
+    # Step 1: Initial mapping visualization
+    initial_mapping_dir = debug_plots_dir / "01_initial_mapping"
+    initial_mapping_dir.mkdir(parents=True, exist_ok=True)
+    masks = []
+    for seg_value in segs_to_visualize_ids:
+        masks.append(segmap_cropped == seg_value)
+    draw_mask_contours(
+        image=muscle_cropped,
+        masks=np.stack(masks, axis=0),
+        muscle_vrange=muscle_vrange,
+        output_path=initial_mapping_dir / f"frame_{muscle_frame_id:06d}.jpg",
+    )
+
+    # Step 2: Fine alignment visualization
+    fine_alignment_dir = debug_plots_dir / "02_fine_alignment"
+    fine_alignment_dir.mkdir(parents=True, exist_ok=True)
+    draw_template_matching_viz(
+        muscle_image=muscle_cropped,
+        foreground_mask=foreground_mask,
+        x_shift=x_shift,
+        y_shift=y_shift,
+        corr_matrix=corr_matrix,
+        search_limit=search_limit,
+        output_path=fine_alignment_dir / f"frame_{muscle_frame_id:06d}.jpg",
+        muscle_vrange=muscle_vrange,
+    )
+
+    # Step 3: Morphological denoising visualization
+    morph_denoising_dir = debug_plots_dir / "03_morph_denoising"
+    morph_denoising_dir.mkdir(parents=True, exist_ok=True)
+    masks_for_viz = denoised_masks[segs_to_visualize_ids]
+    draw_mask_contours(
+        image=muscle_cropped,
+        masks=masks_for_viz,
+        muscle_vrange=muscle_vrange,
+        output_path=morph_denoising_dir / f"frame_{muscle_frame_id:06d}.jpg",
+    )
+
+    # Step 4: Dilation visualization (if applied)
+    if dilation_kernel_size != 1:
+        dilation_dir = debug_plots_dir / "04_mask_dilation"
+        dilation_dir.mkdir(parents=True, exist_ok=True)
+        masks_for_viz = final_masks[segs_to_visualize_ids]
+        draw_mask_contours(
+            image=muscle_cropped,
+            masks=masks_for_viz,
+            muscle_vrange=muscle_vrange,
+            output_path=dilation_dir / f"frame_{muscle_frame_id:06d}.jpg",
+        )
+
+
+def _save_to_h5_with_lock(
+    output_h5_path: Path,
+    muscle_frame_id: int,
+    datasets: dict[str, np.ndarray],
+    attributes: dict[str, any],
+) -> None:
+    """Save frame results to H5 file with file locking for parallel safety.
+
+    Uses the filelock library for cross-process file locking. This ensures
+    that multiple worker processes can safely write to the same H5 file.
+
+    Args:
+        output_h5_path: Path to H5 file to save to
+        muscle_frame_id: Frame ID for group naming
+        datasets: Dictionary of dataset name -> numpy array to save
+        attributes: Dictionary of metadata attribute name -> value
+    """
+    # Use filelock for clean, reliable cross-process file locking
+    lock_file = output_h5_path.with_suffix(".lock")
+    with FileLock(str(lock_file), timeout=30):
+        with h5py.File(output_h5_path, "a") as f:
+            group_name = f"muscle_frame_{muscle_frame_id:06d}"
+            grp = f.create_group(group_name)
+
+            # Save datasets
+            for key, data in datasets.items():
+                grp.create_dataset(key, data=data, compression="gzip", shuffle=True)
+
+            # Save attributes
+            grp.attrs.update(attributes)
+
+
+def _process_and_save_single_frame(
     muscle_frame_id: int,
     muscle_path: Path,
     segmap: np.ndarray,
@@ -326,18 +435,11 @@ def _process_single_frame(
     seg_labels: list[str],
     segs_to_visualize_ids: list[int] | None,
     debug_plots_dir: Path | None,
-) -> tuple[dict, dict]:
-    """Process all segmentation steps for a single frame.
-
-    Args:
-        See `process_muscle_segmentation`.
-
-    Returns:
-        datasets (dict[str, np.ndarray]):
-            Contains cropped images, aligned segmaps, masks, etc.
-        attributes (dict[str, any]):
-            Contains metadata like shifts, pixel counts, file paths, etc.
-    """
+    output_h5_path: Path,
+) -> None:
+    """Process all segmentation steps for a single frame and save directly
+    to an appropriate group in the output H5 file. See
+    `process_muscle_segmentation` for args."""
 
     # Step 1: Load and map segmentation to muscle space
     muscle_image, segmap_mapped = _load_and_map_segmentation_to_muscle_space(
@@ -393,59 +495,26 @@ def _process_single_frame(
         muscle_cropped, muscle_masks, muscle_roi_sizes
     )
 
-    # Debug visualizations for each step
+    # Generate debug visualizations
     if debug_plots_dir is not None and segs_to_visualize_ids is not None:
-        # Step 1: Initial mapping visualization
-        initial_mapping_dir = debug_plots_dir / "01_initial_mapping"
-        initial_mapping_dir.mkdir(parents=True, exist_ok=True)
-        masks = []
-        for seg_value in segs_to_visualize_ids:
-            masks.append(segmap_cropped == seg_value)
-        draw_mask_contours(
-            image=muscle_cropped,
-            masks=np.stack(masks, axis=0),
-            muscle_vrange=muscle_vrange,
-            output_path=initial_mapping_dir / f"frame_{muscle_frame_id:06d}.jpg",
-        )
-
-        # Step 2: Fine alignment visualization
-        fine_alignment_dir = debug_plots_dir / "02_fine_alignment"
-        fine_alignment_dir.mkdir(parents=True, exist_ok=True)
-        draw_template_matching_viz(
-            muscle_image=muscle_cropped,
+        _generate_debug_visualizations(
+            muscle_frame_id=muscle_frame_id,
+            muscle_cropped=muscle_cropped,
+            segmap_cropped=segmap_cropped,
             foreground_mask=foreground_mask,
             x_shift=x_shift,
             y_shift=y_shift,
             corr_matrix=corr_matrix,
             search_limit=search_limit,
-            output_path=fine_alignment_dir / f"frame_{muscle_frame_id:06d}.jpg",
+            denoised_masks=denoised_masks,
+            final_masks=final_masks,
+            dilation_kernel_size=dilation_kernel_size,
             muscle_vrange=muscle_vrange,
+            segs_to_visualize_ids=segs_to_visualize_ids,
+            debug_plots_dir=debug_plots_dir,
         )
 
-        # Step 3: Morphological denoising visualization
-        morph_denoising_dir = debug_plots_dir / "03_morph_denoising"
-        morph_denoising_dir.mkdir(parents=True, exist_ok=True)
-        masks_for_viz = denoised_masks[segs_to_visualize_ids]
-        draw_mask_contours(
-            image=muscle_cropped,
-            masks=masks_for_viz,
-            muscle_vrange=muscle_vrange,
-            output_path=morph_denoising_dir / f"frame_{muscle_frame_id:06d}.jpg",
-        )
-
-        # Step 4: Dilation visualization (if applied)
-        if dilation_kernel_size != 1:
-            dilation_dir = debug_plots_dir / "04_mask_dilation"
-            dilation_dir.mkdir(parents=True, exist_ok=True)
-            masks_for_viz = final_masks[segs_to_visualize_ids]
-            draw_mask_contours(
-                image=muscle_cropped,
-                masks=masks_for_viz,
-                muscle_vrange=muscle_vrange,
-                output_path=dilation_dir / f"frame_{muscle_frame_id:06d}.jpg",
-            )
-
-    # Prepare output
+    # Prepare output datasets and attributes
     datasets = {
         "muscle_image_cropped": muscle_cropped,
         "segmap_cropped": segmap_cropped,
@@ -471,7 +540,13 @@ def _process_single_frame(
     for i, label in enumerate(seg_labels):
         attributes[f"n_pixels_pre_dilation_{label}"] = int(denoised_masks[i].sum())
 
-    return datasets, attributes
+    # Save results directly to H5 file with file locking for thread safety
+    _save_to_h5_with_lock(
+        output_h5_path=output_h5_path,
+        muscle_frame_id=muscle_frame_id,
+        datasets=datasets,
+        attributes=attributes,
+    )
 
 
 def _crop_by_features(
