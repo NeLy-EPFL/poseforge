@@ -10,6 +10,7 @@ from scipy import ndimage
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from filelock import FileLock
+from typing import Any
 
 from poseforge.spotlight.input_transform import reverse_rotation_and_crop
 from poseforge.spotlight.viz import draw_mask_contours, draw_template_matching_viz
@@ -23,28 +24,6 @@ leg_segment_names = [
     for link in ["Coxa", "Femur", "Tibia", "Tarsus"]
 ]
 antennal_segment_names = ["LAntenna", "RAntenna"]
-
-
-def _extract_muscle_trace_single_frame(muscle_image, masks, roi_sizes):
-    assert masks.shape[0] == len(roi_sizes)
-
-    muscle_traces = []
-    for i in range(masks.shape[0]):
-        mask = masks[i, ...]
-        assert mask.shape == muscle_image.shape
-        selected_pixels = muscle_image[mask]
-        # Use ROI area before dilation regardless of whether dilated masks are
-        # used. The dilation allows some margin of error for the alignment, but
-        # the (projected) size of the physical muscle shouldn't change.
-        area = roi_sizes[i]
-        # Set muscle activation to NaN if no ROI is detected for this segment
-        if area == 0:
-            activation = np.nan
-        else:
-            activation = selected_pixels.mean()
-        muscle_traces.append(activation)
-
-    return np.array(muscle_traces)
 
 
 def process_muscle_segmentation(
@@ -238,6 +217,28 @@ def process_muscle_segmentation(
     logging.info(f"Completed processing and saved results to {output_path}")
 
 
+def _extract_muscle_trace_single_frame(muscle_image, masks, roi_sizes):
+    assert masks.shape[0] == len(roi_sizes)
+
+    muscle_traces = []
+    for i in range(masks.shape[0]):
+        mask = masks[i, ...]
+        assert mask.shape == muscle_image.shape
+        selected_pixels = muscle_image[mask]
+        # Use ROI area before dilation regardless of whether dilated masks are
+        # used. The dilation allows some margin of error for the alignment, but
+        # the (projected) size of the physical muscle shouldn't change.
+        area = roi_sizes[i]
+        # Set muscle activation to NaN if no ROI is detected for this segment
+        if area == 0:
+            activation = np.nan
+        else:
+            activation = selected_pixels.mean()
+        muscle_traces.append(activation)
+
+    return np.array(muscle_traces)
+
+
 def _load_and_map_segmentation_to_muscle_space(
     muscle_path: Path, segmap: np.ndarray, metadata_path: Path
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -390,7 +391,7 @@ def _save_to_h5_with_lock(
     output_h5_path: Path,
     muscle_frame_id: int,
     datasets: dict[str, np.ndarray],
-    attributes: dict[str, any],
+    attributes: dict[str, Any],
 ) -> None:
     """Save frame results to H5 file with file locking for parallel safety.
 
@@ -539,7 +540,7 @@ def _process_and_save_single_frame(
     for i, label in enumerate(seg_labels):
         attributes[f"n_pixels_pre_dilation_{label}"] = int(denoised_masks[i].sum())
 
-    # Save results directly to H5 file with file locking for thread safety
+    # Save results directly to H5 file with file locking for process safety
     _save_to_h5_with_lock(
         output_h5_path=output_h5_path,
         muscle_frame_id=muscle_frame_id,
