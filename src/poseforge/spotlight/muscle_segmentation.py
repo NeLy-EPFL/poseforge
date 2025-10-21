@@ -6,6 +6,7 @@ import imageio.v2 as imageio
 import logging
 import cv2
 from pathlib import Path
+from collections import defaultdict
 from scipy import ndimage
 from tqdm import tqdm
 from joblib import Parallel, delayed
@@ -15,14 +16,90 @@ from poseforge.neuromechfly.constants import legs
 from poseforge.spotlight.viz import draw_mask_contours, draw_template_matching_viz
 
 
+# Define handy constants
+leg_segment_names = [
+    f"{side}{pos}{link}"
+    for side in ["L", "R"]
+    for pos in ["F", "M", "H"]
+    for link in ["Coxa", "Femur", "Tibia", "Tarsus"]
+]
+antennal_segment_names = ["LAntenna", "RAntenna"]
+
+
+def extract_muscle_trace(
+    muscle_segmentation_path: Path, body_segments: list[str], use_dilated: bool = True
+):
+    with h5py.File(muscle_segmentation_path, "r") as f:
+        # Get indices of requested body segments in the stack of masks
+        class_labels = list(f.attrs["class_labels"])
+        segment_stack_indices = []
+        for segment in body_segments:
+            if segment not in class_labels:
+                logging.critical(
+                    f"Body segment '{segment}' not found in segmentation labels: "
+                    f"{class_labels}"
+                )
+            segment_stack_indices.append(class_labels.index(segment))
+        if len(segment_stack_indices) != len(body_segments):
+            raise ValueError("Some body segments not found in segmentation labels.")
+
+        # Check which processed step to use depending on the use_dilated flag
+        if use_dilated:
+            if "masks_dilated" not in f[list(f.keys())[0]]:
+                raise ValueError(
+                    "Dilated masks not found in muscle segmentation file. "
+                    "Set use_dilated=False or re-run muscle segmentation with "
+                    "dilation enabled."
+                )
+            dataset_name = "masks_dilated"
+        else:
+            dataset_name = "masks_morph_denoised"
+
+        # Extract muscle traces for each requested body segment
+        muscle_traces = defaultdict(dict)
+        muscle_pixel_values = defaultdict(dict)
+        empty_mask_counter = defaultdict(int)
+        for frame_key in sorted(f.keys()):
+            muscle_frame_id = int(frame_key.split("_")[-1])
+            grp = f[frame_key]
+            muscle_image = grp["muscle_image_cropped"][:]
+            for idx, label in zip(segment_stack_indices, body_segments):
+                mask = grp[dataset_name][idx, ...]
+                assert mask.shape == muscle_image.shape
+                selected_pixels = muscle_image[mask]
+                # Use ROI area before dilation regardless of whether dilated masks are
+                # used. The dilation allows some margin of error for the alignment, but
+                # the (projected) size of the physical muscle shouldn't change.
+                area = grp.attrs[f"n_pixels_pre_dilation_{label}"]
+                # Set muscle activation to NaN if no ROI is detected for this segment
+                if area == 0:
+                    activation = np.nan
+                    empty_mask_counter[label] += 1
+                else:
+                    activation = selected_pixels.mean()
+                muscle_traces[label][muscle_frame_id] = activation
+                muscle_pixel_values[label][muscle_frame_id] = selected_pixels.copy()
+
+        # Log summary of empty masks
+        n_frames = len(f.keys())
+        for label, count in empty_mask_counter.items():
+            if count > 0:
+                logging.warning(
+                    f"Segment '{label}' had {count} out of {n_frames} frames with "
+                    "empty masks. Muscle activations set to NaN for these frames."
+                )
+
+    return muscle_traces, muscle_pixel_values
+
+
 def process_muscle_segmentation(
     spotlight_trial_dir: Path,
     aligned_behavior_image_dir: Path,
     bodyseg_prediction_path: Path,
     output_path: Path,
+    foreground_classes_for_alignment: list[str],
     muscle_vrange: tuple[int, int] = (200, 1000),
     padding: int = 100,
-    foreground_classes: list[str] | str = "legs",
     search_limit: int = 50,
     morph_kernel_size: int = 5,
     morph_iterations: int = 1,
@@ -40,7 +117,8 @@ def process_muscle_segmentation(
         output_path: Output H5 file path
         muscle_vrange: Min/max values for muscle image visualization
         padding: Padding around bounding box for cropping
-        foreground_classes: Classes to use for template matching foreground
+        foreground_classes_for_alignment: Classes to use for template
+            matching foreground
         search_limit: Max pixel offset for template matching
         morph_kernel_size: Kernel size for morphological operations
         morph_iterations: Number of morphological iterations
@@ -122,17 +200,17 @@ def process_muscle_segmentation(
     logging.info(f"Processing {len(frame_tasks)} frames with {n_workers} workers")
 
     # Get foreground class indices for template matching
-    foreground_class_indices = _get_foreground_class_ids(foreground_classes, seg_labels)
+    foreground_class_indices = [
+        seg_labels.index(label) for label in foreground_classes_for_alignment
+    ]
 
     # Setup debug visualization
     segs_to_visualize_indices = None
     if debug_plots_dir is not None:
         debug_plots_dir.mkdir(parents=True, exist_ok=True)
-        segs_to_visualize_names = [
-            x for x in seg_labels if x[:2] in legs or x.endswith("Antenna")
-        ]
         segs_to_visualize_indices = [
-            i for i, x in enumerate(seg_labels) if x in segs_to_visualize_names
+            seg_labels.index(label)
+            for label in leg_segment_names + antennal_segment_names
         ]
 
     # Process all frames in parallel
@@ -343,19 +421,6 @@ def _process_single_frame(
         attributes[f"n_pixels_pre_dilation_{label}"] = int(denoised_masks[i].sum())
 
     return datasets, attributes
-
-
-def _get_foreground_class_ids(
-    foreground_classes: list[str] | str, class_labels: list[str]
-) -> list[int]:
-    """Get class indices for foreground classes."""
-    foreground_class_ids = []
-    for i, label in enumerate(class_labels):
-        if foreground_classes == "legs" and label[:2] in legs:
-            foreground_class_ids.append(i)
-        elif isinstance(foreground_classes, list) and label in foreground_classes:
-            foreground_class_ids.append(i)
-    return foreground_class_ids
 
 
 def _crop_by_features(
