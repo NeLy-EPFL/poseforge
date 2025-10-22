@@ -40,6 +40,7 @@ dependencies = [
     "torchsummary>=1.5.1,<2",
     "imagecodecs==2025.8.2",
     "filelock>=3.20.0,<4",
+    "colorlog>=6.10,<7",
     "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
     # "seqikpy==1.0.3",  # developed by Gizem - use fixed version for better control
     "contrastive-unpaired-translation @ git+https://github.com/sibocw/contrastive-unpaired-translation.git",
