@@ -4,9 +4,7 @@ import h5py
 import cv2
 from pathlib import Path
 from typing import Iterator
-from pvio.video_io import get_video_metadata
-
-from poseforge.util import read_frames_from_video
+from pvio.video_io import get_video_metadata, read_frames_from_video
 
 
 class SimulatedDataSequence:

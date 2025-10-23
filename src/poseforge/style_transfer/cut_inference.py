@@ -2,19 +2,15 @@ import torch
 import numpy as np
 import torchvision
 import logging
-import imageio.v2 as imageio
 from tqdm import trange
 from pathlib import Path
 from PIL import Image
 from torchvision.transforms.functional import to_pil_image
+from pvio.video_io import read_frames_from_video, write_frames_to_video
 
 from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper
-from poseforge.util import (
-    default_video_writing_ffmpeg_params,
-    read_frames_from_video,
-    clear_memory_cache,
-)
+from poseforge.util.sys import clear_memory_cache
 
 
 class _CUTOptions:
@@ -235,41 +231,34 @@ def process_simulation(
             multiple simulations in a row. Defaults to True.
     """
     # Load input video
-    video_frames, fps = read_frames_from_video(input_video_path)
+    input_frames, fps = read_frames_from_video(input_video_path)
 
     # Auto-detect batch size if not specified
     if batch_size is None:
         batch_size = inference_pipeline.detect_max_batch_size(
-            video_frames[0].shape, start=1, end=len(video_frames)
+            input_frames[0].shape, start=1, end=len(input_frames)
         )
 
-    # Create output directory if it doesn't exist
-    output_video_path.parent.mkdir(parents=True, exist_ok=True)
-
     # Create video writer
-    with imageio.get_writer(
-        str(output_video_path),
-        "ffmpeg",
-        fps=fps,
-        codec="libx264",
-        quality=10,  # 10 is highest for imageio, lower is lower quality
-        ffmpeg_params=default_video_writing_ffmpeg_params,
-    ) as video_writer:
-        # Process frames in batches
-        for i in trange(0, len(video_frames), batch_size, disable=not progress_bar):
-            # Get batch of frames (each frame is HWC format, uint8, 0-255)
-            input_batch_frames = np.array(video_frames[i : i + batch_size])
-            input_batch_pil = [to_pil_image(frame) for frame in input_batch_frames]
-            output_batch = inference_pipeline.infer(input_batch_pil)
-            for j in range(output_batch.shape[0]):
-                frame = output_batch[j]
-                video_writer.append_data(frame)
+    output_frames = []
+    for i in trange(0, len(input_frames), batch_size, disable=not progress_bar):
+        # Get batch of frames (each frame is HWC format, uint8, 0-255)
+        input_batch_frames = np.array(input_frames[i : i + batch_size])
+        input_batch_pil = [to_pil_image(frame) for frame in input_batch_frames]
+        output_batch = inference_pipeline.infer(input_batch_pil)
+        for j in range(output_batch.shape[0]):
+            frame = output_batch[j]
+            output_frames.append(frame)
+        # Explicitly clean up batch variables to prevent memory accumulation
+        # (this in theory shouldn't be necessary? unclear why it helps in practice)
+        del input_batch_frames, input_batch_pil, output_batch
 
-            # Explicitly clean up batch variables to prevent memory accumulation
-            del input_batch_frames, input_batch_pil, output_batch
+    # Write output video
+    output_video_path.parent.mkdir(parents=True, exist_ok=True)
+    write_frames_to_video(output_video_path, output_frames, fps=fps)
 
     # Clean up video frames after processing
-    del video_frames
+    del input_frames, output_frames
 
     # Force garbage collection and clear CUDA cache
     if clear_memory_cache_after:

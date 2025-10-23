@@ -19,16 +19,15 @@ import imageio.v2 as imageio
 from joblib import Parallel, delayed
 import logging
 import tempfile
+from pvio.video_io import write_frames_to_video
 
 from poseforge.pose.keypoints3d.visualizer import (
     get_keypoint_color,
     get_skeleton_connections,
 )
 from poseforge.neuromechfly.constants import kchain_plotting_colors
-from poseforge.util import (
-    configure_matplotlib_style,
-    default_video_writing_ffmpeg_params,
-)
+from poseforge.util.plot import configure_matplotlib_style
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -488,24 +487,18 @@ def visualize_predictions(
                 )
 
         output_video_path.parent.mkdir(parents=True, exist_ok=True)
-        with imageio.get_writer(
-            str(output_video_path),
-            "ffmpeg",
-            fps=fps,
-            codec="libx264",
-            quality=None,
-            ffmpeg_params=default_video_writing_ffmpeg_params,
-        ) as video_writer:
-            for frame_file in frame_files:
-                frame = imageio.imread(frame_file)
-                # Resize if needed to match target
-                if target_size and frame.shape[:2] != target_size:
-                    pil_frame = Image.fromarray(frame)
-                    pil_frame = pil_frame.resize(
-                        (target_size[1], target_size[0]), Image.Resampling.LANCZOS
-                    )
-                    frame = np.array(pil_frame)
-                video_writer.append_data(frame)
+        output_frames = []
+        for frame_file in frame_files:
+            frame = imageio.imread(frame_file)
+            # Resize if needed to match target
+            if target_size and frame.shape[:2] != target_size:
+                pil_frame = Image.fromarray(frame)
+                pil_frame = pil_frame.resize(
+                    (target_size[1], target_size[0]), Image.Resampling.LANCZOS
+                )
+                frame = np.array(pil_frame)
+            output_frames.append(frame)
+        write_frames_to_video(output_video_path, output_frames, fps=fps)
 
         # Temporary directory and all frames are automatically cleaned up when exiting the context
 
@@ -515,24 +508,26 @@ def visualize_predictions(
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
-    epochs_to_try = list(range(0, 30, 2))
-    recordings = ["20250613-fly1b-013"]
+    recordings = ["20250613-fly1b-005"]
+    epoch = 14  # these must be consistent with run_keypoints3d_inference.py
+    step = 9167  # same as above
 
     for recording in recordings:
-        for epoch in epochs_to_try:
-            print(
-                f"Creating visualization for recording {recording} "
-                f"using model at the end of epoch {epoch}"
-            )
-            recording_dir = input_basedir / recording / "model_prediction/not_flipped"
-            keypoints3d_data_dir = model_dir / f"production/epoch{epoch}" / recording
-            inference_output_path = keypoints3d_data_dir / "keypoints3d.h5"
-            output_video_path = keypoints3d_data_dir / "predictions.mp4"
-            visualize_predictions(
-                inference_output_path,
-                recording_dir,
-                output_video_path,
-                fps=30,
-                n_workers=-2,
-            )
-            print(f"Visualization complete for recording {recording}, epoch {epoch}.")
+        print(
+            f"Creating visualization for recording {recording} "
+            f"using model at epoch {epoch}, step {step}"
+        )
+        recording_dir = input_basedir / recording / "model_prediction/not_flipped"
+        keypoints3d_data_dir = (
+            model_dir / f"production/epoch{epoch}_step{step}" / recording
+        )
+        inference_output_path = keypoints3d_data_dir / "keypoints3d.h5"
+        output_video_path = keypoints3d_data_dir / "predictions.mp4"
+        visualize_predictions(
+            inference_output_path,
+            recording_dir,
+            output_video_path,
+            fps=30,
+            n_workers=-2,
+        )
+        print(f"Visualization complete for recording {recording}.")

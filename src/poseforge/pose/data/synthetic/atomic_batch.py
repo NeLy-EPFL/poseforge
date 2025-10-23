@@ -1,17 +1,12 @@
 import torch
 import numpy as np
 import h5py
-import imageio.v2 as imageio
 import logging
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
+from pvio.video_io import read_frames_from_video, write_frames_to_video
 
-from poseforge.util import (
-    read_frames_from_video,
-    round_up_to_multiple,
-    default_video_writing_ffmpeg_params,
-    get_hardware_availability,
-)
+from poseforge.util.sys import get_hardware_availability
 
 
 class AtomicBatchDataset(Dataset):
@@ -130,29 +125,22 @@ class AtomicBatchDataset(Dataset):
 
         # Write to video
         n_cols_total = (n_cols * n_variants) + (n_variants - 1) * spacing
-        n_cols_total = round_up_to_multiple(n_cols_total, 16)  # for video encoding
-        n_rows_total = round_up_to_multiple(n_rows, 16)  # for video encoding
+        n_cols_total = _round_up_to_multiple(n_cols_total, 16)  # for video encoding
+        n_rows_total = _round_up_to_multiple(n_rows, 16)  # for video encoding
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with imageio.get_writer(
-            str(output_path),
-            fps=fps,
-            codec="libx264",
-            quality=10,
-            ffmpeg_params=default_video_writing_ffmpeg_params,
-        ) as video_writer:
-            for frame_idx in range(n_frames):
-                image = np.zeros(
-                    (n_rows_total, n_cols_total, n_channels), dtype=np.uint8
-                )
-                for variant_idx in range(atomic_batch.shape[0]):
-                    start_col = variant_idx * (n_cols + spacing)
-                    end_col = start_col + n_cols
-                    selection = atomic_batch[variant_idx, frame_idx, :, :, :]
-                    # Move channel to the last dimension
-                    selection = selection.transpose(1, 2, 0)
-                    selection = (selection * 255).astype(np.uint8)
-                    image[:n_rows, start_col:end_col, :] = selection
-                video_writer.append_data(image.squeeze())
+        output_frames = []
+        for frame_idx in range(n_frames):
+            image = np.zeros((n_rows_total, n_cols_total, n_channels), dtype=np.uint8)
+            for variant_idx in range(atomic_batch.shape[0]):
+                start_col = variant_idx * (n_cols + spacing)
+                end_col = start_col + n_cols
+                selection = atomic_batch[variant_idx, frame_idx, :, :, :]
+                # Move channel to the last dimension
+                selection = selection.transpose(1, 2, 0)
+                selection = (selection * 255).astype(np.uint8)
+                image[:n_rows, start_col:end_col, :] = selection
+            output_frames.append(image.squeeze())
+        write_frames_to_video(output_path, output_frames, fps=fps)
 
     @staticmethod
     def load_atomic_batch_frames(
@@ -558,6 +546,10 @@ def _test_throughput():
     proj_total_time = len(dataset) / samples_per_second
     print(f"Loading throughput: {samples_per_second:.2f} samples/second")
     print(f"Projected time to iterate over dataset: {proj_total_time:.2f} seconds")
+
+
+def _round_up_to_multiple(x: int, multiple_of: int) -> int:
+    return ((x + multiple_of - 1) // multiple_of) * multiple_of
 
 
 # if __name__ == "__main__":

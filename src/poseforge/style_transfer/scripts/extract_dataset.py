@@ -6,22 +6,7 @@ from shutil import copyfile
 from collections import defaultdict
 from tqdm import tqdm
 from pathlib import Path
-
-from poseforge.util import read_frames_from_video
-
-
-def check_num_frames_in_video(video_path: Path) -> int:
-    """
-    Check the number of frames in a video file.
-
-    Args:
-        video_path (Path): Path to the video file.
-
-    Returns:
-        int: Number of frames in the video.
-    """
-    with imageio.get_reader(video_path) as reader:
-        return reader.count_frames()
+from pvio.video_io import read_frames_from_video, check_num_frames
 
 
 def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path) -> dict[Path, int]:
@@ -41,7 +26,7 @@ def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path) -> dict[Path, i
                 video_file = subseg_dir / "processed_nmf_sim_render_colorcode_0.mp4"
                 if not video_file.is_file():
                     logging.warning(f"Expected video file {video_file} does not exist.")
-                num_frames = check_num_frames_in_video(video_file)
+                num_frames = check_num_frames(video_file)
                 num_frames_dict[video_file] = num_frames
                 print(f"  {video_file}: {num_frames} frames")
     return num_frames_dict
