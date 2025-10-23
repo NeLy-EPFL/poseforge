@@ -174,12 +174,12 @@ def run_keypoints3d_inference(
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
-    epochs_to_try = list(range(0, 30, 2))
+    epoch = 14  # chosen based on validation performance and visual inspection
+    step = 9167  # last step of each epoch
 
-    for epoch in epochs_to_try:
-        print(f"Running inference for epoch {epoch}")
-        checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step9167.model.pth"
-        output_basedir = model_dir / f"production/epoch{epoch}"
-        run_keypoints3d_inference(
-            input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
-        )
+    print(f"Running inference for epoch {epoch}")
+    checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
+    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    run_keypoints3d_inference(
+        input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
+    )

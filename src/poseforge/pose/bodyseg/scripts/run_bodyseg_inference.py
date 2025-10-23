@@ -1,10 +1,3 @@
-import logging
-
-logging_level = logging.INFO
-logging.basicConfig(
-    level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
 import torch
 import h5py
 from pathlib import Path
@@ -122,18 +115,20 @@ def test_bodyseg_model(
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b")
-    training_stages = [model_dir / "checkpoints/epoch13_step18335.model.pth"]
-    output_basedir = model_dir / "inference"
-    output_basedir.mkdir(parents=True, exist_ok=True)
     batch_size = 192
     n_workers = 16
     inference_image_size = (256, 256)
     output_buffer_log_interval = 10
+    epoch = 13  # chosen by validation performance and visual inspection
+    step = 18335  # last step of each epoch
 
+    model_checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
+    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    output_basedir.mkdir(parents=True, exist_ok=True)
     test_bodyseg_model(
         input_basedir=input_basedir,
         model_dir=model_dir,
-        model_checkpoint_path=training_stages[0],
+        model_checkpoint_path=model_checkpoint_path,
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,

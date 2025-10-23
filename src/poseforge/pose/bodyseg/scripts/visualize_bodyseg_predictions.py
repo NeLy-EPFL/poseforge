@@ -217,16 +217,19 @@ def visualize_bodyseg_prediction(
 
 if __name__ == "__main__":
     recording_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
-    pred_basedir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b/inference")
-
-    trial = "20250613-fly1b-013"
+    trial = "20250613-fly1b-005"
     recording_dir = recording_basedir / trial / "model_prediction/not_flipped"
-    pred_path = pred_basedir / f"{trial}_model_prediction_not_flipped/bodyseg_pred.h5"
-    output_path = pred_basedir / f"{trial}_model_prediction_not_flipped/viz.mp4"
-
     output_fps = 30
     label_alpha = 0.3
     n_workers = -1
+
+    epoch = 13  # chosen by validation performance and visual inspection
+    step = 18335  # last step of each epoch
+    pred_basedir = Path(
+        f"bulk_data/pose_estimation/bodyseg/trial_20251012b/production/epoch{epoch}_step{step}/"
+    )
+    pred_path = pred_basedir / f"{trial}_model_prediction_not_flipped/bodyseg_pred.h5"
+    output_path = pred_basedir / f"{trial}_model_prediction_not_flipped/viz.mp4"
 
     visualize_bodyseg_prediction(
         recording_dir=recording_dir,
