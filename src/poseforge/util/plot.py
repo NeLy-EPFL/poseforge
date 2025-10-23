@@ -6,6 +6,7 @@ from distinctipy import get_colors
 
 
 def configure_matplotlib_style():
+    matplotlib.style.use("fast")
     plt.rcParams["font.family"] = "Arial"
     plt.rcParams["pdf.fonttype"] = 42
     # suppress matplotlib font manager warnings

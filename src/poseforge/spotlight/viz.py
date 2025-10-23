@@ -291,7 +291,7 @@ def plot_muscle_traces_with_kinematics(
     xyz_amp = 2  # mm
     joint_angle_amp = 135  # deg
     muscle_trace_amp = 0.7  # DF/F0
-    ylabel_offset = 0.17
+    ylabel_offset = 0.18
     scale_bar_padding_frac_x = 0.02
     scale_bar_padding_frac_y = 0.05
     xyz_scale_bar_size = 1  # mm
@@ -313,7 +313,7 @@ def plot_muscle_traces_with_kinematics(
 
     # * Set up plotting
     fig = plt.figure(figsize=(fig_width_total, fig_height_total))
-    fig.suptitle(title if title is not None else "", fontsize=14, fontweight="bold")
+    fig.suptitle(title, fontsize=14, fontweight="bold")
     axes_all = {}
     for i, leg_name in enumerate(legs):
         # Figure out left-right span

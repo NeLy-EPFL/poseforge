@@ -122,7 +122,7 @@ def rotate_image_around_point(image, rotation_point, rotation_angle, fill_value=
 def crop_image_and_keypoints(image, keypoints, center, crop_dim, shift_x=0, shift_y=0):
     """
     Crop a square region of size crop_dim x crop_dim centered at 'center'
-    (optionally shifted by x_offset, y_offset) from 'image', and shift
+    (optionally shifted by shift_x, shift_y) from 'image', and shift
     'keypoints' accordingly.
 
     Args:
