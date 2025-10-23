@@ -3,9 +3,10 @@ import logging
 import sys
 from tqdm import tqdm
 from pathlib import Path
+from pvio.video_io import read_frames_from_video
 
 from poseforge.style_transfer import get_inference_pipeline, process_simulation
-from poseforge.util import read_frames_from_video, clear_memory_cache
+from poseforge.util.sys import clear_memory_cache
 
 
 def ensure_gpu_availability() -> None:
@@ -22,7 +23,7 @@ def find_all_simulation_paths(nmf_renderings_basedir: Path) -> list[Path]:
     base root directory."""
     all_simulation_paths = [
         file.parent
-        for file in nmf_renderings_basedir.rglob("processed_kinematic_states.h5")
+        for file in nmf_renderings_basedir.rglob("processed_simulation_data.h5")
     ]
     return sorted(list(all_simulation_paths))
 
@@ -153,16 +154,19 @@ if __name__ == "__main__":
 
     tyro.cli(run_inference_cli)
 
-    # # Example call
+    # * Example call
+    # model_name = "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2"
+    # epoch = 121
     # run_inference_cli(
-    #     checkpoint_path="bulk_data/style_transfer/production/trained_models/ngf16_netGsmallstylegan2_batsize2_lambGAN0.2/121_net_G.pth",
+    #     checkpoint_path=f"bulk_data/style_transfer/production/trained_models/{model_name}/{epoch}_net_G.pth",
     #     simulations_basedir="bulk_data/nmf_rendering/BO_Gal4_fly1_trial001/",
     #     output_basedir="bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly1_trial001",
     #     ngf=16,
     #     netG="smallstylegan2",
     #     training_batch_size=2,
     #     lambGAN=0.2,
-    #     model_name="ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
+    #     input_video_filename="processed_nmf_sim_render_colorcode_0.mp4",
+    #     output_video_filename=f"translated_{model_name}_epoch{epoch}.mp4",
     #     inference_batch_size=None,  # auto-detect
     #     device="cuda",
     #     memory_cleanup_interval=10,

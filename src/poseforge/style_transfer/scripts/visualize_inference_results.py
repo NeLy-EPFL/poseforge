@@ -7,8 +7,7 @@ from typing import Any
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
-
-from poseforge.util import read_frames_from_video, default_video_writing_ffmpeg_params
+from pvio.video_io import read_frames_from_video, write_frames_to_video
 
 
 def index_visualized_videos(
@@ -190,35 +189,29 @@ def generate_summary_video_for_styled_videos(
 
     # Create frames one by one
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    with imageio.get_writer(
-        str(output_path),
-        "ffmpeg",
-        fps=fps,
-        codec="libx264",
-        quality=None,  # Use CRF instead of quality
-        ffmpeg_params=default_video_writing_ffmpeg_params,
-    ) as video_writer:
-        for frame_idx in range(len(simulated_frames_resized)):
-            simulated_frame = simulated_frames_resized[frame_idx]
-            styled_frames_same_timestep_different_epochs = []
-            styled_frames_epoch_names = []
-            for epoch, styled_frames_full_video in styled_frames_dict.items():
-                styled_frames_same_timestep_different_epochs.append(
-                    styled_frames_full_video[frame_idx]
-                )
-                styled_frames_epoch_names.append(f"Epoch {epoch}")
-            image = draw_frame(
-                (canvas_width, canvas_height),
-                simulated_frame,
-                styled_frames_same_timestep_different_epochs,
-                (0, text_area_height),
-                num_cols_excluding_original,
-                simulation_name,
-                hparams,
-                styled_frames_epoch_names,
-                text_area_height,
+    images_drawn = []
+    for frame_idx in range(len(simulated_frames_resized)):
+        simulated_frame = simulated_frames_resized[frame_idx]
+        styled_frames_same_timestep_different_epochs = []
+        styled_frames_epoch_names = []
+        for epoch, styled_frames_full_video in styled_frames_dict.items():
+            styled_frames_same_timestep_different_epochs.append(
+                styled_frames_full_video[frame_idx]
             )
-            video_writer.append_data(image)
+            styled_frames_epoch_names.append(f"Epoch {epoch}")
+        image = draw_frame(
+            (canvas_width, canvas_height),
+            simulated_frame,
+            styled_frames_same_timestep_different_epochs,
+            (0, text_area_height),
+            num_cols_excluding_original,
+            simulation_name,
+            hparams,
+            styled_frames_epoch_names,
+            text_area_height,
+        )
+        images_drawn.append(image)
+    write_frames_to_video(output_path, images_drawn, fps=fps)
 
 
 def make_summary_video(run_dir: Path, output_dir: Path) -> None:

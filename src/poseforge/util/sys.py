@@ -105,7 +105,7 @@ def check_mixed_precision_status(
         tensors (dict[str, torch.Tensor | Iterator[torch.Tensor]] | None):
             Optional dictionary of tensors or iterables of tensors to check dtypes
             for. Note that these can also be model parameters.
-        amp_scaler (torch.amp.GradScaler | None): Optional GradScaler to
+        grad_scaler (torch.amp.GradScaler | None): Optional GradScaler to
             check status for (enabled vs disabled).
         print_results (bool): If True, print results to console.
         subtitle (str | None): Optional subtitle to print in the header.
@@ -120,7 +120,7 @@ def check_mixed_precision_status(
         and torch.cuda.get_device_capability()[0] >= 7,
     }
     if grad_scaler is not None:
-        status["amp_scaler_enabled"] = grad_scaler.is_enabled()
+        status["amp_grad_scaler_enabled"] = grad_scaler.is_enabled()
 
     # Check model parameter dtypes
     if tensors is not None:

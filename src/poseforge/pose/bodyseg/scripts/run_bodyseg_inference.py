@@ -1,10 +1,3 @@
-import logging
-
-logging_level = logging.INFO
-logging.basicConfig(
-    level=logging_level, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
 import torch
 import h5py
 from pathlib import Path
@@ -70,10 +63,22 @@ def test_bodyseg_model(
         out_dir.mkdir(parents=True, exist_ok=True)
         with h5py.File(out_dir / f"bodyseg_pred.h5", "w") as f:
             pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset("pred_segmap", data=pred_segmaps, dtype="uint8")
+            ds = f.create_dataset(
+                "pred_segmap",
+                data=pred_segmaps,
+                dtype="uint8",
+                compression="gzip",
+                shuffle=True,
+            )
             ds.attrs["class_labels"] = pipeline.class_labels
             confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset("pred_confidence", data=confs, dtype="uint8")
+            ds = f.create_dataset(
+                "pred_confidence",
+                data=confs,
+                dtype="uint8",
+                compression="gzip",
+                shuffle=True,
+            )
             # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
             ds.attrs["scale"] = 100
             ds.attrs["method"] = model.confidence_method
@@ -85,7 +90,13 @@ def test_bodyseg_model(
             # the Spotlight recording software. They may not be contiguous because
             # frames where the fly is upside down or too close to the edge, etc. are
             # already removed.
-            f.create_dataset("frame_ids", data=frame_ids, dtype="int")
+            f.create_dataset(
+                "frame_ids",
+                data=frame_ids,
+                dtype="int",
+                compression="gzip",
+                shuffle=True,
+            )
 
     output_buffer = OutputBuffer(
         buckets_and_expected_sizes=dataset.n_frames_lookup,
@@ -122,18 +133,20 @@ def test_bodyseg_model(
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b")
-    training_stages = [model_dir / "checkpoints/epoch13_step18335.model.pth"]
-    output_basedir = model_dir / "inference"
-    output_basedir.mkdir(parents=True, exist_ok=True)
     batch_size = 192
     n_workers = 16
     inference_image_size = (256, 256)
     output_buffer_log_interval = 10
+    epoch = 13  # chosen by validation performance and visual inspection
+    step = 18335  # last step of each epoch
 
+    model_checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
+    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    output_basedir.mkdir(parents=True, exist_ok=True)
     test_bodyseg_model(
         input_basedir=input_basedir,
         model_dir=model_dir,
-        model_checkpoint_path=training_stages[0],
+        model_checkpoint_path=model_checkpoint_path,
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,

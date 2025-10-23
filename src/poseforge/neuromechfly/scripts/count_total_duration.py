@@ -1,7 +1,6 @@
 from pathlib import Path
 from tqdm import tqdm
-
-from poseforge.util import check_num_frames
+from pvio.video_io import check_num_frames
 
 
 if __name__ == "__main__":

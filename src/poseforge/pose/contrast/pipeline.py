@@ -125,9 +125,9 @@ class ContrastivePretrainingPipeline:
         optimizer = self._create_optimizer(optimizer_config)
 
         # Set up mixed-precision training
-        amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
+        grad_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         self._check_amp_status_for_model_params(
-            amp_scaler, subtitle="Model parameters before training"
+            grad_scaler, subtitle="Model parameters before training"
         )
 
         # Check if loss function is provided
@@ -163,21 +163,21 @@ class ContrastivePretrainingPipeline:
                     # Check if float16 is actually being used
                     if epoch_idx == 0 and step_idx == 0:
                         self._check_amp_status_for_model_params(
-                            amp_scaler, subtitle="Model parameters at start of training"
+                            grad_scaler, subtitle="Model parameters at start of training"
                         )
                         self._check_amp_status_during_training(
                             collapsed_batch,
                             pred_dict,
                             loss,
-                            amp_scaler,
+                            grad_scaler,
                             subtitle="Variables at start of training",
                         )
 
                 # Backpropagate and optimize
                 optimizer.zero_grad(set_to_none=True)  # set_to_none saves memory
-                amp_scaler.scale(loss).backward()
-                amp_scaler.step(optimizer)
-                amp_scaler.update()
+                grad_scaler.scale(loss).backward()
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
 
                 # Logging
                 running_loss += loss.item()
@@ -376,7 +376,7 @@ class ContrastivePretrainingPipeline:
         )
 
     def _check_amp_status_for_model_params(
-        self, amp_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
+        self, grad_scaler: torch.amp.GradScaler, subtitle: str = "Model parameters"
     ):
         return check_mixed_precision_status(
             self.use_float16,
@@ -386,7 +386,7 @@ class ContrastivePretrainingPipeline:
                 "feature_extractor_params": self.model.feature_extractor.parameters(),
                 "projection_head_params": self.model.projection_head.parameters(),
             },
-            grad_scaler=amp_scaler,
+            grad_scaler=grad_scaler,
             subtitle=subtitle,
         )
 
@@ -395,7 +395,7 @@ class ContrastivePretrainingPipeline:
         collapsed_batch: torch.Tensor,
         pred_dict: dict[str, torch.Tensor],
         loss: torch.Tensor,
-        amp_scaler: torch.amp.GradScaler,
+        grad_scaler: torch.amp.GradScaler,
         subtitle: str = "Variables during training",
     ):
         return check_mixed_precision_status(
@@ -409,6 +409,6 @@ class ContrastivePretrainingPipeline:
                 "z_features": pred_dict["z_features"],
                 "loss": loss,
             },
-            grad_scaler=amp_scaler,
+            grad_scaler=grad_scaler,
             subtitle=subtitle,
         )

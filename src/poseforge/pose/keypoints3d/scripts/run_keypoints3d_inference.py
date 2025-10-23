@@ -128,18 +128,30 @@ def run_keypoints3d_inference(
             int(p.stem.split("_")[1]) for p in dataset.frame_sortings[video_path]
         ]
         with h5py.File(output_dir / "keypoints3d.h5", "w") as f:
-            f.create_dataset("frame_ids", data=frame_ids, dtype=np.int32)
+            f.create_dataset(
+                "frame_ids",
+                data=frame_ids,
+                dtype=np.int32,
+                compression="gzip",
+                shuffle=True,
+            )
 
             world_xyz_stack = np.stack([x[0] for x in results_li])
             world_xyz_ds = f.create_dataset(
-                "keypoints_world_xyz", data=world_xyz_stack, dtype=np.float16
+                "keypoints_world_xyz",
+                data=world_xyz_stack,
+                dtype=np.float16,
+                compression="gzip",
             )
             world_xyz_ds.attrs["keypoints"] = keypoint_segments_canonical
             world_xyz_ds.attrs["units"] = "mm"
 
             camera_xy_stack = np.stack([x[1] for x in results_li])
             camera_xy_ds = f.create_dataset(
-                "keypoints_camera_xy", data=camera_xy_stack, dtype=np.float16
+                "keypoints_camera_xy",
+                data=camera_xy_stack,
+                dtype=np.float16,
+                compression="gzip",
             )
             camera_xy_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_xy_ds.attrs["units"] = "pixels"
@@ -147,14 +159,20 @@ def run_keypoints3d_inference(
 
             camera_depth_stack = np.stack([x[2] for x in results_li])
             camera_depth_ds = f.create_dataset(
-                "keypoints_camera_depth", data=camera_depth_stack, dtype=np.float16
+                "keypoints_camera_depth",
+                data=camera_depth_stack,
+                dtype=np.float16,
+                compression="gzip",
             )
             camera_depth_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_depth_ds.attrs["units"] = "mm"
 
             camera_xy_conf_stack = np.stack([x[3] for x in results_li])
             camera_xy_conf_ds = f.create_dataset(
-                "keypoints_camera_xy_conf", data=camera_xy_conf_stack, dtype=np.float16
+                "keypoints_camera_xy_conf",
+                data=camera_xy_conf_stack,
+                dtype=np.float16,
+                compression="gzip",
             )
             camera_xy_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_xy_conf_ds.attrs["method"] = model.confidence_method
@@ -164,6 +182,7 @@ def run_keypoints3d_inference(
                 "keypoints_camera_depth_conf",
                 data=camera_depth_conf_stack,
                 dtype=np.float16,
+                compression="gzip",
             )
             camera_depth_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_depth_conf_ds.attrs["method"] = model.confidence_method
@@ -174,12 +193,12 @@ def run_keypoints3d_inference(
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
-    epochs_to_try = list(range(0, 30, 2))
+    epoch = 14  # chosen based on validation performance and visual inspection
+    step = 9167  # last step of each epoch
 
-    for epoch in epochs_to_try:
-        print(f"Running inference for epoch {epoch}")
-        checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step9167.model.pth"
-        output_basedir = model_dir / f"production/epoch{epoch}"
-        run_keypoints3d_inference(
-            input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
-        )
+    print(f"Running inference for epoch {epoch}")
+    checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
+    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    run_keypoints3d_inference(
+        input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
+    )

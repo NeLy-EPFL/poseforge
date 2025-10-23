@@ -99,9 +99,9 @@ class BodySegmentationPipeline:
         optimizer = self._create_optimizer(optimizer_config)
 
         # Set up mixed-point training
-        amp_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
+        grad_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         self._check_amp_status_for_model_params(
-            amp_scaler, subtitle="Model parameters before training"
+            grad_scaler, subtitle="Model parameters before training"
         )
 
         # Check if loss function is provided
@@ -142,21 +142,21 @@ class BodySegmentationPipeline:
                     # Check if float16 is used
                     if epoch_idx == 0 and step_idx == 0:
                         self._check_amp_status_for_model_params(
-                            amp_scaler, subtitle="Model parameters at start of training"
+                            grad_scaler, subtitle="Model parameters at start of training"
                         )
                         self._check_amp_status_during_training(
                             frames,
                             target_indices,
                             pred_dict,
-                            amp_scaler,
+                            grad_scaler,
                             subtitle="Variables at start of training",
                         )
 
                 # Backpropagate and optimize
                 optimizer.zero_grad(set_to_none=True)  # set_to_none saves memory
-                amp_scaler.scale(loss_dict["total_loss"]).backward()
-                amp_scaler.step(optimizer)
-                amp_scaler.update()
+                grad_scaler.scale(loss_dict["total_loss"]).backward()
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
 
                 # Logging
                 for key, loss in loss_dict.items():
@@ -222,7 +222,7 @@ class BodySegmentationPipeline:
                         model=self.model,
                         loss=self.loss_func,
                         optimizer=optimizer,
-                        grad_scaler=amp_scaler,
+                        grad_scaler=grad_scaler,
                     )
                     logging.info(f"Saved checkpoint to {checkpoint_path_stem}.*.pth")
 

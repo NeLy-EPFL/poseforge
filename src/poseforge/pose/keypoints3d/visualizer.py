@@ -11,12 +11,9 @@ import time
 from PIL import Image
 from pathlib import Path
 from joblib import Parallel, delayed
+from pvio.video_io import read_frames_from_video, write_frames_to_video
 
-from poseforge.util import (
-    configure_matplotlib_style,
-    default_video_writing_ffmpeg_params,
-    read_frames_from_video,
-)
+from poseforge.util.plot import configure_matplotlib_style
 from poseforge.neuromechfly.constants import kchain_plotting_colors
 
 
@@ -262,56 +259,27 @@ class SynthDataKeypoints3DVisualizer:
         logger.info(f"Converting {len(frame_files)} frames to video using imageio...")
 
         # Check frame sizes first to detect inconsistencies
-        frame_sizes = {}
-        target_size = None
-        for i, frame_file in enumerate(frame_files[:5]):  # Check first 5 frames
-            frame = imageio.imread(str(frame_file))
-            size = frame.shape[:2]  # (height, width)
-            frame_sizes[i] = size
-            if target_size is None:
-                target_size = size
-            elif size != target_size:
+        frames = []
+        frame_size = imageio.imread(frame_files[0]).shape[:2]
+        for i, frame_file in enumerate(frame_files):
+            # Read frame using imageio (consistent with video loading)
+            frame = imageio.imread(frame_file)
+            # Resize if necessary
+            if frame.shape[:2] != frame_size:
                 logger.warning(
-                    f"Frame size inconsistency detected: frame {i} has size {size}, expected {target_size}"
+                    f"Frame {i} has size {frame.shape[:2]}, expected {frame_size}. "
+                    "Resizing to match."
                 )
-        logger.info(f"Target frame size: {target_size}")
+                pil_frame = Image.fromarray(frame)
+                pil_frame = pil_frame.resize(
+                    (frame_size[1], frame_size[0]), Image.Resampling.LANCZOS
+                )
+                frame = np.array(pil_frame)
+            frames.append(frame)
 
-        with imageio.get_writer(
-            str(output_path),
-            "ffmpeg",
-            fps=fps,
-            codec="libx264",
-            quality=None,  # Use CRF instead of quality
-            ffmpeg_params=default_video_writing_ffmpeg_params,
-        ) as video_writer:
-            successful_frames = 0
-            for i, frame_file in enumerate(frame_files):
-                # Read frame using imageio (consistent with video loading)
-                frame = imageio.imread(str(frame_file))
-
-                # Ensure consistent frame size
-                if target_size and frame.shape[:2] != target_size:
-                    logger.debug(
-                        f"Resizing frame {i} from {frame.shape[:2]} to {target_size}"
-                    )
-                    pil_frame = Image.fromarray(frame)
-                    pil_frame = pil_frame.resize(
-                        (target_size[1], target_size[0]), Image.Resampling.LANCZOS
-                    )
-                    frame = np.array(pil_frame)
-
-                video_writer.append_data(frame)
-                successful_frames += 1
-
-                if i % 100 == 0:
-                    logger.debug(f"Processed frame {i}/{len(frame_files)}")
-
-        logger.info(
-            f"Successfully wrote {successful_frames}/{len(frame_files)} frames to video"
-        )
-
-        if successful_frames == 0:
-            raise RuntimeError("Failed to write any frames to video")
+        # Write video
+        logging.info(f"Writing video to {output_path} at {fps} FPS...")
+        write_frames_to_video(output_path, frames, fps=fps)
 
 
 # Helper functions for parallel processing (must be pickle-able)
