@@ -1,26 +1,27 @@
-import logging
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
 from pathlib import Path
 
 from poseforge.spotlight.muscle_segmentation import (
     process_muscle_segmentation,
     leg_segment_names,
 )
+from poseforge.spotlight.viz import plot_muscle_traces_with_kinematics
+from poseforge.util.sys import setup_logger
 
 
 if __name__ == "__main__":
+    logger = setup_logger(level="info")
+
     bodyseg_model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b/")
+    keypoints3d_model_dir = Path(
+        "bulk_data/pose_estimation/keypoints3d/trial_20251013b/"
+    )
     spotlight_basedir = Path("bulk_data/spotlight_recordings/")
     cropped_behavior_basedir = Path(
         "bulk_data/behavior_images/spotlight_aligned_and_cropped/"
     )
     muscle_vrange = (200, 1000)
 
-    for spotlight_dir in spotlight_basedir.glob("20250613-fly1b-*"):
+    for spotlight_dir in sorted(spotlight_basedir.glob("20250613-fly1b-013")):
         spotlight_trial = spotlight_dir.stem
         bodyseg_output_path = (
             bodyseg_model_dir
@@ -32,8 +33,25 @@ if __name__ == "__main__":
         muscle_traces_dir = spotlight_dir / "muscle_traces"
         output_path = muscle_traces_dir / "muscle_mapping.h5"
         debug_plots_dir = muscle_traces_dir / "muscle_mapping_debug_plots"
+        keypoints3d_prediction_path = (
+            keypoints3d_model_dir
+            / f"production/epoch14/{spotlight_trial}/keypoints3d.h5"
+        )
+        inverse_kinematics_data_path = (
+            keypoints3d_model_dir
+            / f"production/epoch14/{spotlight_trial}/inverse_kinematics.h5"
+        )
 
-        logging.info(
+        skipped_trials = []
+        if not bodyseg_output_path.is_file():
+            logger.error(
+                f"Bodyseg output file not found for trial {spotlight_trial}: "
+                f"{bodyseg_output_path}; skipping"
+            )
+            skipped_trials.append(spotlight_trial)
+            continue
+
+        logger.info(
             f"Processing spotlight trial: {spotlight_trial}; "
             f"saving output to {output_path}"
         )
@@ -46,44 +64,20 @@ if __name__ == "__main__":
             dilation_kernel_size=7,
             muscle_vrange=muscle_vrange,
             debug_plots_dir=debug_plots_dir,
-            n_workers=-1,
+            n_workers=-2,
         )
 
-        # import matplotlib.pyplot as plt
-        # import numpy as np
+        viz_trange = (161, 165)
+        plot_muscle_traces_with_kinematics(
+            muscle_segmentation_data_path=output_path,
+            keypoints3d_data_path=keypoints3d_prediction_path,
+            inverse_kinematics_data_path=inverse_kinematics_data_path,
+            muscle_segments_to_plot=["Coxa", "Femur", "Tibia", "Tarsus"],
+            output_path=muscle_traces_dir / "muscle_traces_with_kinematics.pdf",
+            trange=viz_trange,
+            title=f"{spotlight_trial} ({viz_trange[0]}–{viz_trange[1]} s)",
+            # display=True,
+        )
 
-        # fig, axs = plt.subplots(
-        #     len(leg_segment_names),
-        #     2,
-        #     figsize=(12, 2 * len(leg_segment_names)),
-        #     tight_layout=True,
-        #     sharex=True,
-        # )
-        # for i, label in enumerate(leg_segment_names):
-        #     # Raw fluorescence
-        #     ax = axs[i, 0]
-        #     frame_ids = sorted(muscle_traces[label].keys())
-        #     activations = [muscle_traces[label][fid] for fid in frame_ids]
-        #     times = [fid / 30 for fid in frame_ids]
-        #     ax.plot(times, activations, label=label)
-        #     # ax.set_ylim(*muscle_vrange)
-        #     ax.set_ylabel(label, rotation=0, labelpad=30)
-        #     ax.set_yticks([300, 900])
-        #     if i == 0:
-        #         ax.set_title("Fluorescence")
-        #     if i == len(leg_segment_names) - 1:
-        #         ax.set_xlabel("Time (s)")
-
-        #     # DF/F
-        #     f0 = np.nanpercentile(activations, 10)
-        #     df_f = (activations - f0) / f0
-        #     ax = axs[i, 1]
-        #     ax.plot(times, df_f, label=label)
-        #     # ax.set_ylim(-0.3, 1.3)
-        #     ax.set_yticks([0, 1])
-        #     if i == 0:
-        #         ax.set_title(r"$\Delta$F/F")
-        #     if i == len(leg_segment_names) - 1:
-        #         ax.set_xlabel("Time (s)")
-
-        # plt.show()
+    if len(skipped_trials) > 0:
+        logger.error(f"Skipped {len(skipped_trials)} trials: {skipped_trials}")

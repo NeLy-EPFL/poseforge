@@ -170,6 +170,7 @@ def process_muscle_segmentation(
 
         input_kwargs = {
             "muscle_frame_id": muscle_frame_id,
+            "behavior_frame_id": behavior_frame_id,
             "muscle_path": muscle_path,
             "segmap": segmap,
             "metadata_path": metadata_path,
@@ -389,7 +390,6 @@ def _generate_debug_visualizations(
 
 def _save_to_h5_with_lock(
     output_h5_path: Path,
-    muscle_frame_id: int,
     datasets: dict[str, np.ndarray],
     attributes: dict[str, Any],
 ) -> None:
@@ -400,7 +400,6 @@ def _save_to_h5_with_lock(
 
     Args:
         output_h5_path: Path to H5 file to save to
-        muscle_frame_id: Frame ID for group naming
         datasets: Dictionary of dataset name -> numpy array to save
         attributes: Dictionary of metadata attribute name -> value
     """
@@ -408,6 +407,7 @@ def _save_to_h5_with_lock(
     lock_file = output_h5_path.with_suffix(".lock")
     with FileLock(str(lock_file), timeout=30):
         with h5py.File(output_h5_path, "a") as f:
+            muscle_frame_id = attributes["muscle_frame_id"]
             group_name = f"muscle_frame_{muscle_frame_id:06d}"
             grp = f.create_group(group_name)
 
@@ -421,6 +421,7 @@ def _save_to_h5_with_lock(
 
 def _process_and_save_single_frame(
     muscle_frame_id: int,
+    behavior_frame_id: int,
     muscle_path: Path,
     segmap: np.ndarray,
     metadata_path: Path,
@@ -528,6 +529,8 @@ def _process_and_save_single_frame(
         datasets["masks_dilated"] = final_masks.astype(np.bool_)
 
     attributes = {
+        "muscle_frame_id": muscle_frame_id,
+        "behavior_frame_id": behavior_frame_id,
         "muscle_image_path": str(muscle_path.absolute()),
         "input_transform_metadata_path": str(metadata_path.absolute()),
         "has_non_background_feature": has_feature,
@@ -535,17 +538,12 @@ def _process_and_save_single_frame(
         "template_matching_y_shift": y_shift,
         **crop_metadata,
     }
-
-    # Add pixel counts
     for i, label in enumerate(seg_labels):
         attributes[f"n_pixels_pre_dilation_{label}"] = int(denoised_masks[i].sum())
 
     # Save results directly to H5 file with file locking for process safety
     _save_to_h5_with_lock(
-        output_h5_path=output_h5_path,
-        muscle_frame_id=muscle_frame_id,
-        datasets=datasets,
-        attributes=attributes,
+        output_h5_path=output_h5_path, datasets=datasets, attributes=attributes
     )
 
 
