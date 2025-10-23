@@ -862,14 +862,51 @@ def create_ik_visualization_for_trial(
 
 if __name__ == "__main__":
     import tyro
+    from poseforge.util.sys import get_hardware_availability
 
-    tyro.cli(
-        process_all,
-        prog=f"python {Path(__file__).name}",
-        description="Run inverse kinematics on all keypoints3d output files in the given directories.",
-    )
-    
+    # * Processing by CLI
+    # tyro.cli(
+    #     process_all,
+    #     prog=f"python {Path(__file__).name}",
+    #     description="Run inverse kinematics on all keypoints3d output files in the given directories.",
+    # )
+    # Example:
     # python src/poseforge/pose/keypoints3d/scripts/run_inverse_kinematics.py \
-    #     --input-dirs bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch12/20250613-fly1b-013/ \
+    #     --input-dirs bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch14_step9167/20250613-fly1b-005/ \
     #     --create-visualization \
     #     --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/
+
+    # * Processing from this script directly
+    epoch = 14  # these must be consistent with run_keypoints3d_inference.py
+    step = 9167  # same as above
+    production_model_basedir = Path(
+        f"bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch{epoch}_step{step}/"
+    )
+    input_images_basedir = Path(
+        "bulk_data/behavior_images/spotlight_aligned_and_cropped/"
+    )
+    input_dirs = sorted(list(production_model_basedir.glob("20250613-fly1b-*/")))
+    print(f"Found {len(input_dirs)} directories to process")
+
+    # Process directories in parallel. Note that each task is parallelized internally
+    # among 6 legs, so the theoretical optimal max number of top-level workers is
+    # (n_cpu_cores // 6). However, actual CPU utilization is low, so we can further
+    # multiply this by a tasks_to_core_ratio factor.
+    avail = get_hardware_availability()
+    n_cores_available = avail["num_cpu_cores_available"]
+    tasks_to_core_ratio = 4
+    n_workers_top_level = tasks_to_core_ratio * (n_cores_available // 6)
+    n_workers_top_level = max(1, min(n_workers_top_level, len(input_dirs)))
+
+    Parallel(n_jobs=n_workers_top_level, verbose=1)(
+        delayed(process_all)(
+            input_dirs=[input_dir],
+            max_n_frames=None,
+            n_workers_per_dataset=6,
+            create_visualization=True,
+            input_images_basedir=str(input_images_basedir),
+        )
+        for input_dir in input_dirs
+    )
+
+    print("All directories processed!")
