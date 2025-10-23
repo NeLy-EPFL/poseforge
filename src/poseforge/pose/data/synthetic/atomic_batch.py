@@ -211,6 +211,8 @@ class AtomicBatchDataset(Dataset):
         """
         with h5py.File(output_path, "w") as f:
             for key, value in sim_data.items():
+                # these files will be accessed very frequently during training, so we
+                # use lzf (faster than gzip) and no shuffling to optimize for speed
                 compression = "lzf" if key == "body_seg_maps" else None
                 f.create_dataset(key, data=value, compression=compression)
             f.attrs["n_frames"] = next(iter(sim_data.values())).shape[0]

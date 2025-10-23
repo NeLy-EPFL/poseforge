@@ -195,9 +195,12 @@ def run_feature_extractor_inference(
                 f["h_features_pooled"].create_dataset(
                     training_stage,
                     data=h_features_pooled.cpu().numpy().astype(np.float16),
+                    compression="gzip",
                 )
                 f["z_features"].create_dataset(
-                    training_stage, data=z_features.cpu().numpy().astype(np.float16)
+                    training_stage,
+                    data=z_features.cpu().numpy().astype(np.float16),
+                    compression="gzip",
                 )
 
 

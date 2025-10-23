@@ -481,7 +481,8 @@ def process_subsegment(
                 "segmentation_labels",
                 data=seg_labels_all,
                 dtype="uint8",
-                compression="lzf",
+                compression="lzf",  # lzf is faster than gzip - good for frequent access
+                shuffle=True
             )
             seg_labels_ds.attrs["keys"] = segment_label_parser.label_keys
             seg_labels_ds.attrs["description"] = (

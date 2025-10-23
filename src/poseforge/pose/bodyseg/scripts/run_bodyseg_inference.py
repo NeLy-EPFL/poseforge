@@ -63,10 +63,22 @@ def test_bodyseg_model(
         out_dir.mkdir(parents=True, exist_ok=True)
         with h5py.File(out_dir / f"bodyseg_pred.h5", "w") as f:
             pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset("pred_segmap", data=pred_segmaps, dtype="uint8")
+            ds = f.create_dataset(
+                "pred_segmap",
+                data=pred_segmaps,
+                dtype="uint8",
+                compression="gzip",
+                shuffle=True,
+            )
             ds.attrs["class_labels"] = pipeline.class_labels
             confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset("pred_confidence", data=confs, dtype="uint8")
+            ds = f.create_dataset(
+                "pred_confidence",
+                data=confs,
+                dtype="uint8",
+                compression="gzip",
+                shuffle=True,
+            )
             # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
             ds.attrs["scale"] = 100
             ds.attrs["method"] = model.confidence_method
@@ -78,7 +90,13 @@ def test_bodyseg_model(
             # the Spotlight recording software. They may not be contiguous because
             # frames where the fly is upside down or too close to the edge, etc. are
             # already removed.
-            f.create_dataset("frame_ids", data=frame_ids, dtype="int")
+            f.create_dataset(
+                "frame_ids",
+                data=frame_ids,
+                dtype="int",
+                compression="gzip",
+                shuffle=True,
+            )
 
     output_buffer = OutputBuffer(
         buckets_and_expected_sizes=dataset.n_frames_lookup,

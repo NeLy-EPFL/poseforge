@@ -278,16 +278,25 @@ def save_seqikpy_output(
 
     with h5py.File(output_path, "w") as f:
         joint_angles_ds = f.create_dataset(
-            "joint_angles", data=joint_angles_arr, dtype=np.float32
+            "joint_angles", data=joint_angles_arr, dtype=np.float32, compression="gzip"
         )
         joint_angles_ds.attrs["legs"] = legs
         joint_angles_ds.attrs["dof_names_per_leg"] = dof_names_per_leg
 
         fwdkin_ds = f.create_dataset(
-            "forward_kinematics_world_xyz", data=fwdkin_world_xyz, dtype=np.float32
+            "forward_kinematics_world_xyz",
+            data=fwdkin_world_xyz,
+            dtype=np.float32,
+            compression="gzip",
         )
         fwdkin_ds.attrs["legs"] = legs
         fwdkin_ds.attrs["keypoint_names_per_leg"] = leg_keypoints_canonical
 
         if frame_ids is not None:
-            f.create_dataset("frame_ids", data=frame_ids, dtype=np.int32)
+            f.create_dataset(
+                "frame_ids",
+                data=frame_ids,
+                dtype=np.int32,
+                compression="gzip",
+                shuffle=True,
+            )
