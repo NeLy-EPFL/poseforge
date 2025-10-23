@@ -217,7 +217,7 @@ def visualize_bodyseg_prediction(
 
 if __name__ == "__main__":
     recording_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
-    pred_basedir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012a/inference")
+    pred_basedir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b/inference")
 
     trial = "20250613-fly1b-013"
     recording_dir = recording_basedir / trial / "model_prediction/not_flipped"

@@ -4,6 +4,7 @@ import numpy as np
 import os
 import gc
 import logging
+import colorlog
 import psutil
 from typing import Iterator, Any
 
@@ -139,3 +140,49 @@ def check_mixed_precision_status(
         print("================================================================")
 
     return status
+
+
+def setup_logger(name=None, level="warning") -> logging.Logger:
+    """
+    Set up and return a colorized logger.
+
+    Args:
+        name (str): Optional logger name. Defaults to root logger.
+        level (str or enum): Logging level (e.g. "info", "debug",
+            "warning") or logging constant (e.g. logging.INFO etc.).
+
+    Returns:
+        logging.Logger: Configured logger instance.
+    """
+    # Convert string level to logging constant if needed
+    if isinstance(level, str):
+        level = level.upper()
+        if not hasattr(logging, level):
+            raise ValueError(f"Invalid log level: {level}")
+        level = getattr(logging, level)
+
+    handler = colorlog.StreamHandler()
+    handler.setFormatter(
+        colorlog.ColoredFormatter(
+            "%(log_color)s%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%H:%M:%S",
+            log_colors={
+                "DEBUG": "cyan",
+                "INFO": "green",
+                "WARNING": "yellow",
+                "ERROR": "red",
+                "CRITICAL": "bold_red",
+            },
+        )
+    )
+
+    logger = colorlog.getLogger(name)
+    logger.setLevel(level)
+
+    # Avoid duplicate handlers if setup_logger() is called multiple times
+    if not logger.handlers:
+        logger.addHandler(handler)
+
+    logger.propagate = False
+
+    return logger

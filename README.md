@@ -40,7 +40,7 @@ poetry install
     - Because Aymanns et al. reports _tethered_ fly behaviors, replaying them on flat terrain might result in failures (e.g. fly flipping upside down).  This script includes code that filters out such periods and further splits each segment into several (though typically just one) subsegments.
 
 ### Part II: Preprocess Spotlight behavior recordings
-1. Run `python src/poseforge/spotlight/scripts/extract_spotlight_frames.py`
+1. Run `python src/poseforge/spotlight/scripts/crop_and_align_frames.py`
     - This script processes each Spotlight experimental trial by extracting, aligning, and cropping frames from the behavior video, and saving the processed frames as individual images in an output directory.
 
 > [!NOTE]

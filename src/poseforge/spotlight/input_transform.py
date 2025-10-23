@@ -108,24 +108,30 @@ def rotate_image_around_point(image, rotation_point, rotation_angle, fill_value=
         prefilter=False,
     )
 
-    return rotated_image
+    matrix_as_list = [matrix[0, :].tolist(), matrix[1, :].tolist()]
+    transform_params = {
+        "offset": offset,
+        "matrix": matrix_as_list,
+        "input_size": image.shape,
+        "output_size": rotated_image.shape,
+    }
+
+    return rotated_image, transform_params
 
 
-def crop_image_and_keypoints(
-    image, keypoints, center, crop_dim, x_offset=0, y_offset=0
-):
+def crop_image_and_keypoints(image, keypoints, center, crop_dim, shift_x=0, shift_y=0):
     """
     Crop a square region of size crop_dim x crop_dim centered at 'center'
-    (optionally shifted by x_offset, y_offset) from 'image', and shift
+    (optionally shifted by shift_x, shift_y) from 'image', and shift
     'keypoints' accordingly.
 
     Args:
         image: numpy array, shape (H, W)
-        keypoints: numpy array, shape (N, 2)
+        keypoints: numpy array, shape (N, 2), or None
         center: tuple or array-like, (x, y) center of crop
         crop_dim: int, size of the square crop
-        x_offset: int, shift in x (columns) from center
-        y_offset: int, shift in y (rows) from center
+        shift_x: int, shift in x (columns) from center
+        shift_y: int, shift in y (rows) from center
 
     Returns:
         cropped_image: numpy array, shape (crop_dim, crop_dim)
@@ -133,8 +139,8 @@ def crop_image_and_keypoints(
         If crop is out of bounds, returns None
     """
     x_center, y_center = center
-    x_center += x_offset
-    y_center += y_offset
+    x_center += shift_x
+    y_center += shift_y
     x_min = int(np.round(x_center - crop_dim // 2))
     y_min = int(np.round(y_center - crop_dim // 2))
     x_max = x_min + crop_dim
@@ -145,6 +151,57 @@ def crop_image_and_keypoints(
         return None
 
     cropped = image[y_min:y_max, x_min:x_max]
-    shifted_keypoints = keypoints - np.array([x_min, y_min])
 
-    return cropped, shifted_keypoints
+    if keypoints is None:
+        shifted_keypoints = None
+    else:
+        shifted_keypoints = keypoints - np.array([x_min, y_min])
+
+    transform_params = {
+        "shift_x": shift_x,
+        "shift_y": shift_y,
+        "x_min": x_min,
+        "x_max": x_max,
+        "y_min": y_min,
+        "y_max": y_max,
+        "input_size": image.shape,
+        "output_size": cropped.shape,
+    }
+
+    return cropped, shifted_keypoints, transform_params
+
+
+def reverse_rotation_and_crop(image, rotation_params, crop_params, fill_value=0):
+    """Reverse the operations of `rotate_image_around_point` followed by
+    `crop_image_and_keypoints` given parameters that they returned upon
+    being called."""
+    # First reverse crop_image_and_keypoints (undo the crop)
+    before_crop = np.zeros(crop_params["input_size"], dtype=image.dtype)
+    x_min = crop_params["x_min"]
+    x_max = crop_params["x_max"]
+    y_min = crop_params["y_min"]
+    y_max = crop_params["y_max"]
+    before_crop[y_min:y_max, x_min:x_max] = image
+
+    # Then reverse rotate_image_around_point (undo the rotation)
+    forward_transform_matrix = np.array(rotation_params["matrix"])
+    forward_offset = np.array(rotation_params["offset"])
+    # Forward transform performed in rotate_image_around_point was:
+    #   coords_in = forward_matrix @ coords_out + forward_offset
+    # To reverse it, we need:
+    #   coords_out = forward_matrix^-1 @ (coords_in - forward_offset)
+    #              = forward_matrix^-1 @ coords_in - forward_matrix^-1 @ forward_offset
+    #              = inverse_matrix @ coords_in + inverse_offset
+    # Therefore, set affine matrix and offset for the inverse transform as follows:
+    reverse_matrix = np.linalg.inv(forward_transform_matrix)
+    reverse_offset = -reverse_matrix @ forward_offset
+    before_rotation = ndimage.affine_transform(
+        before_crop,
+        reverse_matrix,
+        offset=reverse_offset,
+        output_shape=rotation_params["input_size"],
+        cval=fill_value,
+        prefilter=False,
+    )
+
+    return before_rotation

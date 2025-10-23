@@ -868,4 +868,8 @@ if __name__ == "__main__":
         prog=f"python {Path(__file__).name}",
         description="Run inverse kinematics on all keypoints3d output files in the given directories.",
     )
-    # python src/poseforge/pose/keypoints3d/scripts/run_inverse_kinematics.py --input-dirs bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch28/20250613-fly1b-013/ --max-n-frames 50 --create-visualization --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/
+    
+    # python src/poseforge/pose/keypoints3d/scripts/run_inverse_kinematics.py \
+    #     --input-dirs bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch12/20250613-fly1b-013/ \
+    #     --create-visualization \
+    #     --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/

@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import imageio
+import json
 from pathlib import Path
 from tqdm import tqdm
 
@@ -11,7 +12,7 @@ from spotlight_tools.common.dataloader import (
     get_behavior_video_capture,
 )
 
-from poseforge.spotlight.spotlight_frame_extraction import (
+from poseforge.spotlight.input_transform import (
     rotate_points_to_align,
     rotate_image_around_point,
     crop_image_and_keypoints,
@@ -23,8 +24,8 @@ def process_trial(
     output_dir: Path,
     edge_tolerance_mm: float = 4.0,
     crop_dim: int = 900,
-    crop_x_offset: int = 0,
-    crop_y_offset: int = 0,
+    crop_shift_x: int = 0,
+    crop_shift_y: int = 0,
     output_jpeg_quality: int = 95,
 ):
     """
@@ -41,8 +42,8 @@ def process_trial(
             for a frame to be considered usable.
         crop_dim (int): Size (in pixels) of the square crop around the
             thorax.
-        crop_x_offset (int): Horizontal offset for cropping.
-        crop_y_offset (int): Vertical offset for cropping.
+        crop_shift_x (int): Horizontal offset for cropping.
+        crop_shift_y (int): Vertical offset for cropping.
         output_jpeg_quality (int): Quality of the saved JPEG files (1-100).
     """
     # Define paths to processed data and metadata
@@ -132,34 +133,51 @@ def process_trial(
             original_neck_pt,
             original_thorax_pt,
         )
-        rotated_frame = rotate_image_around_point(
+        rotated_frame, rotation_params = rotate_image_around_point(
             original_frame, original_thorax_pt, rot_angle_rad
         )
         rotated_thorax_pt = rotated_keypoints[thorax_index, :]
 
         # Crop image and keypoints around thorax
-        crop_output = crop_image_and_keypoints(
+        crop_result = crop_image_and_keypoints(
             rotated_frame,
             rotated_keypoints,
             rotated_thorax_pt,
             crop_dim,
-            crop_x_offset,
-            crop_y_offset,
+            shift_x=crop_shift_x,
+            shift_y=crop_shift_y,
         )
-        if crop_output is None:
+        if crop_result is None:
             # Skip frames that cannot be cropped (e.g., out of bounds)
             continue
-        cropped_frame, cropped_keypoints = crop_output
+        cropped_frame, cropped_keypoints, crop_params = crop_result
 
-        # Save cropped frame to output directory
+        # Create metadata dictionary with transformation parameters
+        metadata = {
+            "frame_id": int(frame_id),
+            "rotation": {
+                "original_thorax_pt": list(original_thorax_pt),
+                "angle_radians": float(rot_angle_rad),
+                **rotation_params,
+            },
+            "crop": {
+                "rotated_thorax_pt": list(rotated_thorax_pt),
+                **crop_params,
+            },
+        }
+
+        # Save cropped frame and metadata to output directory
         successful_frame_ids.append(frame_id)
         output_frame_path = output_dir / f"frame_{frame_id:09d}.jpg"
+        output_metadata_path = output_dir / f"frame_{frame_id:09d}.metadata.json"
         imageio.imwrite(
             output_frame_path,
             cropped_frame,
             quality=output_jpeg_quality,
             subrectangles=True,
         )
+        with open(output_metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
 
     num_out_of_bound_frames = len(usable_frame_ids) - len(successful_frame_ids)
     print(
@@ -177,8 +195,8 @@ if __name__ == "__main__":
     # Set processing parameters
     edge_tolerance_mm = 4.0
     crop_dim = 900
-    crop_x_offset = 0
-    crop_y_offset = 0
+    crop_shift_x = 0
+    crop_shift_y = 0
 
     # Process each trial
     for i, recording_dir in enumerate(recording_directories):
@@ -194,6 +212,6 @@ if __name__ == "__main__":
             output_dir,
             edge_tolerance_mm=edge_tolerance_mm,
             crop_dim=crop_dim,
-            crop_x_offset=crop_x_offset,
-            crop_y_offset=crop_y_offset,
+            crop_shift_x=crop_shift_x,
+            crop_shift_y=crop_shift_y,
         )

@@ -77,6 +77,15 @@ def test_bodyseg_model(
             # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
             ds.attrs["scale"] = 100
             ds.attrs["method"] = model.confidence_method
+            frame_ids = [
+                int(p.stem.split("_")[1])
+                for p in dataset.frame_sortings[input_video_path]
+            ]
+            # These are the actual, raw frame IDs from the original video assigned by
+            # the Spotlight recording software. They may not be contiguous because
+            # frames where the fly is upside down or too close to the edge, etc. are
+            # already removed.
+            f.create_dataset("frame_ids", data=frame_ids, dtype="int")
 
     output_buffer = OutputBuffer(
         buckets_and_expected_sizes=dataset.n_frames_lookup,
@@ -112,8 +121,8 @@ def test_bodyseg_model(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012a")
-    training_stages = [model_dir / "checkpoints/epoch12_step18335.model.pth"]
+    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b")
+    training_stages = [model_dir / "checkpoints/epoch13_step18335.model.pth"]
     output_basedir = model_dir / "inference"
     output_basedir.mkdir(parents=True, exist_ok=True)
     batch_size = 192
