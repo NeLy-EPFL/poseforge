@@ -1,4 +1,4 @@
-# Body-aware enhanced pose estimation for _Drosophila melanogaster_
+# Simulation-based zero-label pose estimation for _Drosophila melanogaster_
 
 Pose estimation guided by a biomechanical model.
 
