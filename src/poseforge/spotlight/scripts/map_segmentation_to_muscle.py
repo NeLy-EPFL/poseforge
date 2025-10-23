@@ -72,7 +72,7 @@ if __name__ == "__main__":
             muscle_segmentation_data_path=output_path,
             keypoints3d_data_path=keypoints3d_prediction_path,
             inverse_kinematics_data_path=inverse_kinematics_data_path,
-            muscle_segments_to_plot=["Coxa", "Femur", "Tibia", "Tarsus"],
+            muscle_segments_to_plot=["Coxa", "Femur", "Tibia"],
             output_path=muscle_traces_dir / "muscle_traces_with_kinematics.pdf",
             trange=viz_trange,
             title=f"{spotlight_trial} ({viz_trange[0]}–{viz_trange[1]} s)",
