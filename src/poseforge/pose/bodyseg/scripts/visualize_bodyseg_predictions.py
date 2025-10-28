@@ -217,28 +217,41 @@ def visualize_bodyseg_prediction(
 
 if __name__ == "__main__":
     recording_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
-    trial = "20250613-fly1b-005"
-    recording_dir = recording_basedir / trial / "model_prediction/not_flipped"
     output_fps = 30
     label_alpha = 0.3
     n_workers = -1
-
     epoch = 13  # chosen by validation performance and visual inspection
     step = 18335  # last step of each epoch
-    pred_basedir = Path(
-        f"bulk_data/pose_estimation/bodyseg/trial_20251012b/production/epoch{epoch}_step{step}/"
-    )
-    pred_path = pred_basedir / f"{trial}_model_prediction_not_flipped/bodyseg_pred.h5"
-    output_path = pred_basedir / f"{trial}_model_prediction_not_flipped/viz.mp4"
 
-    visualize_bodyseg_prediction(
-        recording_dir=recording_dir,
-        pred_path=pred_path,
-        output_path=output_path,
-        output_fps=output_fps,
-        label_alpha=label_alpha,
-        n_workers=n_workers,
-        confidence_measure="normalized prediction entropy",
-        # max_n_frames=100,
-    )
-    print(f"Video saved to {output_path}")
+    # trials = ["20250613-fly1b-005"]
+    trials = sorted([path.name for path in recording_basedir.glob("20250613-fly1b-*")])
+    print(f"Found {len(trials)} trials to process.")
+
+    for trial in trials:
+        print(f"Processing trial {trial}...")
+        recording_dir = recording_basedir / trial / "model_prediction/not_flipped"
+        pred_basedir = Path(
+            f"bulk_data/pose_estimation/bodyseg/trial_20251012b/production/epoch{epoch}_step{step}/"
+        )
+        pred_path = (
+            pred_basedir / f"{trial}_model_prediction_not_flipped/bodyseg_pred.h5"
+        )
+        if not pred_path.exists():
+            logging.warning(
+                f"Prediction file {pred_path} does not exist, skipping this trial."
+            )
+            continue
+
+        output_path = pred_basedir / f"{trial}_model_prediction_not_flipped/viz.mp4"
+
+        visualize_bodyseg_prediction(
+            recording_dir=recording_dir,
+            pred_path=pred_path,
+            output_path=output_path,
+            output_fps=output_fps,
+            label_alpha=label_alpha,
+            n_workers=n_workers,
+            confidence_measure="normalized prediction entropy",
+            # max_n_frames=100,
+        )
+        print(f"Video saved to {output_path}")
