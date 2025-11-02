@@ -736,6 +736,7 @@ def process_all(
             keypoint_names_canonical=keypoint_names_canonical,
             max_n_frames=max_n_frames,
             n_workers=n_workers_per_dataset,
+            debug_plots_dir=keypoints3d_output_file.parent / "ik_debug_plots/",
         )
         save_seqikpy_output(
             output_path, joint_angles, forward_kinematics, frame_ids=frame_ids
@@ -910,3 +911,19 @@ if __name__ == "__main__":
     )
 
     print("All directories processed!")
+
+    # # Smaller example
+    # trials_basedir = Path(
+    #     "bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch14_step9167/"
+    # )
+    # input_images_basedir = Path(
+    #     "bulk_data/behavior_images/spotlight_aligned_and_cropped/"
+    # )
+    # trial_dirs = sorted(list(trials_basedir.glob("20250613-fly1b-002/")))
+    # process_all(
+    #     input_dirs=trial_dirs,
+    #     max_n_frames=100,
+    #     n_workers_per_dataset=6,
+    #     create_visualization=True,
+    #     input_images_basedir=input_images_basedir,
+    # )
