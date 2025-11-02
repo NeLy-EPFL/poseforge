@@ -196,7 +196,9 @@ def _world_xyz_to_seqikpy_format(
     return pose_data_dict
 
 
-def extract_leg_segment_lengths(pose_data_dict: dict[str, np.ndarray]):
+def extract_leg_segment_lengths(
+    pose_data_dict: dict[str, np.ndarray],
+) -> dict[str, np.ndarray]:
     leg_segment_lengths_over_time = defaultdict(list)
     for side in "LR":
         for pos in "FMH":
@@ -248,7 +250,9 @@ def calculate_average_leg_segment_lengths(
     return average_leg_segment_lengths
 
 
-def scale_template_by_leg_segment_sizes(template_positions_dict, size_dict):
+def scale_template_by_leg_segment_sizes(
+    template_positions_dict, size_dict
+) -> dict[str, np.ndarray]:
     logger = logging.getLogger(__name__)
 
     segments = ["Coxa", "Femur", "Tibia", "Tarsus", "Claw"]
@@ -268,7 +272,7 @@ def scale_template_by_leg_segment_sizes(template_positions_dict, size_dict):
                 size_new = size_dict[prev_keypoint_name]
                 direction_vector = pos_original - prev_pos_original
                 scaled_vector = direction_vector * (size_new / size_original)
-                pos_new = prev_pos_original + scaled_vector
+                pos_new = scaled_template[prev_keypoint_name] + scaled_vector
                 scaled_template[keypoint_name] = pos_new
                 logger.info(
                     f"Scaled {keypoint_name}: {size_original:.3f} -> {size_new:.3f}. "
