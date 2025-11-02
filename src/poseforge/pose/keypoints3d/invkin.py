@@ -1,5 +1,7 @@
 import numpy as np
 import h5py
+import logging
+from collections import defaultdict
 from pathlib import Path
 from seqikpy.alignment import AlignPose
 from seqikpy.kinematic_chain import KinematicChainSeq
@@ -12,6 +14,7 @@ from poseforge.neuromechfly.constants import (
     dof_name_lookup_canonical_to_nmf,
     keypoint_name_lookup_nmf_to_canonical,
 )
+from poseforge.pose.keypoints3d.visualizer import visualize_leg_segment_lengths
 
 
 # Source of hardcoded values below are taken from NeuroMechFly v2 (by Alfie)
@@ -61,7 +64,7 @@ _nmf_initial_angles = {
     "head": np.array([0, -0.17, 0]),  #  none, roll, pitch, yaw
 }
 
-# We define a template to create the kinematic chain
+# Define a template to create the kinematic chain
 # The length of chain comes from the size calculated from the template
 
 _nmf_template = {
@@ -97,7 +100,7 @@ _nmf_template = {
     "LH_Claw": np.array([-0.215, 0.087, -2.588]),
 }
 
-# We determine the bounds for each joint DOF
+# Determine the bounds for each joint DOF
 _nmf_bounds = {
     # Front legs
     "RF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
@@ -193,16 +196,116 @@ def _world_xyz_to_seqikpy_format(
     return pose_data_dict
 
 
+def extract_leg_segment_lengths(pose_data_dict: dict[str, np.ndarray]):
+    leg_segment_lengths_over_time = defaultdict(list)
+    for side in "LR":
+        for pos in "FMH":
+            for seg_idx, seg_name in enumerate(["Coxa", "Femur", "Tibia", "Tarsus"]):
+                leg = f"{side}{pos}"
+                start_positions = pose_data_dict[f"{leg}_leg"][:, seg_idx, :]
+                end_positions = pose_data_dict[f"{leg}_leg"][:, seg_idx + 1, :]
+                segment_vectors = end_positions - start_positions
+                segment_lengths = np.linalg.norm(segment_vectors, axis=1)
+                leg_segment_lengths_over_time[f"{leg}_{seg_name}"] = segment_lengths
+    return leg_segment_lengths_over_time
+
+
+def calculate_average_leg_segment_lengths(
+    leg_segment_lengths_over_time: dict[str, np.ndarray],
+    fractional_discarded_margin: float = 0.1,
+    make_symmetric: bool = True,
+) -> dict[str, float]:
+    average_leg_segment_lengths = {}
+    for segment_name, lengths in leg_segment_lengths_over_time.items():
+        min_val = np.percentile(lengths, 100 * fractional_discarded_margin)
+        max_val = np.percentile(lengths, 100 * (1 - fractional_discarded_margin))
+        filtered_lengths = lengths[(lengths >= min_val) & (lengths <= max_val)]
+        average_length = np.mean(filtered_lengths)
+        average_leg_segment_lengths[segment_name] = average_length
+
+    if make_symmetric:
+        for pos in "FMH":
+            for seg_name in ["Coxa", "Femur", "Tibia", "Tarsus"]:
+                left_key = f"L{pos}_{seg_name}"
+                right_key = f"R{pos}_{seg_name}"
+                mean_length = np.mean(
+                    [
+                        average_leg_segment_lengths[left_key],
+                        average_leg_segment_lengths[right_key],
+                    ]
+                )
+                average_leg_segment_lengths[left_key] = mean_length
+                average_leg_segment_lengths[right_key] = mean_length
+
+    for side in "LR":
+        for pos in "FMH":
+            total_length = 0.0
+            for seg_name in ["Coxa", "Femur", "Tibia", "Tarsus"]:
+                segment_key = f"{side}{pos}_{seg_name}"
+                total_length += average_leg_segment_lengths[segment_key]
+            average_leg_segment_lengths[f"{side}{pos}"] = total_length
+
+    return average_leg_segment_lengths
+
+
+def scale_template_by_leg_segment_sizes(template_positions_dict, size_dict):
+    logger = logging.getLogger(__name__)
+
+    segments = ["Coxa", "Femur", "Tibia", "Tarsus", "Claw"]
+    scaled_template = {}
+    for side in "LR":
+        for pos in "FMH":
+            leg = f"{side}{pos}"
+            for seg_idx, seg_name in enumerate(segments):
+                keypoint_name = f"{leg}_{seg_name}"
+                pos_original = template_positions_dict[keypoint_name]
+                if seg_name == "Coxa":
+                    scaled_template[keypoint_name] = pos_original
+                    continue
+                prev_keypoint_name = f"{leg}_{segments[seg_idx - 1]}"
+                prev_pos_original = template_positions_dict[prev_keypoint_name]
+                size_original = np.linalg.norm(pos_original - prev_pos_original)
+                size_new = size_dict[prev_keypoint_name]
+                direction_vector = pos_original - prev_pos_original
+                scaled_vector = direction_vector * (size_new / size_original)
+                pos_new = prev_pos_original + scaled_vector
+                scaled_template[keypoint_name] = pos_new
+                logger.info(
+                    f"Scaled {keypoint_name}: {size_original:.3f} -> {size_new:.3f}. "
+                    f"This is based on prev keypoint {prev_keypoint_name}, "
+                    f"curr keypoint {keypoint_name}, "
+                    f"and size for segment {prev_keypoint_name}."
+                )
+    return scaled_template
+
+
 def run_seqikpy(
     world_xyz: np.ndarray,
     keypoint_names_canonical: list[str],
     max_n_frames: int | None = None,
     n_workers: int = 6,
+    debug_plots_dir: Path | None = None,
 ) -> dict[str, np.ndarray]:
     # Convert input format to what SeqIKPy expects
     pose_data_dict = _world_xyz_to_seqikpy_format(
         world_xyz, keypoint_names_canonical, max_n_frames=max_n_frames
     )
+
+    leg_segment_lengths_over_time = extract_leg_segment_lengths(pose_data_dict)
+    sizes_from_data = calculate_average_leg_segment_lengths(
+        leg_segment_lengths_over_time, make_symmetric=True
+    )
+    for k, v in _nmf_size.items():
+        if k not in sizes_from_data:
+            sizes_from_data[k] = v  # add antennae sizes
+    template_scaled_to_data = scale_template_by_leg_segment_sizes(
+        _nmf_template, sizes_from_data
+    )
+    if debug_plots_dir is not None:
+        debug_plots_dir.mkdir(parents=True, exist_ok=True)
+        visualize_leg_segment_lengths(
+            leg_segment_lengths_over_time, sizes_from_data, output_dir=debug_plots_dir
+        )
 
     # Align keypoints so that
     #   1. Each coxa is at the coxa position in the template
@@ -212,15 +315,15 @@ def run_seqikpy(
         pose_data_dict,
         legs_list=legs,
         include_claw=True,
-        body_template=_nmf_template,
-        body_size=_nmf_size,
+        body_template=template_scaled_to_data,
+        body_size=sizes_from_data,
     )
     aligned_pose = pose_aligner.align_pose()
 
     # Run inverse kinematics and forward kinematics.
     # This is the slowest part and it's parallelized at leg level (so use n_workers=6).
     seq_kinematic_chain = KinematicChainSeq(
-        bounds_dof=_nmf_bounds, legs_list=legs, body_size=_nmf_size
+        bounds_dof=_nmf_bounds, legs_list=legs, body_size=sizes_from_data
     )
     leg_seq_ik = LegInvKinSeq(
         aligned_pos=aligned_pose,
