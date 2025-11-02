@@ -34,7 +34,7 @@ def _setup_loss_func(loss_config: config.LossConfig) -> Pose2p5DLoss:
 def train_keypoints3d_model(
     n_epochs: int,
     model_architecture_config: config.ModelArchitectureConfig,
-    model_weights_config: config.ModelWeightsConfig | None,
+    model_weights_config: config.ModelWeightsConfig,
     loss_config: config.LossConfig,
     training_data_config: config.TrainingDataConfig,
     optimizer_config: config.OptimizerConfig,
