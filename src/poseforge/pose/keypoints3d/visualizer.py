@@ -1092,3 +1092,5 @@ def visualize_leg_segment_lengths(
 
     fig_ts.savefig(Path(output_dir) / "leg_segment_lengths_over_time.pdf")
     fig_distr.savefig(Path(output_dir) / "leg_segment_length_distributions.pdf")
+    plt.close(fig_ts)
+    plt.close(fig_distr)
