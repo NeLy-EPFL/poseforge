@@ -268,7 +268,7 @@ def scale_template_by_leg_segment_sizes(template_positions_dict, size_dict):
                 size_new = size_dict[prev_keypoint_name]
                 direction_vector = pos_original - prev_pos_original
                 scaled_vector = direction_vector * (size_new / size_original)
-                pos_new = prev_pos_original + scaled_vector
+                pos_new = scaled_template[prev_keypoint_name] + scaled_vector
                 scaled_template[keypoint_name] = pos_new
                 logger.info(
                     f"Scaled {keypoint_name}: {size_original:.3f} -> {size_new:.3f}. "
