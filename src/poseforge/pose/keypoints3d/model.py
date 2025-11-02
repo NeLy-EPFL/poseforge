@@ -108,17 +108,19 @@ class Pose2p5DModel(nn.Module):
 
         self.feature_extractor = feature_extractor
 
-        # Create decoder core with skipped connection for upsampling
-        # We use decoder4/3/2 to mirror layers2/3/4 in the ResNet encoder
-        # Note that when upsampling, we actually go in the reverse order (4-3-2) from
-        # the bottleneck. We skip "decoder1" because decoder2 already produces a 64x64
-        # feature map (stride 4 compared to the input). This is already a good
-        # resolution to predict keypoint heatmaps from.
+        # Create decoder core with skipped connections for upsampling
+        # We use decoder4/3/2/1 to mirror layers1/2/3/4 in the ResNet encoder
+        # Note that when upsampling, we actually go in the reverse order (4-3-2-1) from
+        # the bottleneck.
+        # Also note that ResNet18 operates at 128x128 after the initial
+        # Conv-BN-ReLU (but before maxpool). We upsample to 128x128 to match this
+        # (stride 2 compared to the input). The output heatmaps will thus be 128x128.
         assert feature_extractor.output_channels == 512  # expected from ResNet18 layer4
         self.dec_layer4 = DecoderBlock(512, 256, 256)  # 512ch 8x8 -> 256ch 16x16
         self.dec_layer3 = DecoderBlock(256, 128, 128)  # 256ch 16x16 -> 128ch 32x32
-        # 128ch 32x32 -> 64ch 64x64
-        self.dec_layer2 = DecoderBlock(128, 64, upsample_core_out_channels)
+        self.dec_layer2 = DecoderBlock(128, 64, 64)  # 128ch 32x32 -> 64ch 64x64
+        # last layer (dec_layer1): # 64ch 64x64 -> upsample_core_out_channels, 128x128
+        self.dec_layer1 = DecoderBlock(64, 64, upsample_core_out_channels)
 
         # Heatmap head for (x, y) keypoint locations
         self.heatmap_head = self._build_heatmap_head(
@@ -393,13 +395,13 @@ class Pose2p5DModel(nn.Module):
 
         Encoder (downsampling)     Decoder (upsampling)
         ──────────────────────     ────────────────────
-          e0: 64ch
-                │
-                │
-                ↓                 **d1: upsample_core_out_channels 64x64**
-          e1: 64ch 64x64            (end of upsampling core)
+          e0: 64ch 128x128          d0: upsample_core_out_channels ch, 128x128 (end of upsampling core)
                 │ │                       ↑
-                │ └────────(skip)───────→(+)  dec_layer2: 128(up)+64(skip)->upsample_core_out_channels
+                │ └────────(skip)───────→(+)  dec_layer1: 64(up)+64(skip)->upsample_core_out_channels ch
+                ↓                         ↑(up)
+          e1: 64ch 64x64            d1: 64ch 64x64
+                │ │                       ↑
+                │ └────────(skip)───────→(+)  dec_layer2: 128(up)+64(skip)->64 ch
                 ↓                         ↑(up)           32x32(up)+64x64(skip)->64x64
           e2: 128ch 32x32           d2: 128ch 32x32
                 │ │                       ↑
@@ -423,26 +425,27 @@ class Pose2p5DModel(nn.Module):
         # Upsample with skip connections
         d3 = self.dec_layer4(d4, e3)
         d2 = self.dec_layer3(d3, e2)
-        d1 = self.dec_layer2(d2, e1)  # (N, upsample_core_out_channels, 64, 64)
+        d1 = self.dec_layer2(d2, e1)
+        d0 = self.dec_layer1(d1, e0)  # (N, upsample_core_out_channels, 128, 128)
 
         # Compute x-y heatmaps
         # Compute logits using heatmap head
-        heatmaps = self.heatmap_head(d1)  # (N, n_keypoints, nrows_out, ncols_out)
+        heatmaps = self.heatmap_head(d0)  # (N, n_keypoints, nrows_out, ncols_out)
         # Decode x-y coordinates from logits using soft-argmax
         # xy_px_out: x, y in heatmap pixel space, shape (N, n_keypoints, 2)
         # xy_conf: shape (N, n_keypoints)
         xy_px_out, xy_conf = self._soft_argmax_2d(heatmaps)
 
         # Map to input image pixel coordinates (input images are 256x256, but heatmaps
-        # are predicted at 64x64, so there is a stride of 4)
+        # are predicted at 128x128, so there is a stride of 2)
         heatmap_size = heatmaps.shape[-2:]  # (n_rows_out, n_cols_out)
         stride = self.feature_extractor.input_size[0] / heatmap_size[0]
-        assert stride == 4, "Expected input size=256x256 and output heatmap size=64x64"
+        assert stride == 2, "Expected input size=256x256, output heatmap size=128x128"
         xy_px_in = xy_px_out * stride  # (N, n_keypoints, 2)
 
         # Compute depth distributions
         # Compute logits using depth head
-        depth_logits = self.depth_head(d1)  # (N, n_keypoints, depth_n_bins)
+        depth_logits = self.depth_head(d0)  # (N, n_keypoints, depth_n_bins)
         # Decode depth from logits using soft-argmax
         # depth_pos and depth_conf both of shape (N, n_keypoints)
         depth_pos, depth_conf = self._soft_argmax_1d(depth_logits)
@@ -460,7 +463,8 @@ class Pose2p5DModel(nn.Module):
             assert d4.shape == (batch_size, 512, 8, 8)
             assert d3.shape == (batch_size, 256, 16, 16)
             assert d2.shape == (batch_size, 128, 32, 32)
-            assert d1.shape == (batch_size, self.upsample_core_out_channels, 64, 64)
+            assert d1.shape == (batch_size, 64, 64, 64)
+            assert d0.shape == (batch_size, self.upsample_core_out_channels, 128, 128)
 
             assert heatmaps.shape == (batch_size, self.n_keypoints, *heatmap_size)
             assert xy_px_in.shape == (batch_size, self.n_keypoints, 2)

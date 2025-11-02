@@ -135,7 +135,7 @@ if __name__ == "__main__":
     # )
     # optimizer_config = config.OptimizerConfig()
     # training_artifacts_config = config.TrainingArtifactsConfig(
-    #     output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20251013a/",
+    #     output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20251102z/",
     #     logging_interval=100,
     #     checkpoint_interval=100,
     #     validation_interval=100,
