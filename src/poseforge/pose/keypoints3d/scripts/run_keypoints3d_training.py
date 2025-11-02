@@ -48,7 +48,6 @@ def train_keypoints3d_model(
         n_epochs: Number of epochs to train for.
         model_architecture_config: Configuration for model architecture.
         model_weights_config: Configuration for model weights to load.
-            If None, will initialize model weights randomly.
         loss_config: Configuration for loss function.
         training_data_config: Configuration for training and validation
             data.
