@@ -1,0 +1,1 @@
+production_checkpoint_v1.pth is copied from bulk_data/flip_detection_model/best_model.pth

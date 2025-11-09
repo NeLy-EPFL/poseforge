@@ -1,0 +1,7 @@
+flip_detection:
+  checkpoint_path: "~/projects/poseforge/production_models/flip_detection/production_checkpoint_v1.pth"
+  working_size: 224
+  init_params:
+    input_channels: 1
+    num_classes: 2
+  output_labels: ["not_flipped", "flipped"]
