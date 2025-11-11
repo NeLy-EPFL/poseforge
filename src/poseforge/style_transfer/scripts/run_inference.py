@@ -3,7 +3,7 @@ import logging
 import sys
 from tqdm import tqdm
 from pathlib import Path
-from pvio.video_io import read_frames_from_video
+from pvio.io import read_frames_from_video
 
 from poseforge.style_transfer import get_inference_pipeline, process_simulation
 from poseforge.util.sys import clear_memory_cache

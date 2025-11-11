@@ -7,7 +7,7 @@ from typing import Any
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
-from pvio.video_io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video
 
 
 def index_visualized_videos(

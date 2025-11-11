@@ -16,7 +16,7 @@ from PIL import Image
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from joblib import Parallel, delayed
-from pvio.video_io import write_frames_to_video
+from pvio.io import write_frames_to_video
 
 from poseforge.util.plot import get_segmentation_color_palette
 

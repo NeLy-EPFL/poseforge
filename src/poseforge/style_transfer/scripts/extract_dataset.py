@@ -6,7 +6,7 @@ from shutil import copyfile
 from collections import defaultdict
 from tqdm import tqdm
 from pathlib import Path
-from pvio.video_io import read_frames_from_video, check_num_frames
+from pvio.io import read_frames_from_video, check_num_frames
 
 
 def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path) -> dict[Path, int]:

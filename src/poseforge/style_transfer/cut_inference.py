@@ -6,7 +6,7 @@ from tqdm import trange
 from pathlib import Path
 from PIL import Image
 from torchvision.transforms.functional import to_pil_image
-from pvio.video_io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video
 
 from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper

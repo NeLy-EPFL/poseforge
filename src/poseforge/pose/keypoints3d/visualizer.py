@@ -12,7 +12,7 @@ import time
 from PIL import Image
 from pathlib import Path
 from joblib import Parallel, delayed
-from pvio.video_io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video
 
 from poseforge.util.plot import configure_matplotlib_style
 from poseforge.neuromechfly.constants import kchain_plotting_colors

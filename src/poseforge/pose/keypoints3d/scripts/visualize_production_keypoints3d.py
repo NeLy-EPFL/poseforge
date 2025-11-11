@@ -19,7 +19,7 @@ import imageio.v2 as imageio
 from joblib import Parallel, delayed
 import logging
 import tempfile
-from pvio.video_io import write_frames_to_video
+from pvio.io import write_frames_to_video
 
 from poseforge.pose.keypoints3d.visualizer import (
     get_keypoint_color,
