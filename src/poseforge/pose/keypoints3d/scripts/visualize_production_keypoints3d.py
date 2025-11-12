@@ -507,9 +507,9 @@ def visualize_predictions(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
-    recordings = ["20250613-fly1b-005"]
-    epoch = 14  # these must be consistent with run_keypoints3d_inference.py
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251102a")
+    recordings = ["20250613-fly1b-002"]
+    epoch = 28  # these must be consistent with run_keypoints3d_inference.py
     step = 9167  # same as above
 
     for recording in recordings:
@@ -519,7 +519,7 @@ if __name__ == "__main__":
         )
         recording_dir = input_basedir / recording / "model_prediction/not_flipped"
         keypoints3d_data_dir = (
-            model_dir / f"production/epoch{epoch}_step{step}" / recording
+            model_dir / f"production/stride2_epoch{epoch}_step{step}" / recording
         )
         inference_output_path = keypoints3d_data_dir / "keypoints3d.h5"
         output_video_path = keypoints3d_data_dir / "predictions.mp4"

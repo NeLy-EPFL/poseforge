@@ -117,25 +117,34 @@ def run_keypoints3d_inference(
     # Save results
     if output_basedir is None:
         output_basedir = model_dir / "production"
-    for video_id, result_by_frame in results.items():
+    for video_id, result_by_vir_frame_id in results.items():
         video_obj = dataloader.dataset.videos[video_id]
         assert isinstance(video_obj, ImageDirVideo)
         trial_name = video_obj.path.parent.parent.name
         output_dir = output_basedir / trial_name
         output_dir.mkdir(parents=True, exist_ok=True)
-        frame_ids_sorted = sorted(result_by_frame.keys())
+
+        phy_frame_ids = [
+            video_obj.frame_id_vir2phy[vir_frame_id]
+            for vir_frame_id in result_by_vir_frame_id.keys()
+        ]
+        phy_frame_ids.sort()
+        sorted_results = []
+        for phy_frame_id in phy_frame_ids:
+            vir_frame_id = video_obj.frame_id_phy2vir[phy_frame_id]
+            res = result_by_vir_frame_id[vir_frame_id]
+            sorted_results.append(res)
+
         with h5py.File(output_dir / "keypoints3d.h5", "w") as f:
             f.create_dataset(
                 "frame_ids",
-                data=np.array(frame_ids_sorted, dtype=np.int32),
+                data=np.array(phy_frame_ids, dtype=np.int32),
                 dtype=np.int32,
                 compression="gzip",
                 shuffle=True,
             )
 
-            world_xyz_stack = np.stack(
-                [result_by_frame[i][0] for i in frame_ids_sorted]
-            )
+            world_xyz_stack = np.stack([res[0] for res in sorted_results])
             world_xyz_ds = f.create_dataset(
                 "keypoints_world_xyz",
                 data=world_xyz_stack,
@@ -145,9 +154,7 @@ def run_keypoints3d_inference(
             world_xyz_ds.attrs["keypoints"] = keypoint_segments_canonical
             world_xyz_ds.attrs["units"] = "mm"
 
-            camera_xy_stack = np.stack(
-                [result_by_frame[i][1] for i in frame_ids_sorted]
-            )
+            camera_xy_stack = np.stack([res[1] for res in sorted_results])
             camera_xy_ds = f.create_dataset(
                 "keypoints_camera_xy",
                 data=camera_xy_stack,
@@ -158,9 +165,7 @@ def run_keypoints3d_inference(
             camera_xy_ds.attrs["units"] = "pixels"
             camera_xy_ds.attrs["image_size"] = list(inference_image_size)
 
-            camera_depth_stack = np.stack(
-                [result_by_frame[i][2] for i in frame_ids_sorted]
-            )
+            camera_depth_stack = np.stack([res[2] for res in sorted_results])
             camera_depth_ds = f.create_dataset(
                 "keypoints_camera_depth",
                 data=camera_depth_stack,
@@ -170,9 +175,7 @@ def run_keypoints3d_inference(
             camera_depth_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_depth_ds.attrs["units"] = "mm"
 
-            camera_xy_conf_stack = np.stack(
-                [result_by_frame[i][3] for i in frame_ids_sorted]
-            )
+            camera_xy_conf_stack = np.stack([res[3] for res in sorted_results])
             camera_xy_conf_ds = f.create_dataset(
                 "keypoints_camera_xy_conf",
                 data=camera_xy_conf_stack,
@@ -182,9 +185,7 @@ def run_keypoints3d_inference(
             camera_xy_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_xy_conf_ds.attrs["method"] = model.confidence_method
 
-            camera_depth_conf_stack = np.stack(
-                [result_by_frame[i][4] for i in frame_ids_sorted]
-            )
+            camera_depth_conf_stack = np.stack([res[4] for res in sorted_results])
             camera_depth_conf_ds = f.create_dataset(
                 "keypoints_camera_depth_conf",
                 data=camera_depth_conf_stack,
