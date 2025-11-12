@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import os
 import gc
+import logging
+import sys
 from loguru import logger
 from psutil import Process
 from sys import stderr
@@ -139,7 +141,36 @@ def check_mixed_precision_status(
     return status
 
 
-def set_loguru_level(level: str | int) -> None:
-    """Set the logging level for loguru logger."""
-    logger.remove()  # Remove existing handlers
-    logger.add(sink=stderr, level=level)
+def set_loguru_level(level: str) -> None:
+    """Set the logging level for loguru logger and intercept standard logging."""
+    # Remove existing loguru handlers
+    logger.remove()
+
+    # Add loguru handler with your desired level
+    logger.add(sink=sys.stderr, level=level)
+
+    # Intercept standard logging and redirect to loguru
+    logging.basicConfig(handlers=[InterceptHandler()], level=level.upper(), force=True)
+
+
+class InterceptHandler(logging.Handler):
+    """
+    Handler that intercepts standard logging calls and redirects them to loguru.
+    """
+    def emit(self, record: logging.LogRecord) -> None:
+        # Get corresponding Loguru level if it exists
+        level: str | int
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Find caller from where the logged message originated
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )

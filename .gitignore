@@ -403,7 +403,10 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/python,linux,macos,windows,jupyternotebooks,visualstudiocode,vim,git,pycharm+all
 
 
-bulk_data
+bulk_data/
+production_models/**
+!production_models/**/
+!production_models/**/README.txt
 logs/
 wandb/
 *.mp4

@@ -4,16 +4,21 @@ import torch
 import torchvision.transforms as transforms
 import h5py
 import yaml
+import logging
 from tqdm import tqdm
 from pathlib import Path
 from dataclasses import dataclass
 from loguru import logger
 
-from pvio.torch import SimpleVideoCollectionLoader
 from spotlight_tools.calibration import SpotlightPositionMapper
 
-from poseforge.production.config import load_config
+logging.getLogger("pvio").setLevel(logging.INFO)
+from pvio.torch_tools import SimpleVideoCollectionLoader
+
 import poseforge.spotlight.flip_detection as flip_detection
+import poseforge.pose.bodyseg as bodyseg
+import poseforge.pose.keypoints3d as keypoints3d
+from poseforge.production.config import load_config
 
 
 class SpotlightRecordingProcessor:
@@ -51,7 +56,7 @@ class SpotlightRecordingProcessor:
         loading_batch_size: int = 128,
         loading_n_workers: int = 8,
         loading_buffer_size: int = 128,
-        loading_cache_video_metadata: bool = False,
+        loading_cache_video_metadata: bool = True,
     ) -> pd.DataFrame:
         logger.info("Detecting usable frames based on flip and edge criteria")
         df_flipped = self._detect_flipped_frames(
@@ -66,12 +71,12 @@ class SpotlightRecordingProcessor:
         is_not_flipped = df["flip_detection"] == "not_flipped"
         is_not_too_close = ~df["too_close_to_edge"]
         df["usable"] = is_not_flipped & is_not_too_close
-        df.to_csv(self.paths.usable_frames_metadata, index=False)
+        df.to_csv(self.paths.usable_frames, index=False)
         logger.info(
             f"Out of {len(df)} frames, {is_not_flipped.sum()} frames are not flipped, "
             f"{is_not_too_close.sum()} frames are not too close to edge, and "
             f"{df['usable'].sum()} frames meet both criteria."
-            f"Saved usable frames metadata to {self.paths.usable_frames_metadata}"
+            f"Saved usable frames metadata to {self.paths.usable_frames}"
         )
         return df
 
@@ -80,7 +85,7 @@ class SpotlightRecordingProcessor:
         loading_batch_size: int = 128,
         loading_n_workers: int = 8,
         loading_buffer_size: int = 128,
-        loading_cache_video_metadata: bool = False,
+        loading_cache_video_metadata: bool = True,
     ) -> pd.DataFrame:
         # Set up flip detection model
         logger.info("Setting up flip detection model")
@@ -88,7 +93,7 @@ class SpotlightRecordingProcessor:
             **self.model_config["flip_detection"]["init_params"]
         )
         checkpoint_path = Path(
-            self.model_config["flip_detection"]["checkpoint_path"]
+            self.model_config["flip_detection"]["checkpoint"]
         ).expanduser()
         checkpoint = torch.load(checkpoint_path)
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -111,7 +116,6 @@ class SpotlightRecordingProcessor:
             batch_size=loading_batch_size,
             num_workers=loading_n_workers,
             buffer_size=loading_buffer_size,
-            cache_video_metadata=loading_cache_video_metadata,
             use_cached_video_metadata=loading_cache_video_metadata,
         )
 
@@ -213,11 +217,180 @@ class SpotlightRecordingProcessor:
     def estimate_pose_3dkeypoints(self):
         pass
 
-    def estimate_pose_segmentation(self):
-        pass
+    def estimate_pose_segmentation(
+        self,
+        loading_batch_size: int = 128,
+        loading_n_workers: int = 8,
+        loading_buffer_size: int = 128,
+        loading_cache_video_metadata: bool = True,
+    ):
+        logger.info("Estimating body segmentation masks for behavior video")
 
-    def run_inverse_kinematics(self):
-        pass
+        # Set up model and pipeline
+        model_info = self.model_config["bodyseg"]
+        architecture_config_path = Path(model_info["architecture_config"]).expanduser()
+        logger.info(
+            f"Setting up body segmentation model from architecture config "
+            f"{architecture_config_path}"
+        )
+        model = bodyseg.BodySegmentationModel.create_architecture_from_config(
+            architecture_config_path
+        ).cuda()
+        ckpt_path = Path(model_info["checkpoint"]).expanduser()
+        logger.info(f"Loading body segmentation model weights from {ckpt_path}")
+        weights_config = bodyseg.config.ModelWeightsConfig(model_weights=ckpt_path)
+        model.load_weights_from_config(weights_config)
+        logger.info("Creating body segmentation inference pipeline")
+        pipeline = bodyseg.BodySegmentationPipeline(
+            model, device=self.device, use_float16=True
+        )
+
+        # Create video loader
+        logger.info("Creating video loader for body segmentation")
+        working_size = model_info["working_size"]
+        video_loader = SimpleVideoCollectionLoader(
+            [self.paths.aligned_behavior_video],
+            transform=transforms.Resize((working_size, working_size)),
+            batch_size=loading_batch_size,
+            num_workers=loading_n_workers,
+            buffer_size=loading_buffer_size,
+            use_cached_video_metadata=loading_cache_video_metadata,
+        )
+
+        # Create output file
+        logger.info(
+            f"Creating H5 file for bodyseg predictions: {self.paths.bodyseg_prediction}"
+        )
+        n_frames_total = len(video_loader.dataset)
+        with h5py.File(self.paths.bodyseg_prediction, "w") as f:
+            ds_confidence = f.create_dataset(
+                "confidence",
+                shape=(n_frames_total, working_size, working_size),
+                dtype="uint8",
+                compression="gzip",
+            )
+            ds_labels = f.create_dataset(
+                "labels",
+                shape=(n_frames_total, working_size, working_size),
+                dtype="uint8",
+                compression="gzip",
+            )
+            f.attrs["class_labels"] = pipeline.class_labels
+
+            from time import perf_counter, time
+
+            # Run inference
+            logger.info("Running inference for body segmentation")
+            for batch in tqdm(
+                video_loader, desc="Predicting bodyseg", unit="batch", disable=None
+            ):
+                # Forward pass
+                # No need to move data to GPU and back, Pipeline.inference handles that
+                frames = batch["frames"]
+                frame_ids = batch["frame_indices"]
+                assert (np.array(batch["video_indices"]) == 0).all()
+                pred_dict = pipeline.inference(frames)
+                logits = pred_dict["logits"]  # (B, n_classes, H, W)
+                confidence = pred_dict["confidence"]  # (B, H, W)
+                confidence = (confidence * 100).to(torch.uint8)
+                labels = torch.argmax(logits, dim=1).to(torch.uint8)  # (B, H, W)
+
+                # Save to H5 file
+                spc = perf_counter()
+                ds_labels[frame_ids, :, :] = labels.numpy()
+                ds_confidence[frame_ids, :, :] = confidence.numpy()
+                elapsed = perf_counter() - spc
+                logger.debug(
+                    f"Saved output for {len(frame_ids)} frames in {elapsed:.3f}s"
+                )
+
+    def run_inverse_kinematics(
+        self,
+        loading_batch_size: int = 128,
+        loading_n_workers: int = 8,
+        loading_buffer_size: int = 128,
+        loading_cache_video_metadata: bool = True,
+    ):
+        logger.info("Estimating 3D keypoint positions for behavior video")
+
+        # Set up model and pipeline
+        model_info = self.model_config["keypoints3d"]
+        architecture_config_path = Path(model_info["architecture_config"]).expanduser()
+        logger.info(
+            f"Setting up 3D keypoints model from architecture config "
+            f"{architecture_config_path}"
+        )
+        model = keypoints3d.Pose2p5DModel.create_architecture_from_config(
+            architecture_config_path
+        ).cuda()
+        ckpt_path = Path(model_info["checkpoint"]).expanduser()
+        logger.info(f"Loading 3D keypoints model weights from {ckpt_path}")
+        weights_config = keypoints3d.config.ModelWeightsConfig(model_weights=ckpt_path)
+        model.load_weights_from_config(weights_config)
+        logger.info("Creating 3D keypoints inference pipeline")
+        pipeline = keypoints3d.Pose2p5DPipeline(
+            model, device=self.device, use_float16=True
+        )
+
+        # Create video loader
+        logger.info("Creating video loader for body segmentation")
+        working_size = model_info["working_size"]
+        video_loader = SimpleVideoCollectionLoader(
+            [self.paths.aligned_behavior_video],
+            transform=transforms.Resize((working_size, working_size)),
+            batch_size=loading_batch_size,
+            num_workers=loading_n_workers,
+            buffer_size=loading_buffer_size,
+            use_cached_video_metadata=loading_cache_video_metadata,
+        )
+
+        # Create output file
+        logger.info(
+            f"Creating H5 file for 3D keypoint position predictions: "
+            f"{self.paths.keypoints3d_prediction}"
+        )
+        n_frames_total = len(video_loader.dataset)
+        with h5py.File(self.paths.keypoints3d_prediction, "w") as f:
+            ds_confidence = f.create_dataset(
+                "confidence",
+                shape=(n_frames_total, working_size, working_size),
+                dtype="uint8",
+                compression="gzip",
+            )
+            ds_labels = f.create_dataset(
+                "labels",
+                shape=(n_frames_total, working_size, working_size),
+                dtype="uint8",
+                compression="gzip",
+            )
+            f.attrs["class_labels"] = pipeline.class_labels
+
+            from time import perf_counter, time
+
+            # Run inference
+            logger.info("Running inference for body segmentation")
+            for batch in tqdm(
+                video_loader, desc="Predicting bodyseg", unit="batch", disable=None
+            ):
+                # Forward pass
+                # No need to move data to GPU and back, Pipeline.inference handles that
+                frames = batch["frames"]
+                frame_ids = batch["frame_indices"]
+                assert (np.array(batch["video_indices"]) == 0).all()
+                pred_dict = pipeline.inference(frames)
+                logits = pred_dict["logits"]  # (B, n_classes, H, W)
+                confidence = pred_dict["confidence"]  # (B, H, W)
+                confidence = (confidence * 100).to(torch.uint8)
+                labels = torch.argmax(logits, dim=1).to(torch.uint8)  # (B, H, W)
+
+                # Save to H5 file
+                spc = perf_counter()
+                ds_labels[frame_ids, :, :] = labels.numpy()
+                ds_confidence[frame_ids, :, :] = confidence.numpy()
+                elapsed = perf_counter() - spc
+                logger.debug(
+                    f"Saved output for {len(frame_ids)} frames in {elapsed:.3f}s"
+                )
 
 
 @dataclass
@@ -273,6 +446,19 @@ class SpotlightRecordingPaths:
             time, etc.) and stage positions at the time of each muscle frame
             interpolated from the raw stage tracking log
 
+    Paths to output files to be generated by the poseforge production pipeline:
+        - output_dir (dir):
+            Base directory for such output files
+        - usable_frames (CSV):
+            Metadata on which behavior frames are usable based on (1) whether the fly
+            is flipped and (2) whether any keypoint is too close to the arena edge.
+        - bodyseg_prediction (HDF5):
+            Body segmentation model predictions
+        - keypoints3d_prediction (HDF5):
+            3D keypoint model predictions
+        - invkin_output (HDF5):
+            Inverse kinematics solution and forward kinematics reconstructions
+
     Raises:
         FileNotFoundError: If required files are missing during validation
     """
@@ -315,7 +501,10 @@ class SpotlightRecordingPaths:
         self.output_dir = self.trial_basedir / "poseforge_output/"
         _outdir = self.output_dir
         _outdir.mkdir(parents=True, exist_ok=True)
-        self.usable_frames_metadata = _outdir / "usable_frames_metadata.csv"
+        self.usable_frames = _outdir / "usable_frames.csv"
+        self.bodyseg_prediction = _outdir / "bodyseg_prediction.h5"
+        self.keypoints3d_prediction = _outdir / "keypoints3d_prediction.h5"
+        self.invkin_output = _outdir / "inverse_kinematics_output.h5"
 
         # Check if required files exist
         required_behavior_path_attrs = [
@@ -368,4 +557,5 @@ if __name__ == "__main__":
     recording = SpotlightRecordingProcessor(
         spotlight_recording_dir, model_config_path, with_muscle=True
     )
-    recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
+    # recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
+    # recording.estimate_pose_segmentation(loading_n_workers=8)
