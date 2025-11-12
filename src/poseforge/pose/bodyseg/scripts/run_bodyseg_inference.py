@@ -4,7 +4,7 @@ from pathlib import Path
 from torchvision.transforms import Resize
 from torchsummary import summary
 from tqdm import tqdm
-from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
+from pvio.torch_tools import VideoCollectionDataset, VideoCollectionDataLoader
 
 import poseforge.pose.bodyseg.config as config
 from poseforge.pose.bodyseg import BodySegmentationModel, BodySegmentationPipeline

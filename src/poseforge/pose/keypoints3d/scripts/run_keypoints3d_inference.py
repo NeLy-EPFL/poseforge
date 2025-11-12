@@ -6,7 +6,7 @@ from torchsummary import summary
 from pathlib import Path
 from collections import defaultdict
 from tqdm import tqdm
-from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
+from pvio.torch_tools import SimpleVideoCollectionLoader, ImageDirVideo
 
 from poseforge.pose.keypoints3d import Pose2p5DModel, Pose2p5DPipeline
 from poseforge.pose.keypoints3d.config import ModelWeightsConfig
@@ -56,6 +56,7 @@ def run_keypoints3d_inference(
     """
     # Find all trials to process
     input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
+    input_trials = [trial for trial in input_trials if len(list(trial.iterdir())) > 0]
     print(f"Found {len(list(input_trials))} trials to process")
 
     # System setup
@@ -66,17 +67,14 @@ def run_keypoints3d_inference(
 
     # Create dataset and dataloader
     transform = Resize(inference_image_size)
-    dataset = VideoCollectionDataset(
-        input_trials, as_image_dirs=True, transform=transform
-    )
-    dataloader = VideoCollectionDataLoader(
-        dataset, batch_size=batch_size, num_workers=n_workers
+    dataloader = SimpleVideoCollectionLoader(
+        input_trials, transform=transform, batch_size=batch_size, num_workers=n_workers
     )
 
-    print(f"Found {len(dataset)} frames to process")
+    print(f"Found {len(dataloader.dataset)} frames to process")
     print(
         f"Using batch size {dataloader.batch_size} with {dataloader.num_workers} "
-        f"workers. This will generate {len(dataloader)} batches."
+        f"workers. This will generate ~{len(dataloader)} batches."
     )
 
     # Create model and learning pipeline
@@ -105,9 +103,9 @@ def run_keypoints3d_inference(
             camera_depth = pred_dict["pred_depth"][i, :]
             camera_xy_conf = pred_dict["conf_xy"][i, :]
             camera_depth_conf = pred_dict["conf_depth"][i, :]
-            video_path = batch["video_paths"][i]
-            frame_idx = batch["frame_indices"][i]
-            results[video_path][frame_idx] = (
+            video_id = batch["video_indices"][i]
+            frame_id = batch["frame_indices"][i]
+            results[video_id][frame_id] = (
                 world_xyz,
                 camera_xy,
                 camera_depth,
@@ -119,24 +117,25 @@ def run_keypoints3d_inference(
     # Save results
     if output_basedir is None:
         output_basedir = model_dir / "production"
-    for video_path, result_by_frame in results.items():
-        trial_name = video_path.parent.parent.name
+    for video_id, result_by_frame in results.items():
+        video_obj = dataloader.dataset.videos[video_id]
+        assert isinstance(video_obj, ImageDirVideo)
+        trial_name = video_obj.path.parent.parent.name
         output_dir = output_basedir / trial_name
         output_dir.mkdir(parents=True, exist_ok=True)
-        results_li = [result_by_frame[i] for i in range(len(result_by_frame))]
-        frame_ids = [
-            int(p.stem.split("_")[1]) for p in dataset.frame_sortings[video_path]
-        ]
+        frame_ids_sorted = sorted(result_by_frame.keys())
         with h5py.File(output_dir / "keypoints3d.h5", "w") as f:
             f.create_dataset(
                 "frame_ids",
-                data=frame_ids,
+                data=np.array(frame_ids_sorted, dtype=np.int32),
                 dtype=np.int32,
                 compression="gzip",
                 shuffle=True,
             )
 
-            world_xyz_stack = np.stack([x[0] for x in results_li])
+            world_xyz_stack = np.stack(
+                [result_by_frame[i][0] for i in frame_ids_sorted]
+            )
             world_xyz_ds = f.create_dataset(
                 "keypoints_world_xyz",
                 data=world_xyz_stack,
@@ -146,7 +145,9 @@ def run_keypoints3d_inference(
             world_xyz_ds.attrs["keypoints"] = keypoint_segments_canonical
             world_xyz_ds.attrs["units"] = "mm"
 
-            camera_xy_stack = np.stack([x[1] for x in results_li])
+            camera_xy_stack = np.stack(
+                [result_by_frame[i][1] for i in frame_ids_sorted]
+            )
             camera_xy_ds = f.create_dataset(
                 "keypoints_camera_xy",
                 data=camera_xy_stack,
@@ -157,7 +158,9 @@ def run_keypoints3d_inference(
             camera_xy_ds.attrs["units"] = "pixels"
             camera_xy_ds.attrs["image_size"] = list(inference_image_size)
 
-            camera_depth_stack = np.stack([x[2] for x in results_li])
+            camera_depth_stack = np.stack(
+                [result_by_frame[i][2] for i in frame_ids_sorted]
+            )
             camera_depth_ds = f.create_dataset(
                 "keypoints_camera_depth",
                 data=camera_depth_stack,
@@ -167,7 +170,9 @@ def run_keypoints3d_inference(
             camera_depth_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_depth_ds.attrs["units"] = "mm"
 
-            camera_xy_conf_stack = np.stack([x[3] for x in results_li])
+            camera_xy_conf_stack = np.stack(
+                [result_by_frame[i][3] for i in frame_ids_sorted]
+            )
             camera_xy_conf_ds = f.create_dataset(
                 "keypoints_camera_xy_conf",
                 data=camera_xy_conf_stack,
@@ -177,7 +182,9 @@ def run_keypoints3d_inference(
             camera_xy_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
             camera_xy_conf_ds.attrs["method"] = model.confidence_method
 
-            camera_depth_conf_stack = np.stack([x[4] for x in results_li])
+            camera_depth_conf_stack = np.stack(
+                [result_by_frame[i][4] for i in frame_ids_sorted]
+            )
             camera_depth_conf_ds = f.create_dataset(
                 "keypoints_camera_depth_conf",
                 data=camera_depth_conf_stack,
@@ -192,13 +199,13 @@ def run_keypoints3d_inference(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251013b")
-    epoch = 14  # chosen based on validation performance and visual inspection
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251102a")
+    epoch = 28  # chosen based on validation performance and visual inspection
     step = 9167  # last step of each epoch
 
     print(f"Running inference for epoch {epoch}")
     checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
-    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    output_basedir = model_dir / f"production/stride2_epoch{epoch}_step{step}/"
     run_keypoints3d_inference(
         input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
     )
