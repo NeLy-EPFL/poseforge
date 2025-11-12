@@ -302,6 +302,7 @@ class Pose2p5DPipeline:
             {
                 "params": list(
                     chain(
+                        self.model.dec_layer1.parameters(),
                         self.model.dec_layer2.parameters(),
                         self.model.dec_layer3.parameters(),
                         self.model.dec_layer4.parameters(),
