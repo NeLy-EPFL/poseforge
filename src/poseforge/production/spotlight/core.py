@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 import h5py
 import yaml
 import logging
+from time import perf_counter
 from tqdm import tqdm
 from pathlib import Path
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ import poseforge.spotlight.flip_detection as flip_detection
 import poseforge.pose.bodyseg as bodyseg
 import poseforge.pose.keypoints3d as keypoints3d
 from poseforge.production.config import load_config
+from poseforge.pose.camera import CameraToWorldMapper
+from poseforge.neuromechfly.constants import keypoint_segments_canonical
 
 
 class SpotlightRecordingProcessor:
@@ -277,8 +280,6 @@ class SpotlightRecordingProcessor:
             )
             f.attrs["class_labels"] = pipeline.class_labels
 
-            from time import perf_counter, time
-
             # Run inference
             logger.info("Running inference for body segmentation")
             for batch in tqdm(
@@ -296,16 +297,20 @@ class SpotlightRecordingProcessor:
                 labels = torch.argmax(logits, dim=1).to(torch.uint8)  # (B, H, W)
 
                 # Save to H5 file
-                spc = perf_counter()
+                start_time = perf_counter()
                 ds_labels[frame_ids, :, :] = labels.numpy()
                 ds_confidence[frame_ids, :, :] = confidence.numpy()
-                elapsed = perf_counter() - spc
+                elapsed = perf_counter() - start_time
                 logger.debug(
                     f"Saved output for {len(frame_ids)} frames in {elapsed:.3f}s"
                 )
 
-    def run_inverse_kinematics(
+    def predict_keypoints3d(
         self,
+        camera_pos: tuple[float, float, float] = (0.0, 0.0, -100.0),
+        camera_fov_deg: float = 5.0,
+        camera_rendering_size: tuple[int, int] = (464, 464),
+        camera_rotation_euler: tuple[float, float, float] = (0, np.pi, -np.pi / 2),
         loading_batch_size: int = 128,
         loading_n_workers: int = 8,
         loading_buffer_size: int = 128,
@@ -332,8 +337,13 @@ class SpotlightRecordingProcessor:
             model, device=self.device, use_float16=True
         )
 
+        # Set up camera mapper
+        cam_mapper = CameraToWorldMapper(
+            camera_pos, camera_fov_deg, camera_rendering_size, camera_rotation_euler
+        )
+
         # Create video loader
-        logger.info("Creating video loader for body segmentation")
+        logger.info("Creating video loader for 3D keypoints prediction")
         working_size = model_info["working_size"]
         video_loader = SimpleVideoCollectionLoader(
             [self.paths.aligned_behavior_video],
@@ -351,26 +361,32 @@ class SpotlightRecordingProcessor:
         )
         n_frames_total = len(video_loader.dataset)
         with h5py.File(self.paths.keypoints3d_prediction, "w") as f:
-            ds_confidence = f.create_dataset(
-                "confidence",
-                shape=(n_frames_total, working_size, working_size),
-                dtype="uint8",
-                compression="gzip",
+            keypoint_names = model_info["keypoint_names"]
+            assert keypoint_names == keypoint_segments_canonical, (
+                "Keypoint names in model config do not match expected canonical "
+                "keypoint names from "
+                "poseforge.neuromechfly.constants.keypoint_segments_canonical"
             )
-            ds_labels = f.create_dataset(
-                "labels",
-                shape=(n_frames_total, working_size, working_size),
-                dtype="uint8",
-                compression="gzip",
-            )
-            f.attrs["class_labels"] = pipeline.class_labels
+            f.attrs["keypoint_names"] = keypoint_names
+            n_keypoints = len(keypoint_names)
 
-            from time import perf_counter, time
+            def _create_dataset(name, shape):
+                return f.create_dataset(
+                    name, shape=shape, dtype="float32", compression="gzip"
+                )
+
+            ds_pred_xy = _create_dataset("pred_xy", (n_frames_total, n_keypoints, 2))
+            ds_pred_depth = _create_dataset("pred_depth", (n_frames_total, n_keypoints))
+            ds_conf_xy = _create_dataset("conf_xy", (n_frames_total, n_keypoints))
+            ds_conf_depth = _create_dataset("conf_depth", (n_frames_total, n_keypoints))
+            ds_pred_world_xyz = _create_dataset(
+                "pred_world_xyz", (n_frames_total, n_keypoints, 3)
+            )
 
             # Run inference
-            logger.info("Running inference for body segmentation")
+            logger.info("Running inference for 3D keypoints prediction")
             for batch in tqdm(
-                video_loader, desc="Predicting bodyseg", unit="batch", disable=None
+                video_loader, desc="Predicting keypoints3d", unit="batch", disable=None
             ):
                 # Forward pass
                 # No need to move data to GPU and back, Pipeline.inference handles that
@@ -378,16 +394,26 @@ class SpotlightRecordingProcessor:
                 frame_ids = batch["frame_indices"]
                 assert (np.array(batch["video_indices"]) == 0).all()
                 pred_dict = pipeline.inference(frames)
-                logits = pred_dict["logits"]  # (B, n_classes, H, W)
-                confidence = pred_dict["confidence"]  # (B, H, W)
-                confidence = (confidence * 100).to(torch.uint8)
-                labels = torch.argmax(logits, dim=1).to(torch.uint8)  # (B, H, W)
+                batch_pred_xy = pred_dict["pred_xy"].numpy()  # (B, n_keypoints, 2)
+                batch_pred_depth = pred_dict["pred_depth"].numpy()  # (B, n_keypoints)
+                batch_conf_xy = pred_dict["conf_xy"].numpy()  # (B, n_keypoints)
+                batch_conf_depth = pred_dict["conf_depth"].numpy()  # (B, n_keypoints)
+
+                # So far, xy are pixel coords and depths are distances from camera in mm
+                # By nature of alignment step in spotlight_tools.postprocessing, the
+                # camera is "fixed" relative to the fly. Using the camera intrinsics and
+                # extrinsics provided in the arguments, map predictions to xyz world
+                # coords in mm. Shape should be (B, n_keypoints, 3)
+                batch_pred_world_xyz = cam_mapper(batch_pred_xy, batch_pred_depth)
 
                 # Save to H5 file
-                spc = perf_counter()
-                ds_labels[frame_ids, :, :] = labels.numpy()
-                ds_confidence[frame_ids, :, :] = confidence.numpy()
-                elapsed = perf_counter() - spc
+                start_time = perf_counter()
+                ds_pred_xy[frame_ids, ...] = batch_pred_xy
+                ds_pred_depth[frame_ids, ...] = batch_pred_depth
+                ds_conf_xy[frame_ids, ...] = batch_conf_xy
+                ds_conf_depth[frame_ids, ...] = batch_conf_depth
+                ds_pred_world_xyz[frame_ids, ...] = batch_pred_world_xyz
+                elapsed = perf_counter() - start_time
                 logger.debug(
                     f"Saved output for {len(frame_ids)} frames in {elapsed:.3f}s"
                 )
@@ -559,3 +585,4 @@ if __name__ == "__main__":
     )
     # recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
     # recording.estimate_pose_segmentation(loading_n_workers=8)
+    recording.predict_keypoints3d(loading_n_workers=8)
