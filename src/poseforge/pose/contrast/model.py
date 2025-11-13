@@ -183,9 +183,12 @@ class InfoNCELoss(nn.Module):
         logits = torch.cat([positives, negatives], dim=1) / self.temperature
 
         # Final loss computation
-        probs = F.softmax(logits, dim=1)
-        # sum over positive pairs (not average - we are calculating set probabilities)
-        loss_per_sample = -torch.log(probs[:, : (n_variants - 1)].sum(dim=1))
+        # Note: the slightly confusing form below is equivalent to the following, but
+        # with better numerical stability because everything is computed in log space
+        # probs = F.softmax(logits, dim=1)
+        # loss_per_sample = -torch.log(probs[:, : (n_variants - 1)].sum(dim=1))
+        log_probs = F.log_softmax(logits, dim=1)
+        loss_per_sample = -torch.logsumexp(log_probs[:, : (n_variants - 1)], dim=1)
+        
         loss = loss_per_sample.mean()
-
         return loss
