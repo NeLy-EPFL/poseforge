@@ -183,8 +183,12 @@ class InfoNCELoss(nn.Module):
         # The positive pair is always in the left-most column, so the correct label for
         # each row is always 0.
         logits_matrix = torch.cat([positives, negatives], dim=1) / self.temperature
-        labels_index = torch.zeros(n_rows, dtype=torch.long).to(device)
 
-        # Compute cross-entropy loss against the labels
-        loss = F.cross_entropy(logits_matrix, labels_index, reduction="mean")
+        # Final loss computation
+        log_softmax = F.log_softmax(logits_matrix, dim=1)
+        # Loss per sample is summed over, not averaged, because we're calculating the
+        # set probability (see NCE-MIL)
+        loss_per_sample = -log_softmax[:, : n_variants - 1].sum(dim=1)
+        loss = loss_per_sample.mean()
+        
         return loss
