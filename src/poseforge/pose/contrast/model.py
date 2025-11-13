@@ -178,8 +178,8 @@ class InfoNCELoss(nn.Module):
         assert negatives.shape == (n_rows, n_rows - n_variants)
 
         # Concatenate positives and negatives to form logits tensor of shape
-        # (n_rows, n_rows-1). The positive pairs are always in the left-most columns, so
-        # the correct label for each row is always 0, ..., n_variants-1.
+        # (n_rows, n_rows-1). The positive pairs are always in the left-most (n_variants-1) columns.
+        # The loss is computed by summing probabilities over these columns, without using explicit labels.
         logits = torch.cat([positives, negatives], dim=1) / self.temperature
 
         # Final loss computation
