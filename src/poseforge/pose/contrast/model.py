@@ -177,18 +177,15 @@ class InfoNCELoss(nn.Module):
         assert positives.shape == (n_rows, n_variants - 1)
         assert negatives.shape == (n_rows, n_rows - n_variants)
 
-        # Concatenate positives and negatives to form logits matrix of shape
-        # (n_rows, n_rows-1), where logits_matrix[i, j] is the similarity/logit/log-odds
-        # of samples i and j being predicted to be from the same frame.
-        # The positive pair is always in the left-most column, so the correct label for
-        # each row is always 0.
-        logits_matrix = torch.cat([positives, negatives], dim=1) / self.temperature
+        # Concatenate positives and negatives to form logits tensor of shape
+        # (n_rows, n_rows-1). The positive pairs are always in the left-most columns, so
+        # the correct label for each row is always 0, ..., n_variants-1.
+        logits = torch.cat([positives, negatives], dim=1) / self.temperature
 
         # Final loss computation
-        log_softmax = F.log_softmax(logits_matrix, dim=1)
-        # Loss per sample is summed over, not averaged, because we're calculating the
-        # set probability (see NCE-MIL)
-        loss_per_sample = -log_softmax[:, : n_variants - 1].sum(dim=1)
+        probs = F.softmax(logits, dim=1)
+        # sum over positive pairs (not average - we are calculating set probabilities)
+        loss_per_sample = -torch.log(probs[:, : (n_variants - 1)].sum(dim=1))
         loss = loss_per_sample.mean()
-        
+
         return loss
