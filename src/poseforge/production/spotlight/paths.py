@@ -142,9 +142,11 @@ class SpotlightRecordingPaths:
         _outdir = self.output_dir
         _outdir.mkdir(parents=True, exist_ok=True)
         self.usable_frames = _outdir / "usable_frames.csv"
-        self.bodyseg_prediction = _outdir / "bodyseg_prediction.h5"
         self.keypoints3d_prediction = _outdir / "keypoints3d_prediction.h5"
         self.invkin_output = _outdir / "inverse_kinematics_output.h5"
+        self.keypoints3d_viz = _outdir / "keypoints3d_viz.mp4"
+        self.bodyseg_prediction = _outdir / "bodyseg_prediction.h5"
+        self.bodyseg_viz = _outdir / "bodyseg_viz.mp4"
 
     def _check_paths_exist(self, required_path_attrs: list[str]) -> bool:
         for path_attr in required_path_attrs:

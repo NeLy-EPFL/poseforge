@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 from pathlib import Path
 from loguru import logger
 
@@ -37,6 +38,12 @@ class SpotlightRecordingProcessor:
         self.keypoints3d_ik_visualized = False
         self.bodyseg_predicted = False
         self.bodyseg_visualized = False
+
+        # Load basic metadata
+        with open(self.paths.recorder_config, "r") as f:
+            self.recorder_config = yaml.safe_load(f)
+        with open(self.paths.experiment_param, "r") as f:
+            self.experiment_param = yaml.safe_load(f)
 
     @staticmethod
     def _set_up_device(device: torch.device | str = None):
@@ -140,13 +147,33 @@ class SpotlightRecordingProcessor:
         )
         self.bodyseg_predicted = True
 
-    def visualize_bodyseg_predictions(self):
+    def visualize_bodyseg_predictions(
+        self,
+        play_fps: float,
+        plotted_image_size: int = 256,
+        loading_batch_size: int = 128,
+        loading_n_workers: int = 8,
+        loading_buffer_size: int = 128,
+        loading_cache_video_metadata: bool = True,
+        rendering_n_workers: int = 12,
+    ):
         if not self.bodyseg_predicted:
             raise RuntimeError(
                 "Body segmentation maps must be predicted before visualizing. "
                 "Call .predict_body_segmentation() first."
             )
-        pass  # TODO
+        bodyseg.visualize_body_segmentation(
+            visualization_output_path=self.paths.bodyseg_viz,
+            bodyseg_output_path=self.paths.bodyseg_prediction,
+            aligned_behavior_video_path=self.paths.aligned_behavior_video,
+            play_fps=play_fps,
+            plotted_image_size=plotted_image_size,
+            loading_batch_size=loading_batch_size,
+            loading_n_workers=loading_n_workers,
+            loading_buffer_size=loading_buffer_size,
+            loading_cache_video_metadata=loading_cache_video_metadata,
+            rendering_n_workers=rendering_n_workers,
+        )
         self.bodyseg_visualized = True
 
 
@@ -163,9 +190,12 @@ if __name__ == "__main__":
     recording = SpotlightRecordingProcessor(
         spotlight_recording_dir, model_config_path, with_muscle=True
     )
-    recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
-    recording.predict_keypoints3d(loading_n_workers=8)
-    recording.solve_inverse_kinematics()
-    recording.visualize_keypoints3d_ik()
-    recording.predict_body_segmentation(loading_n_workers=8)
-    recording.visualize_bodyseg_predictions()
+    # recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
+    # recording.predict_keypoints3d(loading_n_workers=8)
+    # recording.solve_inverse_kinematics()
+    # recording.visualize_keypoints3d_ik()
+    # recording.predict_body_segmentation(loading_n_workers=8)
+    recording.bodyseg_predicted = True  # --- TEMPORARY ---
+    recording.visualize_bodyseg_predictions(
+        33,  # 0.1 * recording.experiment_param["behavior_fps"]
+    )
