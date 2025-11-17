@@ -1,0 +1,43 @@
+#!/bin/bash -l
+
+#SBATCH --job-name extract-atomic-batches
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 200GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/atomic_batch_extraction/process_all.log
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# Define paths
+project_root="/home/$USER/poseforge"
+extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
+all_trials_basedir="/home/sibwang/poseforge/bulk_data/style_transfer/production/translated_videos/"
+
+# Setup
+cd $project_root
+
+# Training
+echo "Extraction starting at $(date)"
+
+for trial_name in $(ls $all_trials_basedir); do
+    echo "Processing $trial_name at $(date)"
+    python -u $extraction_cli_path \
+        --atomic-batch-nframes 32 \
+        --atomic-batch-nvariants-max 4 \
+        --minimum-time-diff-frames 60 \
+        --original-image-size 464 464 \
+        --input-basedir $all_trials_basedir/$trial_name \
+        --nmf-sim-rendering-basedir bulk_data/nmf_rendering \
+        --output-dir /home/sibwang/poseforge/bulk_data/pose_estimation/atomic_batches/$trial_name
+done
+
+echo "Extraction ends at $(date)"
