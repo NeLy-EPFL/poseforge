@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251113a.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251117a.log
 
 echo "Hello from $(hostname)"
 
@@ -20,7 +20,7 @@ conda activate poseforge
 cd $HOME/poseforge
 echo "Training starting at $(date)"
 
-trial_name="trial_20251113a"
+trial_name="trial_20251117a"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
