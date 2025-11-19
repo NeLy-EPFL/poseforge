@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name keypoints3d-20251102a
+#SBATCH --job-name keypoints3d-20251118a
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/keypoints3d_training/output_20251102a.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/keypoints3d_training/output_20251118a.log
 
 echo "Hello from $(hostname)"
 
@@ -19,14 +19,14 @@ conda activate poseforge
 cd $HOME/poseforge
 
 training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
-training_trial_name="trial_20251102a"
+training_trial_name="trial_20251118a"
 
 echo "Training starting at $(date)"
 
 python -u $training_cli_path \
     --n-epochs 30 \
     --model-weights-config.feature-extractor-weights \
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch009_step003055.feature_extractor.pth" \
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251117a/checkpoints/checkpoint_epoch009_step003055.feature_extractor.pth" \
     --training-data-config.train-data-dirs \
         "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001" \
         "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial002" \
