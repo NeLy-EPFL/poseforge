@@ -21,9 +21,13 @@ from loguru import logger
 
 from pvio.torch_tools import SimpleVideoCollectionLoader
 from parallel_animate import Animator, IndexedFrameParams
+from parallel_animate.util import get_rendered_frame_ids
 
 import poseforge.pose.bodyseg as bodyseg
-from poseforge.util.plot import get_segmentation_color_palette
+from poseforge.util.plot import (
+    get_segmentation_color_palette,
+    configure_matplotlib_style,
+)
 
 
 def predict_body_segmentation(
@@ -122,7 +126,9 @@ def visualize_body_segmentation(
     visualization_output_path: Path,
     bodyseg_output_path: Path,
     aligned_behavior_video_path: Path,
-    play_fps: float,
+    recording_fps: Fraction | int,
+    play_speed: float,
+    rendered_fps: int,
     plotted_image_size: int = 256,
     loading_batch_size: int = 128,
     loading_n_workers: int = 4,
@@ -161,13 +167,22 @@ def visualize_body_segmentation(
         )
 
         # Define frame params iterator and make video
+        rendered_ids = get_rendered_frame_ids(
+            data_fps=recording_fps,
+            play_speed=play_speed,
+            rendered_fps=rendered_fps,
+            n_data_frames=len(video_loader.dataset),
+        )
+
         def iter_frames():
             for batch in video_loader:
                 frames = batch["frames"]  # (B, 1, H, W)
                 frame_ids = batch["frame_indices"]
                 for i in range(frames.shape[0]):
-                    frame = frames[i, 0, :, :].numpy()
                     frame_id = frame_ids[i]
+                    if frame_id not in rendered_ids:
+                        continue
+                    frame = frames[i, 0, :, :].numpy()
                     labels = ds_labels[frame_id, :, :]
                     confidence = ds_confidence[frame_id, :, :]
                     yield IndexedFrameParams(
@@ -177,8 +192,8 @@ def visualize_body_segmentation(
         animator.make_video(
             visualization_output_path,
             iter_frames(),
-            n_frames=len(video_loader),
-            fps=play_fps,
+            n_frames=int(len(rendered_ids)),
+            fps=Fraction(rendered_fps).limit_denominator(100),
             num_workers=rendering_n_workers,
         )
 

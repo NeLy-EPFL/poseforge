@@ -149,7 +149,8 @@ class SpotlightRecordingProcessor:
 
     def visualize_bodyseg_predictions(
         self,
-        play_fps: float,
+        play_fps: float = 0.1,
+        rendered_fps: float = 30.0,
         plotted_image_size: int = 256,
         loading_batch_size: int = 128,
         loading_n_workers: int = 8,
@@ -166,7 +167,9 @@ class SpotlightRecordingProcessor:
             visualization_output_path=self.paths.bodyseg_viz,
             bodyseg_output_path=self.paths.bodyseg_prediction,
             aligned_behavior_video_path=self.paths.aligned_behavior_video,
-            play_fps=play_fps,
+            recording_fps=self.experiment_param["behavior_fps"],
+            play_speed=play_fps,
+            rendered_fps=rendered_fps,
             plotted_image_size=plotted_image_size,
             loading_batch_size=loading_batch_size,
             loading_n_workers=loading_n_workers,
@@ -196,6 +199,4 @@ if __name__ == "__main__":
     # recording.visualize_keypoints3d_ik()
     # recording.predict_body_segmentation(loading_n_workers=8)
     recording.bodyseg_predicted = True  # --- TEMPORARY ---
-    recording.visualize_bodyseg_predictions(
-        33,  # 0.1 * recording.experiment_param["behavior_fps"]
-    )
+    recording.visualize_bodyseg_predictions()
