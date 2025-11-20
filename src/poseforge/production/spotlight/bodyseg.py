@@ -24,10 +24,7 @@ from parallel_animate import Animator, IndexedFrameParams
 from parallel_animate.util import get_rendered_frame_ids
 
 import poseforge.pose.bodyseg as bodyseg
-from poseforge.util.plot import (
-    get_segmentation_color_palette,
-    configure_matplotlib_style,
-)
+from poseforge.util.plot import get_segmentation_color_palette
 
 
 def predict_body_segmentation(

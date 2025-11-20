@@ -118,14 +118,46 @@ class SpotlightRecordingProcessor:
         pass  # TODO
         self.inverse_kinematics_solved = True
 
-    def visualize_keypoints3d_ik(self) -> None:
-        if not self.inverse_kinematics_solved:
+    def visualize_keypoints3d(
+        self,
+        play_speed: float = 0.1,
+        rendered_fps: float = 30.0,
+        plotted_image_size: int = 256,
+        loading_batch_size: int = 128,
+        loading_n_workers: int = 8,
+        loading_buffer_size: int = 128,
+        loading_cache_video_metadata: bool = True,
+        rendering_n_workers: int = 12,
+    ) -> None:
+        if not self.keypoints3d_predicted:
             raise RuntimeError(
-                "Inverse kinematics must be solved before visualizing. "
-                "Call .solve_inverse_kinematics() first (which in turn requires "
-                ".predict_keypoints3d() to be called first)."
+                "Keypoints3D must be predicted before visualizing. "
+                "Call .predict_keypoints3d() first."
             )
-        pass  # TODO
+        if not self.inverse_kinematics_solved:
+            logger.warning(
+                "Inverse kinematics has not been solved yet. Visualizing raw "
+                "Keypoints3D predictions only. Call .solve_inverse_kinematics() first."
+            )
+
+        keypoints3d.visualize_keypoints3d(
+            visualization_output_path=self.paths.keypoints3d_viz,
+            keypoints3d_output_path=self.paths.keypoints3d_prediction,
+            invkin_output_path=(
+                self.paths.invkin_output if self.inverse_kinematics_solved else None
+            ),
+            aligned_behavior_video_path=self.paths.aligned_behavior_video,
+            recording_fps=self.experiment_param["behavior_fps"],
+            play_speed=play_speed,
+            rendered_fps=rendered_fps,
+            plotted_image_size=plotted_image_size,
+            loading_batch_size=loading_batch_size,
+            loading_n_workers=loading_n_workers,
+            loading_buffer_size=loading_buffer_size,
+            loading_cache_video_metadata=loading_cache_video_metadata,
+            rendering_n_workers=rendering_n_workers,
+        )
+
         self.keypoints3d_ik_visualized = True
 
     def predict_body_segmentation(
@@ -149,7 +181,7 @@ class SpotlightRecordingProcessor:
 
     def visualize_bodyseg_predictions(
         self,
-        play_fps: float = 0.1,
+        play_speed: float = 0.1,
         rendered_fps: float = 30.0,
         plotted_image_size: int = 256,
         loading_batch_size: int = 128,
@@ -168,7 +200,7 @@ class SpotlightRecordingProcessor:
             bodyseg_output_path=self.paths.bodyseg_prediction,
             aligned_behavior_video_path=self.paths.aligned_behavior_video,
             recording_fps=self.experiment_param["behavior_fps"],
-            play_speed=play_fps,
+            play_speed=play_speed,
             rendered_fps=rendered_fps,
             plotted_image_size=plotted_image_size,
             loading_batch_size=loading_batch_size,
@@ -196,7 +228,7 @@ if __name__ == "__main__":
     # recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
     # recording.predict_keypoints3d(loading_n_workers=8)
     # recording.solve_inverse_kinematics()
-    # recording.visualize_keypoints3d_ik()
+    recording.keypoints3d_predicted = True  # TODO: remove
+    recording.visualize_keypoints3d()
     # recording.predict_body_segmentation(loading_n_workers=8)
-    recording.bodyseg_predicted = True  # --- TEMPORARY ---
-    recording.visualize_bodyseg_predictions()
+    # recording.visualize_bodyseg_predictions()
