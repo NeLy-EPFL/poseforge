@@ -4,12 +4,12 @@
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
-#SBATCH --mem 100GB
+#SBATCH --mem 92GB
 #SBATCH --time 48:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/bodyseg_training/output.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/bodyseg_training/output_20251118a.log
 
 echo "Hello from $(hostname)"
 
@@ -19,7 +19,7 @@ conda activate poseforge
 cd $HOME/poseforge
 
 training_cli_path="src/poseforge/pose/bodyseg/scripts/run_bodyseg_training.py"
-training_trial_name="trial_20251012b"
+training_trial_name="trial_20251118a"
 
 echo "Training starting at $(date)"
 
@@ -30,7 +30,7 @@ python -u $training_cli_path \
     --model-architecture-config.final-upsampler-n-hidden-channels 32 \
     --model-architecture-config.confidence-method entropy \
     --model-weights-config.feature-extractor-weights \
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/checkpoints/checkpoint_epoch009_step003055.feature_extractor.pth" \
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251117a/checkpoints/checkpoint_epoch009_step003055.feature_extractor.pth" \
     --loss-config.weight-dice 1.0 \
     --loss-config.weight-ce 1.0 \
     --training-data-config.train-data-dirs \
@@ -67,7 +67,7 @@ python -u $training_cli_path \
     --optimizer-config.learning-rate-segmentation-head 3e-4 \
     --optimizer-config.weight-decay 1e-5 \
     --training-artifacts-config.output-basedir \
-        "bulk_data/pose_estimation/bodyseg/trial_20251012b/" \
+        "bulk_data/pose_estimation/bodyseg/trial_20251118a/" \
     --training-artifacts-config.logging-interval 10 \
     --training-artifacts-config.checkpoint-interval 1000 \
     --training-artifacts-config.validation-interval 1000 \

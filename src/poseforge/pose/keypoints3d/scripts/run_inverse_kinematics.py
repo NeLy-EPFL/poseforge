@@ -828,15 +828,15 @@ if __name__ == "__main__":
     #     --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/
 
     # * Processing from this script directly
-    epoch = 14  # these must be consistent with run_keypoints3d_inference.py
+    epoch = 19  # these must be consistent with run_keypoints3d_inference.py
     step = 9167  # same as above
     production_model_basedir = Path(
-        f"bulk_data/pose_estimation/keypoints3d/trial_20251013b/production/epoch{epoch}_step{step}/"
+        f"bulk_data/pose_estimation/keypoints3d/trial_20251118a/production/epoch{epoch}_step{step}/"
     )
     input_images_basedir = Path(
         "bulk_data/behavior_images/spotlight_aligned_and_cropped/"
     )
-    input_dirs = sorted(list(production_model_basedir.glob("20250613-fly1b-*/")))
+    input_dirs = sorted(list(production_model_basedir.glob("20250613-fly1b-002/")))
     print(f"Found {len(input_dirs)} directories to process")
 
     # Process directories in parallel. Note that each task is parallelized internally
