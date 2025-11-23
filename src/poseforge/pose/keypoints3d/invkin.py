@@ -7,164 +7,11 @@ from seqikpy.alignment import AlignPose
 from seqikpy.kinematic_chain import KinematicChainSeq
 from seqikpy.leg_inverse_kinematics import LegInvKinSeq
 
-from poseforge.neuromechfly.constants import (
-    legs,
-    leg_keypoints_nmf,
-    leg_keypoints_canonical,
-    dof_name_lookup_canonical_to_nmf,
-    keypoint_name_lookup_nmf_to_canonical,
-)
+import poseforge.neuromechfly.constants as nmf_constants
 from poseforge.pose.keypoints3d.visualizer import visualize_leg_segment_lengths
 
 
-# Source of hardcoded values below are taken from NeuroMechFly v2 (by Alfie)
-# https://github.com/NeLy-EPFL/nmf2-paper/blob/961a64eb579d0dbb992de145771e33a698259e4a/revision_stepping/adapt_ik_to_locomotion_flytracker.ipynb
-# fmt: off
-_nmf_initial_angles = {
-    "RF": {
-        # Base ThC yaw pitch CTr pitch
-        "stage_1": np.array([0.0, 0.45, -0.07, -2.14]),
-        # Base ThC yaw pitch roll CTr pitch CTr roll
-        "stage_2": np.array([0.0, 0.45, -0.07, -0.32, -2.14, 1.4]),
-        # Base ThC yaw pitch roll CTr pitch CTr roll FTi pitch
-        "stage_3": np.array([0.0, 0.45, -0.07, -0.32, -2.14, -1.25, 1.48, 0.0]),
-        # Base ThC yaw pitch roll CTr pitch CTr roll FTi pitch TiTa pitch
-        "stage_4": np.array([0.0, 0.45, -0.07, -0.32, -2.14, -1.25, 1.48, 0.0, 0.0]),
-    },
-    "LF": {
-        "stage_1": np.array([0.0, -0.45, -0.07, -2.14]),
-        "stage_2": np.array([0.0, -0.45, -0.07, 0.32, -2.14, 1.4]),
-        "stage_3": np.array([0.0, -0.45, -0.07, 0.32, -2.14, 1.25, 1.48, 0.0]),
-        "stage_4": np.array([0.0, -0.45, -0.07, 0.32, -2.14, 1.25, 1.48, 0.0, 0.0]),
-    },
-    "RM": {
-        "stage_1": np.array([0.0, 0.45, 0.37, -2.14]),
-        "stage_2": np.array([0.0, 0.45, 0.37, -0.32, -2.14, 1.4]),
-        "stage_3": np.array([0.0, 0.45, 0.37, -0.32, -2.14, -1.25, 1.48, 0.0]),
-        "stage_4": np.array([0.0, 0.45, 0.37, -0.32, -2.14, -1.25, 1.48, 0.0, 0.0]),
-    },
-    "LM": {
-        "stage_1": np.array([0.0, -0.45, 0.37, -2.14]),
-        "stage_2": np.array([0.0, -0.45, 0.37, 0.32, -2.14, 1.4]),
-        "stage_3": np.array([0.0, -0.45, 0.37, 0.32, -2.14, 1.25, 1.48, 0.0]),
-        "stage_4": np.array([0.0, -0.45, 0.37, 0.32, -2.14, 1.25, 1.48, 0.0, 0.0]),
-    },
-    "RH": {
-        "stage_1": np.array([0.0, 0.45, 0.07, -2.14]),
-        "stage_2": np.array([0.0, 0.45, 0.07, -0.32, -2.14, 1.4]),
-        "stage_3": np.array([0.0, 0.45, 0.07, -0.32, -2.14, -1.25, 1.48, 0.0]),
-        "stage_4": np.array([0.0, 0.45, 0.07, -0.32, -2.14, -1.25, 1.48, 0.0, 0.0]),
-    },
-    "LH": {
-        "stage_1": np.array([0.0, -0.45, 0.07, -2.14]),
-        "stage_2": np.array([0.0, -0.45, 0.07, 0.32, -2.14, 1.4]),
-        "stage_3": np.array([0.0, -0.45, 0.07, 0.32, -2.14, 1.25, 1.48, 0.0]),
-        "stage_4": np.array([0.0, -0.45, 0.07, 0.32, -2.14, 1.25, 1.48, 0.0, 0.0]),
-    },
-    "head": np.array([0, -0.17, 0]),  #  none, roll, pitch, yaw
-}
-
-# Define a template to create the kinematic chain
-# The length of chain comes from the size calculated from the template
-
-_nmf_template = {
-    "RF_Coxa": np.array([0.35, -0.27, 0.400]),
-    "RF_Femur": np.array([0.35, -0.27, -0.025]),
-    "RF_Tibia": np.array([0.35, -0.27, -0.731]),
-    "RF_Tarsus": np.array([0.35, -0.27, -1.249]),
-    "RF_Claw": np.array([0.35, -0.27, -1.912]),
-    "LF_Coxa": np.array([0.35, 0.27, 0.400]),
-    "LF_Femur": np.array([0.35, 0.27, -0.025]),
-    "LF_Tibia": np.array([0.35, 0.27, -0.731]),
-    "LF_Tarsus": np.array([0.35, 0.27, -1.249]),
-    "LF_Claw": np.array([0.35, 0.27, -1.912]),
-    "RM_Coxa": np.array([0, -0.125, 0]),
-    "RM_Femur": np.array([0, -0.125, -0.182]),
-    "RM_Tibia": np.array([0, -0.125, -0.965]),
-    "RM_Tarsus": np.array([0, -0.125, -1.633]),
-    "RM_Claw": np.array([0, -0.125, -2.328]),
-    "LM_Coxa": np.array([0, 0.125, 0]),
-    "LM_Femur": np.array([0, 0.125, -0.182]),
-    "LM_Tibia": np.array([0, 0.125, -0.965]),
-    "LM_Tarsus": np.array([0, 0.125, -1.633]),
-    "LM_Claw": np.array([0, 0.125, -2.328]),
-    "RH_Coxa": np.array([-0.215, -0.087, -0.073]),
-    "RH_Femur": np.array([-0.215, -0.087, -0.272]),
-    "RH_Tibia": np.array([-0.215, -0.087, -1.108]),
-    "RH_Tarsus": np.array([-0.215, -0.087, -1.793]),
-    "RH_Claw": np.array([-0.215, -0.087, -2.588]),
-    "LH_Coxa": np.array([-0.215, 0.087, -0.073]),
-    "LH_Femur": np.array([-0.215, 0.087, -0.272]),
-    "LH_Tibia": np.array([-0.215, 0.087, -1.108]),
-    "LH_Tarsus": np.array([-0.215, 0.087, -1.793]),
-    "LH_Claw": np.array([-0.215, 0.087, -2.588]),
-}
-
-# Determine the bounds for each joint DOF
-_nmf_bounds = {
-    # Front legs
-    "RF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
-    "RF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RF_ThC_roll": (np.deg2rad(-135), np.deg2rad(10)),  # ? 1
-    "RF_CTr_pitch": (np.deg2rad(-270), np.deg2rad(10)),  # ? 2
-    "RF_CTr_roll": (np.deg2rad(-180), np.deg2rad(90)),  # ? 3
-    "RF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
-    "LF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LF_ThC_roll": (np.deg2rad(-10), np.deg2rad(90)),  # ? 1
-    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # ? 2
-    "LF_CTr_roll": (np.deg2rad(-90), np.deg2rad(180)),  # ? 3
-    "LF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    
-    # Mid legs
-    "RM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),  # ? 4
-    "RM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RM_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # ? 5
-    "RM_CTr_pitch": (np.deg2rad(-270), np.deg2rad(10)),  # ? 6
-    "RM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "RM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),  # ? 4
-    "LM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LM_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),  # ? 5
-    "LM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # ? 6
-    "LM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "LM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    
-    # Hind legs
-    "RH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),  # ? 7
-    "RH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RH_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # ? 8
-    "RH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "RH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "RH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),  # ? 7
-    "LH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LH_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),  # ? 8
-    "LH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "LH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-}
-
-_nmf_size = {
-    "RF_Coxa": 0.40, "RM_Coxa": 0.182, "RH_Coxa": 0.199,
-    "LF_Coxa": 0.40, "LM_Coxa": 0.182, "LH_Coxa": 0.199,
-    "RF_Femur": 0.69, "RM_Femur": 0.783, "RH_Femur": 0.836,
-    "LF_Femur": 0.69, "LM_Femur": 0.783, "LH_Femur": 0.836,
-    "RF_Tibia": 0.54, "RM_Tibia": 0.668, "RH_Tibia": 0.685,
-    "LF_Tibia": 0.54, "LM_Tibia": 0.668, "LH_Tibia": 0.685,
-    "RF_Tarsus": 0.63, "RM_Tarsus": 0.695, "RH_Tarsus": 0.795,
-    "LF_Tarsus": 0.63, "LM_Tarsus": 0.695, "LH_Tarsus": 0.795,
-    "RF": 2.26, "RM": 2.328, "RH": 2.515,
-    "LF": 2.26, "LM": 2.328, "LH": 2.515,
-    "Antenna": 0.2745906043549196, "Antenna_mid_thorax": 0.9355746896961248,
-}
-# fmt: on
+_logger = logging.getLogger(__name__)
 
 
 def _world_xyz_to_seqikpy_format(
@@ -180,14 +27,14 @@ def _world_xyz_to_seqikpy_format(
     assert n_keypoints == len(keypoint_names_canonical)
 
     pose_data_dict = {}
-    for leg in legs:
+    for leg in nmf_constants.legs:
         data_block = np.full(
-            (n_frames, len(leg_keypoints_nmf), 3), np.nan, dtype=np.float32
+            (n_frames, len(nmf_constants.leg_keypoints_nmf), 3),
+            np.nan,
+            dtype=np.float32,
         )
-        for keypoint_idx, keypoint_name in enumerate(leg_keypoints_nmf):
-            poseforge_key = (
-                f"{leg}{keypoint_name_lookup_nmf_to_canonical[keypoint_name]}"
-            )
+        for keypoint_idx, keypoint_name in enumerate(nmf_constants.leg_keypoints_nmf):
+            poseforge_key = f"{leg}{nmf_constants.keypoint_name_lookup_nmf_to_canonical[keypoint_name]}"
             idx = keypoint_names_canonical.index(poseforge_key)
             data_block[:, keypoint_idx, :] = world_xyz[:n_frames, idx, :]
         assert not np.isnan(data_block).any()
@@ -253,8 +100,6 @@ def calculate_average_leg_segment_lengths(
 def scale_template_by_leg_segment_sizes(
     template_positions_dict, size_dict
 ) -> dict[str, np.ndarray]:
-    logger = logging.getLogger(__name__)
-
     segments = ["Coxa", "Femur", "Tibia", "Tarsus", "Claw"]
     scaled_template = {}
     for side in "LR":
@@ -274,7 +119,7 @@ def scale_template_by_leg_segment_sizes(
                 scaled_vector = direction_vector * (size_new / size_original)
                 pos_new = scaled_template[prev_keypoint_name] + scaled_vector
                 scaled_template[keypoint_name] = pos_new
-                logger.info(
+                _logger.info(
                     f"Scaled {keypoint_name}: {size_original:.3f} -> {size_new:.3f}. "
                     f"This is based on prev keypoint {prev_keypoint_name}, "
                     f"curr keypoint {keypoint_name}, "
@@ -299,11 +144,11 @@ def run_seqikpy(
     sizes_from_data = calculate_average_leg_segment_lengths(
         leg_segment_lengths_over_time, make_symmetric=True
     )
-    for k, v in _nmf_size.items():
+    for k, v in nmf_constants.nmf_size.items():
         if k not in sizes_from_data:
             sizes_from_data[k] = v  # add antennae sizes
     template_scaled_to_data = scale_template_by_leg_segment_sizes(
-        _nmf_template, sizes_from_data
+        nmf_constants.nmf_template, sizes_from_data
     )
     if debug_plots_dir is not None:
         debug_plots_dir.mkdir(parents=True, exist_ok=True)
@@ -317,7 +162,7 @@ def run_seqikpy(
     #      compares to the size in the template
     pose_aligner = AlignPose(
         pose_data_dict,
-        legs_list=legs,
+        legs_list=nmf_constants.legs,
         include_claw=True,
         body_template=template_scaled_to_data,
         body_size=sizes_from_data,
@@ -327,12 +172,14 @@ def run_seqikpy(
     # Run inverse kinematics and forward kinematics.
     # This is the slowest part and it's parallelized at leg level (so use n_workers=6).
     seq_kinematic_chain = KinematicChainSeq(
-        bounds_dof=_nmf_bounds, legs_list=legs, body_size=sizes_from_data
+        bounds_dof=nmf_constants.nmf_bounds,
+        legs_list=nmf_constants.legs,
+        body_size=sizes_from_data,
     )
     leg_seq_ik = LegInvKinSeq(
         aligned_pos=aligned_pose,
         kinematic_chain_class=seq_kinematic_chain,
-        initial_angles=_nmf_initial_angles,
+        initial_angles=nmf_constants.nmf_initial_angles,
     )
     joint_angles, forward_kinematics = leg_seq_ik.run_ik_and_fk(n_workers=n_workers)
 
@@ -349,10 +196,10 @@ def save_seqikpy_output(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Rearrange joint angles into (frame, leg, dof) format
-    dof_names_per_leg = list(dof_name_lookup_canonical_to_nmf.keys())
+    dof_names_per_leg = list(nmf_constants.dof_name_lookup_canonical_to_nmf.keys())
     n_frames_joint_angles = joint_angles["Angle_LF_ThC_yaw"].shape[0]
     joint_angles_arr = np.full((n_frames_joint_angles, 6, 7), np.nan, dtype=np.float32)
-    for leg_idx, leg in enumerate(legs):
+    for leg_idx, leg in enumerate(nmf_constants.legs):
         for dof_idx, dof_name in enumerate(dof_names_per_leg):
             seqikpy_key = f"Angle_{leg}_{dof_name}"
             joint_angles_arr[:, leg_idx, dof_idx] = joint_angles[seqikpy_key]
@@ -368,15 +215,17 @@ def save_seqikpy_output(
     #                   6 is at FTi
     #                   7 is at TiTa
     #                   8 is at Claw
-    n_physical_keypoints = len(leg_keypoints_nmf)
+    n_physical_keypoints = len(nmf_constants.leg_keypoints_nmf)
     n_frames_fwdkin, n_virtual_keypoints, _ = forward_kinematics["LF_leg"].shape
     assert n_frames_fwdkin == n_frames_joint_angles
     assert n_physical_keypoints == 5
     assert n_virtual_keypoints == 9
     fwdkin_world_xyz = np.full(
-        (n_frames_fwdkin, len(legs), n_virtual_keypoints, 3), np.nan, dtype=np.float32
+        (n_frames_fwdkin, len(nmf_constants.legs), n_virtual_keypoints, 3),
+        np.nan,
+        dtype=np.float32,
     )
-    for leg_idx, leg in enumerate(legs):
+    for leg_idx, leg in enumerate(nmf_constants.legs):
         fwdkin_world_xyz[:, leg_idx, :, :] = forward_kinematics[f"{leg}_leg"]
     assert not np.isnan(fwdkin_world_xyz).any()
     # Drop virtual keypoints that share the same physical location
@@ -387,7 +236,7 @@ def save_seqikpy_output(
         joint_angles_ds = f.create_dataset(
             "joint_angles", data=joint_angles_arr, dtype=np.float32, compression="gzip"
         )
-        joint_angles_ds.attrs["legs"] = legs
+        joint_angles_ds.attrs["legs"] = nmf_constants.legs
         joint_angles_ds.attrs["dof_names_per_leg"] = dof_names_per_leg
 
         fwdkin_ds = f.create_dataset(
@@ -396,8 +245,10 @@ def save_seqikpy_output(
             dtype=np.float32,
             compression="gzip",
         )
-        fwdkin_ds.attrs["legs"] = legs
-        fwdkin_ds.attrs["keypoint_names_per_leg"] = leg_keypoints_canonical
+        fwdkin_ds.attrs["legs"] = nmf_constants.legs
+        fwdkin_ds.attrs["keypoint_names_per_leg"] = (
+            nmf_constants.leg_keypoints_canonical
+        )
 
         if frame_ids is not None:
             f.create_dataset(
