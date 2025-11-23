@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
-import logging
+from loguru import logger
 import tempfile
 from pathlib import Path
 from tqdm import tqdm
@@ -14,17 +14,11 @@ from PIL import Image
 from joblib import Parallel, delayed
 from pvio.io import write_frames_to_video
 
-from poseforge.pose.keypoints3d.invkin import run_seqikpy, save_seqikpy_output
-from poseforge.pose.keypoints3d.visualizer import (
-    get_keypoint_color,
-    get_skeleton_connections,
-)
-from poseforge.neuromechfly.constants import kchain_plotting_colors
+import poseforge.pose.keypoints3d.invkin as invkin
+import poseforge.pose.keypoints3d.visualizer as visualizer
+import poseforge.neuromechfly.constants as nmf_constants
 from poseforge.util import configure_matplotlib_style
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Configure matplotlib style
 configure_matplotlib_style()
@@ -33,127 +27,6 @@ configure_matplotlib_style()
 CAMERA_PAN_PERIOD = 300.0  # number of frames during a full camera pan cycle
 ELEVATION_ANGLE = 30.0
 AZIMUTH_AMPLITUDE = 30.0
-
-
-def _convert_fwdkin_to_canonical_format(
-    forward_kinematics_world_xyz: np.ndarray,
-    legs: list[str],
-    leg_keypoints_canonical: list[str],
-) -> tuple[np.ndarray, list[str]]:
-    """Convert forward kinematics data to canonical format matching original keypoints.
-
-    Args:
-        forward_kinematics_world_xyz: Shape (n_frames, 6, 5, 3) - 6 legs, 5 keypoints per leg
-        legs: List of leg names ['LF', 'LM', 'LH', 'RF', 'RM', 'RH']
-        leg_keypoints_canonical: List of keypoint names per leg ['ThC', 'CTr', 'FTi', 'TiTa', 'Claw']
-
-    Returns:
-        keypoints_pos: Shape (n_frames, n_keypoints, 3) where n_keypoints = 6*5 + 2 (antennae)
-        keypoints_order: List of keypoint names in canonical format
-    """
-    n_frames, n_legs, n_keypoints_per_leg, _ = forward_kinematics_world_xyz.shape
-
-    # Create keypoint names in canonical format for legs
-    keypoints_order = []
-    for leg in legs:
-        for keypoint in leg_keypoints_canonical:
-            keypoints_order.append(f"{leg}{keypoint}")
-
-    # Add antenna keypoints (these won't be present in forward kinematics but needed for consistency)
-    keypoints_order.extend(["LPedicel", "RPedicel"])
-
-    # Reshape forward kinematics to (n_frames, n_keypoints, 3)
-    n_leg_keypoints = n_legs * n_keypoints_per_leg
-    keypoints_pos = np.full(
-        (n_frames, len(keypoints_order), 3), np.nan, dtype=np.float32
-    )
-
-    # Fill in leg keypoints
-    leg_keypoints_flat = forward_kinematics_world_xyz.reshape(
-        n_frames, n_leg_keypoints, 3
-    )
-    keypoints_pos[:, :n_leg_keypoints, :] = leg_keypoints_flat
-
-    return keypoints_pos, keypoints_order
-
-
-def _align_constrained_poses_to_raw_poses(
-    keypoints_pos_raw: np.ndarray,
-    keypoints_pos_constrained: np.ndarray,
-    keypoints_order: list[str],
-    legs: list[str],
-    leg_keypoints_canonical: list[str],
-) -> np.ndarray:
-    """Align constrained poses to raw poses by shifting each leg's kinematic chain.
-
-    The inverse kinematics process aligns each leg to a template position. For visualization,
-    we want to shift each leg back so that the first keypoint (ThC/Coxa) has the same 3D
-    position as in the raw poses.
-
-    Args:
-        keypoints_pos_raw: Raw keypoint positions (n_frames, n_keypoints, 3)
-        keypoints_pos_constrained: Constrained keypoint positions (n_frames, n_keypoints, 3)
-        keypoints_order: List of keypoint names
-        legs: List of leg names ['LF', 'LM', 'LH', 'RF', 'RM', 'RH']
-        leg_keypoints_canonical: List of keypoint names per leg ['ThC', 'CTr', 'FTi', 'TiTa', 'Claw']
-
-    Returns:
-        keypoints_pos_constrained_aligned: Aligned constrained poses
-    """
-    keypoints_pos_constrained_aligned = keypoints_pos_constrained.copy()
-    n_frames = keypoints_pos_raw.shape[0]
-
-    # For each leg, align the constrained pose to the raw pose
-    for leg in legs:
-        # Get the first keypoint (ThC/Coxa) for this leg
-        first_keypoint_name = f"{leg}{leg_keypoints_canonical[0]}"  # e.g., "LFThC"
-
-        try:
-            first_keypoint_idx = keypoints_order.index(first_keypoint_name)
-        except ValueError:
-            logger.warning(
-                f"Keypoint {first_keypoint_name} not found in keypoints_order"
-            )
-            continue
-
-        # Get all keypoint indices for this leg
-        leg_keypoint_indices = []
-        for keypoint in leg_keypoints_canonical:
-            keypoint_name = f"{leg}{keypoint}"
-            try:
-                idx = keypoints_order.index(keypoint_name)
-                leg_keypoint_indices.append(idx)
-            except ValueError:
-                logger.warning(f"Keypoint {keypoint_name} not found in keypoints_order")
-                continue
-
-        if not leg_keypoint_indices:
-            continue
-
-        # For each frame, compute the translation needed to align the first keypoint
-        for frame_idx in range(n_frames):
-            # Get the positions of the first keypoint in raw and constrained poses
-            raw_first_pos = keypoints_pos_raw[frame_idx, first_keypoint_idx]
-            constrained_first_pos = keypoints_pos_constrained[
-                frame_idx, first_keypoint_idx
-            ]
-
-            # Skip if either position has NaN values
-            if np.isnan(raw_first_pos).any() or np.isnan(constrained_first_pos).any():
-                continue
-
-            # Compute translation vector
-            translation = raw_first_pos - constrained_first_pos
-
-            # Apply translation to all keypoints of this leg
-            for leg_kp_idx in leg_keypoint_indices:
-                current_pos = keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx]
-                if not np.isnan(current_pos).any():
-                    keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx] = (
-                        current_pos + translation
-                    )
-
-    return keypoints_pos_constrained_aligned
 
 
 def setup_comparison_figure(
@@ -203,7 +76,7 @@ def setup_comparison_figure(
         start_idx, end_idx = connection
         start_name = keypoints_order[start_idx]
         leg_id = start_name[:2] if len(start_name) >= 2 else None
-        color = kchain_plotting_colors.get(leg_id, np.array([0.5, 0.5, 0.5]))
+        color = nmf_constants.kchain_plotting_colors.get(leg_id, np.ones(3) * 0.5)
 
         # Raw pose lines (colored)
         (line2d,) = ax_img.plot([0, 0], [0, 0], color=color, linewidth=3)
@@ -214,7 +87,7 @@ def setup_comparison_figure(
         if _is_leg(keypoint_name):
             # legs: no scatter on 2D overlay
             continue
-        color = get_keypoint_color(keypoint_name)
+        color = visualizer.get_keypoint_color(keypoint_name)
 
         # Raw pose scatters (colored)
         sc = ax_img.scatter([], [], color=color, s=15)
@@ -292,7 +165,7 @@ def render_comparison_frame_chunk_worker(
         start_idx, end_idx = connection
         start_name = keypoints_order[start_idx]
         leg_id = start_name[:2] if len(start_name) >= 2 else None
-        color = kchain_plotting_colors.get(leg_id, np.array([0.5, 0.5, 0.5]))
+        color = nmf_constants.kchain_plotting_colors.get(leg_id, np.ones(3) * 0.5)
 
         # Raw pose lines (colored)
         (line_raw,) = ax_3d.plot3D([0, 0], [0, 0], [0, 0], color=color, linewidth=3)
@@ -314,7 +187,7 @@ def render_comparison_frame_chunk_worker(
         return "Pedicel" in name or "Antenna" in name
 
     for kp_idx, keypoint_name in enumerate(keypoints_order):
-        color = get_keypoint_color(keypoint_name)
+        color = visualizer.get_keypoint_color(keypoint_name)
         if _is_leg(keypoint_name):
             # skip scatter for leg keypoints (lines will represent legs)
             keypoint_scatters_raw[kp_idx] = None
@@ -602,18 +475,21 @@ def visualize_inverse_kinematics_comparison(
 
     # Load inverse kinematics results (constrained poses)
     with h5py.File(inverse_kinematics_path, "r") as f:
-        forward_kinematics_world_xyz = f["forward_kinematics_world_xyz"][:]
-        legs_ik = list(f["forward_kinematics_world_xyz"].attrs["legs"])
+        forward_kinematics_world_xyz = f["fwdkin_world_xyz"][:]
+        legs_ik = list(f["fwdkin_world_xyz"].attrs["legs"])
         leg_keypoints_canonical_ik = list(
-            f["forward_kinematics_world_xyz"].attrs["keypoint_names_per_leg"]
+            f["fwdkin_world_xyz"].attrs["keypoint_names_per_leg"]
         )
         # Get frame_ids from IK file to ensure consistency
         ik_frame_ids = f["frame_ids"][:]
 
     # Convert forward kinematics to canonical format
     keypoints_pos_constrained, keypoints_order_constrained = (
-        _convert_fwdkin_to_canonical_format(
-            forward_kinematics_world_xyz, legs_ik, leg_keypoints_canonical_ik
+        invkin.fwdkin_world_xyz_append_antennae(
+            fwdkin_world_xyz=forward_kinematics_world_xyz,
+            rawpred_world_xyz=keypoints_pos_raw,
+            legs_ik=legs_ik,
+            leg_keypoints_canonical_ik=leg_keypoints_canonical_ik,
         )
     )
 
@@ -639,7 +515,7 @@ def visualize_inverse_kinematics_comparison(
     # This shifts each leg's kinematic chain so that the first keypoint (ThC/Coxa)
     # matches the position in the raw poses
     logger.info("Aligning constrained poses to raw poses for visualization...")
-    keypoints_pos_constrained = _align_constrained_poses_to_raw_poses(
+    keypoints_pos_constrained = invkin.align_fwdkin_xyz_to_rawpred_xyz(
         keypoints_pos_raw=keypoints_pos_raw,
         keypoints_pos_constrained=keypoints_pos_constrained,
         keypoints_order=keypoints_order,
@@ -663,7 +539,7 @@ def visualize_inverse_kinematics_comparison(
     logger.info(f"3D plot limits: X={x_lim}, Y={y_lim}, Z={z_lim}")
 
     # Get skeleton connections once
-    skeleton_connections = get_skeleton_connections(keypoints_order)
+    skeleton_connections = visualizer.get_skeleton_connections(keypoints_order)
 
     # Create a temporary frames directory using tempfile
     with tempfile.TemporaryDirectory(
@@ -731,14 +607,14 @@ def process_all(
             world_xyz = f["keypoints_world_xyz"][:]
             keypoint_names_canonical = f["keypoints_world_xyz"].attrs["keypoints"]
         output_path = keypoints3d_output_file.parent / "inverse_kinematics.h5"
-        joint_angles, forward_kinematics = run_seqikpy(
+        joint_angles, forward_kinematics = invkin.run_seqikpy(
             world_xyz=world_xyz,
             keypoint_names_canonical=keypoint_names_canonical,
             max_n_frames=max_n_frames,
             n_workers=n_workers_per_dataset,
             debug_plots_dir=keypoints3d_output_file.parent / "ik_debug_plots/",
         )
-        save_seqikpy_output(
+        _save_seqikpy_output(
             output_path, joint_angles, forward_kinematics, frame_ids=frame_ids
         )
 
@@ -859,6 +735,80 @@ def create_ik_visualization_for_trial(
     )
 
     print(f"IK comparison visualization saved to: {output_video_path}")
+
+
+def _save_seqikpy_output(
+    output_path: Path | str,
+    joint_angles: dict[str, np.ndarray],
+    forward_kinematics: dict[str, np.ndarray],
+    frame_ids: np.ndarray | list[int] | None = None,
+) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Rearrange joint angles into (frame, leg, dof) format
+    dof_names_per_leg = list(nmf_constants.dof_name_lookup_canonical_to_nmf.keys())
+    n_frames_joint_angles = joint_angles["Angle_LF_ThC_yaw"].shape[0]
+    joint_angles_arr = np.full((n_frames_joint_angles, 6, 7), np.nan, dtype=np.float32)
+    for leg_idx, leg in enumerate(nmf_constants.legs):
+        for dof_idx, dof_name in enumerate(dof_names_per_leg):
+            seqikpy_key = f"Angle_{leg}_{dof_name}"
+            joint_angles_arr[:, leg_idx, dof_idx] = joint_angles[seqikpy_key]
+    assert not np.isnan(joint_angles_arr).any()
+
+    # Rearrange forward kinematics into (frame, leg, keypoint, 3) format
+    # Note: Physical keypoints are ThC, CTr, FTi, TiTa, Claw
+    #       Virtual keypoints include start and end of 0-length segments at multi-DoF
+    #       joints, i.e. base ThC yaw pitch roll CTr pitch CTr roll FTi pitch TiTa pitch
+    #       (see `_nmf_initial_angles`, stage 4)
+    # Virtual keypoints 0, 1, 2, 3 are all at ThC  (base, yaw, pitch, roll)
+    #                   4, 5 are at CTr
+    #                   6 is at FTi
+    #                   7 is at TiTa
+    #                   8 is at Claw
+    n_physical_keypoints = len(nmf_constants.leg_keypoints_nmf)
+    n_frames_fwdkin, n_virtual_keypoints, _ = forward_kinematics["LF_leg"].shape
+    assert n_frames_fwdkin == n_frames_joint_angles
+    assert n_physical_keypoints == 5
+    assert n_virtual_keypoints == 9
+    fwdkin_world_xyz = np.full(
+        (n_frames_fwdkin, len(nmf_constants.legs), n_virtual_keypoints, 3),
+        np.nan,
+        dtype=np.float32,
+    )
+    for leg_idx, leg in enumerate(nmf_constants.legs):
+        fwdkin_world_xyz[:, leg_idx, :, :] = forward_kinematics[f"{leg}_leg"]
+    assert not np.isnan(fwdkin_world_xyz).any()
+    # Drop virtual keypoints that share the same physical location
+    is_physical = np.array([1, 0, 0, 0, 1, 0, 1, 1, 1], dtype=bool)
+    fwdkin_world_xyz = fwdkin_world_xyz[:, :, is_physical, :]
+
+    with h5py.File(output_path, "w") as f:
+        joint_angles_ds = f.create_dataset(
+            "joint_angles", data=joint_angles_arr, dtype=np.float32, compression="gzip"
+        )
+        joint_angles_ds.attrs["legs"] = nmf_constants.legs
+        joint_angles_ds.attrs["dof_names_per_leg"] = dof_names_per_leg
+
+        fwdkin_ds = f.create_dataset(
+            "fwdkin_world_xyz",
+            data=fwdkin_world_xyz,
+            dtype=np.float32,
+            compression="gzip",
+        )
+        fwdkin_ds.attrs["legs"] = nmf_constants.legs
+        fwdkin_ds.attrs["keypoint_names_per_leg"] = (
+            nmf_constants.leg_keypoints_canonical
+        )
+
+        if frame_ids is not None:
+            f.create_dataset(
+                "frame_ids",
+                data=frame_ids,
+                dtype=np.int32,
+                compression="gzip",
+                shuffle=True,
+            )
 
 
 if __name__ == "__main__":

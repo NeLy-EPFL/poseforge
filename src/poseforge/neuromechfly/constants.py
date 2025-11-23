@@ -49,6 +49,21 @@ kchain_plotting_colors = {
     "RAntenna": np.array([50, 120, 32]) / 255,
 }
 
+# SeqIKPy considers the anchor point of every DoF a "joint" keypoint. However, some
+# anatomical joints have multiple DoFs (e.g., ThC has yaw, pitch, roll). This results in
+# some "virtual" keypoints in the inverse kinematics output. This mask filters them out.
+# The keypoints in seqikpy output (including virtual ones) are:
+#   0. ThC base (physical)
+#   1. ThC pitch (virtual)
+#   2. ThC roll (virtual)
+#   3. ThC yaw (virtual)
+#   4. CTr pitch (physical)
+#   5. CTr roll (virtual)
+#   6. FTi pitch (physical)
+#   7. TiTa pitch (physical)
+#   8. Claw (physical)
+physical_keypoints_mask = np.array([1, 0, 0, 0, 1, 0, 1, 1, 1], dtype=bool)
+
 
 def parse_nmf_joint_name(nmf_joint_name: str) -> tuple[str, str]:
     """Parse a NeuromechFly joint name (e.g. "joint_LFCoxa" or "LFCoxa")

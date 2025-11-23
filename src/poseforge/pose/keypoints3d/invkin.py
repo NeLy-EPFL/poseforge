@@ -1,6 +1,6 @@
 import numpy as np
 import h5py
-import logging
+from loguru import logger
 from collections import defaultdict
 from pathlib import Path
 from seqikpy.alignment import AlignPose
@@ -9,9 +9,6 @@ from seqikpy.leg_inverse_kinematics import LegInvKinSeq
 
 import poseforge.neuromechfly.constants as nmf_constants
 from poseforge.pose.keypoints3d.visualizer import visualize_leg_segment_lengths
-
-
-_logger = logging.getLogger(__name__)
 
 
 def _world_xyz_to_seqikpy_format(
@@ -119,7 +116,7 @@ def scale_template_by_leg_segment_sizes(
                 scaled_vector = direction_vector * (size_new / size_original)
                 pos_new = scaled_template[prev_keypoint_name] + scaled_vector
                 scaled_template[keypoint_name] = pos_new
-                _logger.info(
+                logger.info(
                     f"Scaled {keypoint_name}: {size_original:.3f} -> {size_new:.3f}. "
                     f"This is based on prev keypoint {prev_keypoint_name}, "
                     f"curr keypoint {keypoint_name}, "
@@ -134,6 +131,7 @@ def run_seqikpy(
     max_n_frames: int | None = None,
     n_workers: int = 6,
     debug_plots_dir: Path | None = None,
+    **run_ik_and_fk_kwargs,
 ) -> dict[str, np.ndarray]:
     # Convert input format to what SeqIKPy expects
     pose_data_dict = _world_xyz_to_seqikpy_format(
@@ -181,80 +179,135 @@ def run_seqikpy(
         kinematic_chain_class=seq_kinematic_chain,
         initial_angles=nmf_constants.nmf_initial_angles,
     )
-    joint_angles, forward_kinematics = leg_seq_ik.run_ik_and_fk(n_workers=n_workers)
+    joint_angles, forward_kinematics = leg_seq_ik.run_ik_and_fk(
+        n_workers=n_workers, **run_ik_and_fk_kwargs
+    )
 
     return joint_angles, forward_kinematics
 
 
-def save_seqikpy_output(
-    output_path: Path | str,
-    joint_angles: dict[str, np.ndarray],
-    forward_kinematics: dict[str, np.ndarray],
-    frame_ids: np.ndarray | list[int] | None = None,
-) -> None:
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def align_fwdkin_xyz_to_rawpred_xyz(
+    keypoints_pos_raw: np.ndarray,
+    keypoints_pos_constrained: np.ndarray,
+    keypoints_order: list[str],
+    legs: list[str],
+    leg_keypoints_canonical: list[str],
+) -> np.ndarray:
+    """Align constrained poses to raw poses by shifting each leg's kinematic chain.
 
-    # Rearrange joint angles into (frame, leg, dof) format
-    dof_names_per_leg = list(nmf_constants.dof_name_lookup_canonical_to_nmf.keys())
-    n_frames_joint_angles = joint_angles["Angle_LF_ThC_yaw"].shape[0]
-    joint_angles_arr = np.full((n_frames_joint_angles, 6, 7), np.nan, dtype=np.float32)
-    for leg_idx, leg in enumerate(nmf_constants.legs):
-        for dof_idx, dof_name in enumerate(dof_names_per_leg):
-            seqikpy_key = f"Angle_{leg}_{dof_name}"
-            joint_angles_arr[:, leg_idx, dof_idx] = joint_angles[seqikpy_key]
-    assert not np.isnan(joint_angles_arr).any()
+    The inverse kinematics process aligns each leg to a template position. For visualization,
+    we want to shift each leg back so that the first keypoint (ThC/Coxa) has the same 3D
+    position as in the raw poses.
 
-    # Rearrange forward kinematics into (frame, leg, keypoint, 3) format
-    # Note: Physical keypoints are ThC, CTr, FTi, TiTa, Claw
-    #       Virtual keypoints include start and end of 0-length segments at multi-DoF
-    #       joints, i.e. base ThC yaw pitch roll CTr pitch CTr roll FTi pitch TiTa pitch
-    #       (see `_nmf_initial_angles`, stage 4)
-    # Virtual keypoints 0, 1, 2, 3 are all at ThC  (base, yaw, pitch, roll)
-    #                   4, 5 are at CTr
-    #                   6 is at FTi
-    #                   7 is at TiTa
-    #                   8 is at Claw
-    n_physical_keypoints = len(nmf_constants.leg_keypoints_nmf)
-    n_frames_fwdkin, n_virtual_keypoints, _ = forward_kinematics["LF_leg"].shape
-    assert n_frames_fwdkin == n_frames_joint_angles
-    assert n_physical_keypoints == 5
-    assert n_virtual_keypoints == 9
-    fwdkin_world_xyz = np.full(
-        (n_frames_fwdkin, len(nmf_constants.legs), n_virtual_keypoints, 3),
-        np.nan,
-        dtype=np.float32,
-    )
-    for leg_idx, leg in enumerate(nmf_constants.legs):
-        fwdkin_world_xyz[:, leg_idx, :, :] = forward_kinematics[f"{leg}_leg"]
-    assert not np.isnan(fwdkin_world_xyz).any()
-    # Drop virtual keypoints that share the same physical location
-    is_physical = np.array([1, 0, 0, 0, 1, 0, 1, 1, 1], dtype=bool)
-    fwdkin_world_xyz = fwdkin_world_xyz[:, :, is_physical, :]
+    Args:
+        keypoints_pos_raw: Raw keypoint positions (n_frames, n_keypoints, 3)
+        keypoints_pos_constrained: Constrained keypoint positions (n_frames, n_keypoints, 3)
+        keypoints_order: List of keypoint names
+        legs: List of leg names ['LF', 'LM', 'LH', 'RF', 'RM', 'RH']
+        leg_keypoints_canonical: List of keypoint names per leg ['ThC', 'CTr', 'FTi', 'TiTa', 'Claw']
 
-    with h5py.File(output_path, "w") as f:
-        joint_angles_ds = f.create_dataset(
-            "joint_angles", data=joint_angles_arr, dtype=np.float32, compression="gzip"
-        )
-        joint_angles_ds.attrs["legs"] = nmf_constants.legs
-        joint_angles_ds.attrs["dof_names_per_leg"] = dof_names_per_leg
+    Returns:
+        keypoints_pos_constrained_aligned: Aligned constrained poses
+    """
+    keypoints_pos_constrained_aligned = keypoints_pos_constrained.copy()
+    n_frames = keypoints_pos_raw.shape[0]
 
-        fwdkin_ds = f.create_dataset(
-            "forward_kinematics_world_xyz",
-            data=fwdkin_world_xyz,
-            dtype=np.float32,
-            compression="gzip",
-        )
-        fwdkin_ds.attrs["legs"] = nmf_constants.legs
-        fwdkin_ds.attrs["keypoint_names_per_leg"] = (
-            nmf_constants.leg_keypoints_canonical
-        )
+    # For each leg, align the constrained pose to the raw pose
+    for leg in legs:
+        # Get the first keypoint (ThC/Coxa) for this leg
+        first_keypoint_name = f"{leg}{leg_keypoints_canonical[0]}"  # e.g., "LFThC"
 
-        if frame_ids is not None:
-            f.create_dataset(
-                "frame_ids",
-                data=frame_ids,
-                dtype=np.int32,
-                compression="gzip",
-                shuffle=True,
+        try:
+            first_keypoint_idx = keypoints_order.index(first_keypoint_name)
+        except ValueError:
+            logger.warning(
+                f"Keypoint {first_keypoint_name} not found in keypoints_order"
             )
+            continue
+
+        # Get all keypoint indices for this leg
+        leg_keypoint_indices = []
+        for keypoint in leg_keypoints_canonical:
+            keypoint_name = f"{leg}{keypoint}"
+            try:
+                idx = keypoints_order.index(keypoint_name)
+                leg_keypoint_indices.append(idx)
+            except ValueError:
+                logger.warning(f"Keypoint {keypoint_name} not found in keypoints_order")
+                continue
+
+        if not leg_keypoint_indices:
+            continue
+
+        # For each frame, compute the translation needed to align the first keypoint
+        for frame_idx in range(n_frames):
+            # Get the positions of the first keypoint in raw and constrained poses
+            raw_first_pos = keypoints_pos_raw[frame_idx, first_keypoint_idx]
+            constrained_first_pos = keypoints_pos_constrained[
+                frame_idx, first_keypoint_idx
+            ]
+
+            # Skip if either position has NaN values
+            if np.isnan(raw_first_pos).any() or np.isnan(constrained_first_pos).any():
+                continue
+
+            # Compute translation vector
+            translation = raw_first_pos - constrained_first_pos
+
+            # Apply translation to all keypoints of this leg
+            for leg_kp_idx in leg_keypoint_indices:
+                current_pos = keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx]
+                if not np.isnan(current_pos).any():
+                    keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx] = (
+                        current_pos + translation
+                    )
+
+    return keypoints_pos_constrained_aligned
+
+
+def fwdkin_world_xyz_append_antennae(
+    fwdkin_world_xyz: np.ndarray,
+    rawpred_world_xyz: np.ndarray,
+    legs: list[str],
+    leg_keypoints_canonical: list[str],
+) -> tuple[np.ndarray, list[str]]:
+    """Convert forward kinematics data to canonical format matching original keypoints.
+    Append antenna keypoints using xyz positions before inverse kinematics.
+
+    Args:
+        fwdkin_world_xyz: Shape (n_frames, 6, 5, 3) - 6 legs, 5 keypoints per leg
+        rawpred_world_xyz: Raw predicted world xyz positions before inverse kinematics
+        legs: List of leg names ['LF', 'LM', 'LH', 'RF', 'RM', 'RH']
+        leg_keypoints_canonical: List of keypoint names per leg ['ThC', 'CTr', 'FTi', 'TiTa', 'Claw']
+
+    Returns:
+        keypoints_pos: Shape (n_frames, n_keypoints, 3) where n_keypoints = 6*5 + 2 (antennae)
+        keypoints_order: List of keypoint names in canonical format
+    """
+    n_frames, n_legs, n_keypoints_per_leg, _ = fwdkin_world_xyz.shape
+
+    # Create keypoint names in canonical format for legs
+    keypoints_order = []
+    for leg in legs:
+        for keypoint in leg_keypoints_canonical:
+            keypoints_order.append(f"{leg}{keypoint}")
+
+    # Add antenna keypoints (these won't be present in forward kinematics but needed for consistency)
+    keypoints_order.extend(["LPedicel", "RPedicel"])
+
+    # Reshape forward kinematics to (n_frames, n_keypoints, 3)
+    n_leg_keypoints = n_legs * n_keypoints_per_leg
+    fwdkin_world_xyz_canonical = np.full(
+        (n_frames, len(keypoints_order), 3), np.nan, dtype=np.float32
+    )
+
+    # Fill in leg keypoints
+    leg_keypoints_flat = fwdkin_world_xyz.reshape(n_frames, n_leg_keypoints, 3)
+    fwdkin_world_xyz_canonical[:, :n_leg_keypoints, :] = leg_keypoints_flat
+
+    # Append antenna keypoints from raw predictions
+    antenna_indices = [keypoints_order.index(x) for x in ["LPedicel", "RPedicel"]]
+    antenna_world_xyz = rawpred_world_xyz[:, antenna_indices, :]
+    fwdkin_world_xyz_canonical[:, antenna_indices, :] = antenna_world_xyz
+
+    return fwdkin_world_xyz_canonical, keypoints_order

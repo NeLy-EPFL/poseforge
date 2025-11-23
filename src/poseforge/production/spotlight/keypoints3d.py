@@ -9,6 +9,7 @@ import numpy as np
 import torchvision.transforms as transforms
 import h5py
 import matplotlib.pyplot as plt
+from sys import stderr
 from collections import defaultdict
 from time import perf_counter
 from tqdm import tqdm
@@ -22,13 +23,9 @@ from parallel_animate import Animator, IndexedFrameParams
 from parallel_animate.util import get_rendered_frame_ids
 
 import poseforge.pose.keypoints3d as keypoints3d
+import poseforge.pose.keypoints3d.invkin as invkin
+import poseforge.neuromechfly.constants as nmf_constants
 from poseforge.pose.camera import CameraToWorldMapper
-from poseforge.neuromechfly.constants import (
-    keypoint_segments_canonical,
-    legs,
-    leg_keypoints_canonical,
-    kchain_plotting_colors,
-)
 
 
 def predict_keypoints3d(
@@ -91,7 +88,7 @@ def predict_keypoints3d(
     n_frames_total = len(video_loader.dataset)
     with h5py.File(keypoints3d_output_path, "w") as f:
         keypoint_names = keypoints3d_model_config["keypoint_names"]
-        assert keypoint_names == keypoint_segments_canonical, (
+        assert keypoint_names == nmf_constants.keypoint_segments_canonical, (
             "Keypoint names in model config do not match expected canonical "
             "keypoint names from "
             "poseforge.neuromechfly.constants.keypoint_segments_canonical"
@@ -148,11 +145,157 @@ def predict_keypoints3d(
     logger.info("3D keypoints prediction complete")
 
 
+def run_inverse_and_forward_kinematics(
+    *, invkin_output_path: Path, keypoints3d_output_path: Path, n_workers: int = -1
+) -> None:
+    # Load pose model predictions
+    logger.info(
+        f"Loading 3D keypoint predictions for inverse kinematics from {keypoints3d_output_path}"
+    )
+    with h5py.File(keypoints3d_output_path, "r") as f:
+        rawpred_world_xyz = f["pred_world_xyz"][:]  # (n_frames, n_keypoints, 3)
+        keypoint_names = list(f.attrs["keypoint_names"])
+
+    # Run SeqIKPy
+    logger.info("Running inverse kinematics using SeqIKPy")
+    joint_angles_dict, fwdkin_world_xyz_dict = invkin.run_seqikpy(
+        world_xyz=rawpred_world_xyz,
+        keypoint_names_canonical=keypoint_names,
+        n_workers=n_workers,
+        parallel_over_time=True,
+        hide_progress_bar=True,
+    )
+
+    # Convert output from dicts to arrays
+    # joint angles: (n_frames, n_legs, n_dofs)
+    joint_angles = _joint_angles_dict2arr(joint_angles_dict)
+    # fwdkin_world_xyz: (n_frames, n_legs, n_keypoints, 3)
+    fwdkin_world_xyz_pre_align = _fwdkin_xyz_dict2arr(fwdkin_world_xyz_dict)
+
+    # Filter out virtual keypoints (anchor points of DoFs that are at the same
+    # anatomical joint, i.e. with 0-length segment in kinematic chain)
+    fwdkin_world_xyz_pre_align = fwdkin_world_xyz_pre_align[
+        :, :, nmf_constants.physical_keypoints_mask, :
+    ]
+
+    # Convert fwdkin output from (n_frames, n_legs, n_keypoints, 3) to the cannonical
+    # (n_frames, n_keypoints, 3) format used elsewhere
+    fwdkin_world_xyz_pre_align, fwdkin_keypoint_names = (
+        invkin.fwdkin_world_xyz_append_antennae(
+            fwdkin_world_xyz_pre_align,
+            rawpred_world_xyz,
+            nmf_constants.legs,
+            nmf_constants.leg_keypoints_canonical,
+        )
+    )
+    assert fwdkin_keypoint_names == keypoint_names, (
+        "Keypoint names in forward kinematics output do not match those in "
+        "raw predictions. Fix this for consistency."
+    )
+
+    # Align roots kinematic chains in forward kinematics output to raw predictions
+    fwdkin_world_xyz_aligned = invkin.align_fwdkin_xyz_to_rawpred_xyz(
+        keypoints_pos_raw=rawpred_world_xyz,
+        keypoints_pos_constrained=fwdkin_world_xyz_pre_align,
+        keypoints_order=keypoint_names,
+        legs=nmf_constants.legs,
+        leg_keypoints_canonical=nmf_constants.leg_keypoints_canonical,
+    )
+
+    # Save output
+    logger.info(f"Saving inverse kinematics output to {invkin_output_path}")
+    _save_invkin_output(
+        invkin_output_path=invkin_output_path,
+        joint_angles=joint_angles,
+        fwdkin_world_xyz_aligned=fwdkin_world_xyz_aligned,
+        rawpred_world_xyz=rawpred_world_xyz,
+        keypoint_names=keypoint_names,
+    )
+
+
+def _save_invkin_output(
+    invkin_output_path: Path,
+    joint_angles: np.ndarray,
+    fwdkin_world_xyz_aligned: np.ndarray,
+    rawpred_world_xyz: np.ndarray,
+    keypoint_names: list[str],
+) -> None:
+    with h5py.File(invkin_output_path, "w") as f:
+        # Save joint angles
+        ds_joint_angles = f.create_dataset(
+            "joint_angles",
+            data=joint_angles,
+            dtype=np.float32,
+            compression="gzip",
+        )
+        metadata = {
+            "legs": nmf_constants.legs,
+            "keypoint_names_per_leg": nmf_constants.leg_keypoints_canonical,
+        }
+        ds_joint_angles.attrs.update(metadata)
+
+        # Save forward kinematics
+        ds_fwdkin = f.create_dataset(
+            "fwdkin_world_xyz",
+            data=fwdkin_world_xyz_aligned,
+            dtype=np.float32,
+            compression="gzip",
+        )
+        metadata = {
+            "legs": nmf_constants.legs,
+            "keypoint_names": keypoint_names,
+        }
+        ds_fwdkin.attrs.update(metadata)
+
+        # Add original predicted world xyz to invkin output for convenience
+        # (this includes antennae which are not included in IK)
+        ds_rawpred = f.create_dataset(
+            "rawpred_world_xyz",
+            data=rawpred_world_xyz,
+            dtype=np.float32,
+            compression="gzip",
+        )
+        ds_rawpred.attrs["keypoint_names"] = keypoint_names
+
+
+def _joint_angles_dict2arr(joint_angles_dict: dict[str, np.ndarray]) -> np.ndarray:
+    """Convert joint angles from dict of arrays to array with shape
+    (n_frames, n_legs, n_dofs)"""
+    dof_names_per_leg = list(nmf_constants.dof_name_lookup_canonical_to_nmf.keys())
+    n_frames_joint_angles = joint_angles_dict["Angle_LF_ThC_yaw"].shape[0]
+    joint_angles_arr = np.full(
+        (n_frames_joint_angles, 6, len(dof_names_per_leg)), np.nan, dtype=np.float32
+    )
+    for leg_idx, leg in enumerate(nmf_constants.legs):
+        for dof_idx, dof_name in enumerate(dof_names_per_leg):
+            seqikpy_key = f"Angle_{leg}_{dof_name}"
+            joint_angles_arr[:, leg_idx, dof_idx] = joint_angles_dict[seqikpy_key]
+    assert not np.isnan(joint_angles_arr).any()
+    return joint_angles_arr
+
+
+def _fwdkin_xyz_dict2arr(fwdkin_world_xyz_dict: dict[str, np.ndarray]) -> np.ndarray:
+    # Rearrange forward kinematics into (n_frames, n_legs, n_keypoints, 3) format
+    n_physical_keypoints = len(nmf_constants.leg_keypoints_nmf)
+    n_frames_fwdkin, n_virtual_keypoints, _ = fwdkin_world_xyz_dict["LF_leg"].shape
+    assert n_physical_keypoints == 5
+    assert n_virtual_keypoints == 9
+    fwdkin_world_xyz_arr = np.full(
+        (n_frames_fwdkin, len(nmf_constants.legs), n_virtual_keypoints, 3),
+        np.nan,
+        dtype=np.float32,
+    )
+    for leg_idx, leg in enumerate(nmf_constants.legs):
+        fwdkin_world_xyz_arr[:, leg_idx, :, :] = fwdkin_world_xyz_dict[f"{leg}_leg"]
+    assert not np.isnan(fwdkin_world_xyz_arr).any()
+    return fwdkin_world_xyz_arr
+
+
 def visualize_keypoints3d(
     *,
     visualization_output_path: Path,
     keypoints3d_output_path: Path,
-    invkin_output_path: Path,
+    invkin_output_path: Path | None,
     aligned_behavior_video_path: Path,
     recording_fps: Fraction | int,
     play_speed: float,
@@ -178,19 +321,27 @@ def visualize_keypoints3d(
         use_cached_video_metadata=loading_cache_video_metadata,
     )
 
-    # Open bodyseg predictions
+    # Load keypoints3d and invkin/fwdkin predictions
     logger.info(f"Loading keypoints3d predictions from {keypoints3d_output_path}")
     with h5py.File(keypoints3d_output_path, "r") as f:
         pred_cam_xy_all = f["pred_xy"][:]
-        pred_world_xyz_all = f["pred_world_xyz"][:]
+        rawpred_world_xyz_all = f["pred_world_xyz"][:]
         keypoint_names = list(f.attrs["keypoint_names"])
 
     if invkin_output_path is not None:
         logger.info(f"Loading inverse kinematics results from {invkin_output_path}")
         with h5py.File(invkin_output_path, "r") as f_inv:
-            pass
+            # fwdkin_world_xyz: (n_frames, n_legs, n_dofs_per_leg, 3)
+            fwdkin_world_xyz_all = f_inv["fwdkin_world_xyz"][:]
+            inv_keypoint_names = list(f_inv["fwdkin_world_xyz"].attrs["keypoint_names"])
+            assert inv_keypoint_names == keypoint_names, (
+                "Leg names in inverse kinematics output do not match expected leg "
+                "names from poseforge.neuromechfly.constants.legs. Fix this for "
+                "consistency."
+            )
     else:
         logger.warning("No inverse kinematics output path provided; skipping IK data")
+        fwdkin_world_xyz_all = None
 
     # Define animator
     animator = _Keypoints3DAnimator(
@@ -216,23 +367,26 @@ def visualize_keypoints3d(
 
                 # Get input image from video loader
                 frame = frames[i, 0, :, :].numpy()
-                # Get camera xy predictions
+                # Get camera xy predictions (n_keypoints, 2)
                 pred_cam_xy = _group_data_by_kinematic_chain(
-                    pred_cam_xy_all[frame_id, ...], keypoint_names=keypoint_names
+                    pred_cam_xy_all[frame_id, :, :], keypoint_names=keypoint_names
                 )
-                # Get 3D world xyz predictions
-                raw_pred_world_xyz = _group_data_by_kinematic_chain(
-                    pred_world_xyz_all[frame_id, ...], keypoint_names=keypoint_names
+                # Get 3D world xyz predictions (n_keypoints, 3)
+                rawpred_world_xyz = _group_data_by_kinematic_chain(
+                    rawpred_world_xyz_all[frame_id, :, :], keypoint_names=keypoint_names
                 )
                 # Get inverse kinematics -> forward kinematics 3D world xyz
                 if invkin_output_path is None:
-                    fwd_kin_world_xyz = None
+                    fwdkin_world_xyz = None
                 else:
-                    fwd_kin_world_xyz = NotImplemented  # TODO
-
+                    # fwdkin_world_xyz: (n_keypoints, 3)
+                    fwdkin_world_xyz = _group_data_by_kinematic_chain(
+                        fwdkin_world_xyz_all[frame_id, :, :],
+                        keypoint_names=keypoint_names,
+                    )
                 yield IndexedFrameParams(
                     frame_id=frame_id,
-                    params=(frame, pred_cam_xy, raw_pred_world_xyz, fwd_kin_world_xyz),
+                    params=(frame, pred_cam_xy, rawpred_world_xyz, fwdkin_world_xyz),
                 )
 
     animator.make_video(
@@ -247,7 +401,7 @@ def visualize_keypoints3d(
 def _group_data_by_kinematic_chain(
     data_block: np.ndarray, keypoint_names: list[str]
 ) -> dict[str, np.ndarray]:
-    expected_keypoint_names = set(keypoint_segments_canonical)
+    expected_keypoint_names = set(nmf_constants.keypoint_segments_canonical)
     assert set(keypoint_names) == expected_keypoint_names, (
         "Keypoint names do not match expected canonical keypoint names from "
         "poseforge.neuromechfly.constants.keypoint_segments_canonical"
@@ -255,8 +409,8 @@ def _group_data_by_kinematic_chain(
 
     data_by_kinematic_chain = defaultdict(list)
 
-    for leg in legs:
-        for keypoint in leg_keypoints_canonical:
+    for leg in nmf_constants.legs:
+        for keypoint in nmf_constants.leg_keypoints_canonical:
             keypoint_name = f"{leg}{keypoint}"
             idx = keypoint_names.index(keypoint_name)
             data_by_kinematic_chain[leg].append(data_block[idx, ...])
@@ -290,7 +444,10 @@ class _Keypoints3DAnimator(Animator):
 
         # Set up 2D image axis
         dummy_input_img = np.zeros(self.image_shape)
-        dummy_2dpos = {leg: np.zeros((len(leg_keypoints_canonical), 2)) for leg in legs}
+        dummy_2dpos = {
+            leg: np.zeros((len(nmf_constants.leg_keypoints_canonical), 2))
+            for leg in nmf_constants.legs
+        }
         for side in "LR":
             dummy_2dpos[f"{side}Antenna"] = np.zeros((1, 2))
         ax_img.set_title("Recording")
@@ -299,7 +456,7 @@ class _Keypoints3DAnimator(Animator):
             dummy_input_img, vmin=0, vmax=1, cmap="gray", origin="upper"
         )
         for kchain_name, xy_seq in dummy_2dpos.items():
-            color = kchain_plotting_colors[kchain_name]
+            color = nmf_constants.kchain_plotting_colors[kchain_name]
             if kchain_name.endswith("Antenna"):
                 (artist,) = ax_img.plot(
                     xy_seq[:, 0],
@@ -319,7 +476,10 @@ class _Keypoints3DAnimator(Animator):
             self.artists[f"pred_xy_{kchain_name}"] = artist
 
         # Set up 3D keypoints axis
-        dummy_3dpos = {leg: np.zeros((len(leg_keypoints_canonical), 3)) for leg in legs}
+        dummy_3dpos = {
+            leg: np.zeros((len(nmf_constants.leg_keypoints_canonical), 3))
+            for leg in nmf_constants.legs
+        }
         for side in "LR":
             dummy_3dpos[f"{side}Antenna"] = np.zeros((1, 3))
         _ax_3d_placeholder.remove()
@@ -337,7 +497,7 @@ class _Keypoints3DAnimator(Animator):
 
         # 3D keypoints axis: raw model predictions
         for kchain_name, world_xyz_seq in dummy_3dpos.items():
-            color = kchain_plotting_colors[kchain_name]
+            color = nmf_constants.kchain_plotting_colors[kchain_name]
             if kchain_name.endswith("Antenna"):
                 (artist,) = ax_3d.plot(
                     world_xyz_seq[:, 0],
@@ -374,7 +534,7 @@ class _Keypoints3DAnimator(Animator):
         return fig
 
     def update(self, frame_id: int, data: Any):
-        input_image, pred_cam_xy, raw_pred_world_xyz, fwd_kin_world_xyz = data
+        input_image, pred_cam_xy, rawpred_world_xyz, fwdkin_world_xyz = data
 
         # Input image
         self.artists["input_img"].set_data(input_image)
@@ -386,7 +546,8 @@ class _Keypoints3DAnimator(Animator):
         )
         self.ax_3d.view_init(elev=self.ax_3d_elevation, azim=azimuth)
 
-        for kchain_name in legs + [f"{side}Antenna" for side in "LR"]:
+        all_kinematic_chains = nmf_constants.legs + [f"{side}Antenna" for side in "LR"]
+        for kchain_idx, kchain_name in enumerate(all_kinematic_chains):
             # 2D keypoints
             artist_cam_xy = self.artists[f"pred_xy_{kchain_name}"]
             artist_cam_xy.set_data(
@@ -396,16 +557,16 @@ class _Keypoints3DAnimator(Animator):
             # 3D keypoints - raw model predictions
             artist_raw_xyz = self.artists[f"raw_pred_xyz_{kchain_name}"]
             artist_raw_xyz.set_data_3d(
-                raw_pred_world_xyz[kchain_name][:, 0],
-                raw_pred_world_xyz[kchain_name][:, 1],
-                raw_pred_world_xyz[kchain_name][:, 2],
+                rawpred_world_xyz[kchain_name][:, 0],
+                rawpred_world_xyz[kchain_name][:, 1],
+                rawpred_world_xyz[kchain_name][:, 2],
             )
 
             # 3D keypoints - inverse kinematics -> forward kinematics
             if self.with_invkin and not kchain_name.endswith("Antenna"):
                 artist_fwd_xyz = self.artists[f"fwd_kin_xyz_{kchain_name}"]
                 artist_fwd_xyz.set_data_3d(
-                    fwd_kin_world_xyz[kchain_name][:, 0],
-                    fwd_kin_world_xyz[kchain_name][:, 1],
-                    fwd_kin_world_xyz[kchain_name][:, 2],
+                    fwdkin_world_xyz[kchain_name][:, 0],
+                    fwdkin_world_xyz[kchain_name][:, 1],
+                    fwdkin_world_xyz[kchain_name][:, 2],
                 )

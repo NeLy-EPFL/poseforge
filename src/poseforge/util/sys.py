@@ -149,6 +149,10 @@ def set_loguru_level(level: str) -> None:
     # Add loguru handler with your desired level
     logger.add(sink=sys.stderr, level=level)
 
+    # Silence info or less from matplotlib font manager and fontTools subset (from the normal logging module)
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("fontTools").setLevel(logging.WARNING)
+
     # Intercept standard logging and redirect to loguru
     logging.basicConfig(handlers=[InterceptHandler()], level=level.upper(), force=True)
 
@@ -157,6 +161,7 @@ class InterceptHandler(logging.Handler):
     """
     Handler that intercepts standard logging calls and redirects them to loguru.
     """
+
     def emit(self, record: logging.LogRecord) -> None:
         # Get corresponding Loguru level if it exists
         level: str | int

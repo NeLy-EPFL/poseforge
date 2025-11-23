@@ -115,7 +115,10 @@ class SpotlightRecordingProcessor:
                 "Keypoints3D must be predicted before solving inverse kinematics. "
                 "Call .predict_keypoints3d() first."
             )
-        pass  # TODO
+        keypoints3d.run_inverse_and_forward_kinematics(
+            invkin_output_path=self.paths.invkin_output,
+            keypoints3d_output_path=self.paths.keypoints3d_prediction,
+        )
         self.inverse_kinematics_solved = True
 
     def visualize_keypoints3d(
@@ -210,25 +213,3 @@ class SpotlightRecordingProcessor:
             rendering_n_workers=rendering_n_workers,
         )
         self.bodyseg_visualized = True
-
-
-if __name__ == "__main__":
-    from loguru import logger
-    from poseforge.util.sys import set_loguru_level
-
-    set_loguru_level("INFO")
-
-    model_config_path = Path(
-        "~/projects/poseforge/src/poseforge/production/spotlight/config.yaml"
-    ).expanduser()
-    spotlight_recording_dir = Path("~/data/spotlight/20250613-fly1b-002").expanduser()
-    recording = SpotlightRecordingProcessor(
-        spotlight_recording_dir, model_config_path, with_muscle=True
-    )
-    recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
-    recording.predict_keypoints3d(loading_n_workers=8)
-    # recording.solve_inverse_kinematics()
-    # recording.keypoints3d_predicted = True  # TODO: remove
-    recording.visualize_keypoints3d()
-    recording.predict_body_segmentation(loading_n_workers=8)
-    recording.visualize_bodyseg_predictions()
