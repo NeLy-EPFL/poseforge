@@ -4,7 +4,7 @@ from pathlib import Path
 from torchvision.transforms import Resize
 from torchsummary import summary
 from tqdm import tqdm
-from pvio.torch_tools import VideoCollectionDataset, VideoCollectionDataLoader
+from pvio.torch_tools import SimpleVideoCollectionLoader
 
 import poseforge.pose.bodyseg.config as config
 from poseforge.pose.bodyseg import BodySegmentationModel, BodySegmentationPipeline
@@ -31,16 +31,15 @@ def test_bodyseg_model(
     # Find all trials to process
     input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
     print(f"Found {len(list(input_trials))} trials to process")
+    input_trials = [trial for trial in input_trials if len(list(trial.iterdir())) > 0]
+    print(f"{len(input_trials)} trials have images to process")
 
     # Create dataset and dataloader
     transform = Resize(inference_image_size)
-    dataset = VideoCollectionDataset(
-        input_trials, as_image_dirs=True, transform=transform
+    dataloader = SimpleVideoCollectionLoader(
+        input_trials, transform=transform, batch_size=batch_size, num_workers=n_workers
     )
-    dataloader = VideoCollectionDataLoader(
-        dataset, batch_size=batch_size, num_workers=n_workers
-    )
-    print(f"Found {len(dataset)} frames to process")
+    print(f"Found {len(dataloader.dataset)} frames to process")
     print(
         f"Using batch size {dataloader.batch_size} with {dataloader.num_workers} "
         f"workers. This will generate {len(dataloader)} batches."
@@ -57,7 +56,9 @@ def test_bodyseg_model(
     pipeline = BodySegmentationPipeline(model, device="cuda", use_float16=True)
 
     # Make an output buffer - output data for multiple videos will arrive out of sync
-    def save_predictions(input_video_path, data_items):
+    def save_predictions(input_video_idx, data_items):
+        video_obj = dataloader.dataset.videos[input_video_idx]
+        input_video_path = video_obj.path
         exp_trial_name = "_".join(input_video_path.parts[-3:])
         out_dir = output_basedir / exp_trial_name
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -84,7 +85,7 @@ def test_bodyseg_model(
             ds.attrs["method"] = model.confidence_method
             frame_ids = [
                 int(p.stem.split("_")[1])
-                for p in dataset.frame_sortings[input_video_path]
+                for p in video_obj.phy_frame_id_to_path.values()
             ]
             # These are the actual, raw frame IDs from the original video assigned by
             # the Spotlight recording software. They may not be contiguous because
@@ -98,8 +99,11 @@ def test_bodyseg_model(
                 shuffle=True,
             )
 
+    buckets_and_sizes = {
+        i: n_frames for i, n_frames in enumerate(dataloader.dataset.n_frames_by_video)
+    }
     output_buffer = OutputBuffer(
-        buckets_and_expected_sizes=dataset.n_frames_lookup,
+        buckets_and_expected_sizes=buckets_and_sizes,
         closing_func=save_predictions,
     )
 
@@ -114,7 +118,7 @@ def test_bodyseg_model(
         for i in range(logits.shape[0]):
             data_item = (pred_seg[i, :, :], confidence[i, :, :])
             output_buffer.add_data(
-                bucket=batch["video_paths"][i],
+                bucket=batch["video_indices"][i],
                 index=batch["frame_indices"][i],
                 data=data_item,
             )
@@ -132,13 +136,13 @@ def test_bodyseg_model(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251012b")
+    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251118a")
     batch_size = 192
     n_workers = 16
     inference_image_size = (256, 256)
     output_buffer_log_interval = 10
-    epoch = 13  # chosen by validation performance and visual inspection
-    step = 18335  # last step of each epoch
+    epoch = 14  # chosen by validation performance and visual inspection
+    step = 12000  # last step of each epoch
 
     model_checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
     output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
