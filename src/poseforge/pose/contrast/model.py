@@ -189,6 +189,6 @@ class InfoNCELoss(nn.Module):
         # loss_per_sample = -torch.log(probs[:, : (n_variants - 1)].sum(dim=1))
         log_probs = F.log_softmax(logits, dim=1)
         loss_per_sample = -torch.logsumexp(log_probs[:, : (n_variants - 1)], dim=1)
-        
+
         loss = loss_per_sample.mean()
         return loss
