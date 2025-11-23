@@ -225,10 +225,10 @@ if __name__ == "__main__":
     recording = SpotlightRecordingProcessor(
         spotlight_recording_dir, model_config_path, with_muscle=True
     )
-    # recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
-    # recording.predict_keypoints3d(loading_n_workers=8)
+    recording.detect_usable_frames(edge_tolerance_mm=5.0, loading_n_workers=8)
+    recording.predict_keypoints3d(loading_n_workers=8)
     # recording.solve_inverse_kinematics()
-    recording.keypoints3d_predicted = True  # TODO: remove
+    # recording.keypoints3d_predicted = True  # TODO: remove
     recording.visualize_keypoints3d()
-    # recording.predict_body_segmentation(loading_n_workers=8)
-    # recording.visualize_bodyseg_predictions()
+    recording.predict_body_segmentation(loading_n_workers=8)
+    recording.visualize_bodyseg_predictions()

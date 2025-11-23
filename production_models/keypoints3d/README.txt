@@ -1,1 +1,0 @@
-production_checkpoint_v1.pth is copied from bulk_data/pose_estimation/keypoints3d/trial_20251102a/checkpoints/epoch28_step9167.model.pth

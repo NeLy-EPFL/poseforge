@@ -1,5 +1,5 @@
 flip_detection:
-  checkpoint: "~/projects/poseforge/production_models/flip_detection/production_checkpoint_v1.pth"
+  checkpoint: "~/projects/poseforge/production_models/flip_detection/v1/production_checkpoint_v1.pth"
   working_size: 224
   init_params:
     input_channels: 1
@@ -7,8 +7,8 @@ flip_detection:
   output_labels: ["not_flipped", "flipped"]
 
 bodyseg:
-  checkpoint: "~/projects/poseforge/production_models/bodyseg/production_checkpoint_v1.pth"
-  architecture_config: "~/projects/poseforge/production_models/bodyseg/configs/model_architecture_config.yaml"
+  checkpoint: "~/projects/poseforge/production_models/bodyseg/v2/production_checkpoint.model.pth"
+  architecture_config: "~/projects/poseforge/production_models/bodyseg/v2/configs/model_architecture_config.yaml"
   working_size: 256
   n_classes: 29
   output_labels: [
@@ -23,8 +23,8 @@ bodyseg:
   ]
 
 keypoints3d:
-  checkpoint: "~/projects/poseforge/production_models/keypoints3d/production_checkpoint_v1.pth"
-  architecture_config: "~/projects/poseforge/production_models/keypoints3d/configs/model_architecture_config.yaml"
+  checkpoint: "~/projects/poseforge/production_models/keypoints3d/v2/production_checkpoint.model.pth"
+  architecture_config: "~/projects/poseforge/production_models/keypoints3d/v2/configs/model_architecture_config.yaml"
   working_size: 256
   n_keypoints: -1
   keypoint_names: [
