@@ -41,10 +41,10 @@ dependencies = [
     "filelock>=3.20.0,<4",
     "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
     "loguru==0.7.*",
-    "parallel-matplotlib-animation==0.1.1",
     # The following should be installed manually (pip install -e .):
     # flygym & dm_control
     # parallel-video-io
+    # parallel-matplotlib-animation
     # seqikpy
     # spotlight-tools
     # contrastive-unpaired-translation

@@ -1638,25 +1638,6 @@ test = ["hypothesis (>=6.46.1)", "pytest (>=7.3.2)", "pytest-xdist (>=2.2.0)"]
 xml = ["lxml (>=4.9.2)"]
 
 [[package]]
-name = "parallel-matplotlib-animation"
-version = "0.1.1"
-description = "Animate matplotlib figures into videos, in parallel but with efficient caching"
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "parallel_matplotlib_animation-0.1.1-py3-none-any.whl", hash = "sha256:83fa11dcbaf1b94ba97ed0469fe6a8cb73895eea99a398a6fc1bd56f725977ac"},
-    {file = "parallel_matplotlib_animation-0.1.1.tar.gz", hash = "sha256:c184b9bafa06071b15f2cb8feb8b87975d4cbb59e50c5738ed1af356c52c77dd"},
-]
-
-[package.dependencies]
-av = ">=14.0"
-matplotlib = ">=3.10.0"
-numpy = ">=2,<3"
-Pillow = ">=11.0"
-tqdm = ">=4.67"
-
-[[package]]
 name = "pillow"
 version = "11.3.0"
 description = "Python Imaging Library (Fork)"
@@ -3041,4 +3022,4 @@ dev = ["black (>=19.3b0) ; python_version >= \"3.6\"", "pytest (>=4.6.2)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "24be164423b17d2e209dcd54608d85a909f4db303234132ac8137d3da9d9c8d0"
+content-hash = "6b6d3ec0385494898f80d1d821a1b48f1bfca0f081be0600d583487e664119cb"
