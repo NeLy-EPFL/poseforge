@@ -19,7 +19,7 @@ logger.info(f"Using model configurations from {model_config_path}")
 
 # Specify recordings to process
 spotlight_data_basedir = Path("~/data/spotlight/").expanduser()
-spotlight_recording_dirs = spotlight_data_basedir.glob("20250613-fly1b-*")
+spotlight_recording_dirs = sorted(spotlight_data_basedir.glob("20250613-fly1b-*"))
 
 # Process each recording
 for trial_dir in spotlight_recording_dirs:
