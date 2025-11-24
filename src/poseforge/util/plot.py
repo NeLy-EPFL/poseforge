@@ -1,7 +1,6 @@
 import matplotlib
 import logging
 from matplotlib import pyplot as plt
-from cycler import cycler  # this is already a dependency of matplotlib
 from distinctipy import get_colors
 
 

@@ -118,7 +118,8 @@ class Pose2p5DPipeline:
                     # Check if float16 is used
                     if epoch_idx == 0 and step_idx == 0:
                         self._check_amp_status_for_model_params(
-                            grad_scaler, subtitle="Model parameters at start of training"
+                            grad_scaler,
+                            subtitle="Model parameters at start of training",
                         )
                         self._check_amp_status_during_training(
                             pred_dict,
@@ -302,6 +303,7 @@ class Pose2p5DPipeline:
             {
                 "params": list(
                     chain(
+                        self.model.dec_layer1.parameters(),
                         self.model.dec_layer2.parameters(),
                         self.model.dec_layer3.parameters(),
                         self.model.dec_layer4.parameters(),

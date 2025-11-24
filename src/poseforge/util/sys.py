@@ -4,8 +4,9 @@ import numpy as np
 import os
 import gc
 import logging
-import colorlog
-import psutil
+import sys
+from loguru import logger
+from psutil import Process
 from typing import Iterator, Any
 
 
@@ -35,7 +36,7 @@ def set_random_seed(seed: int = 42) -> None:
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     torch.use_deterministic_algorithms(True, warn_only=True)
 
-    logging.info(f"Random seed set to {seed} for reproducible results")
+    logger.info(f"Random seed set to {seed} for reproducible results")
 
 
 def get_hardware_availability(
@@ -44,7 +45,7 @@ def get_hardware_availability(
     """Print available CPU and GPU cores"""
     res = {}
 
-    num_cpu_cores_available = len(psutil.Process().cpu_affinity())
+    num_cpu_cores_available = len(Process().cpu_affinity())
     num_cpu_cores_total = os.cpu_count()
     res["num_cpu_cores_available"] = num_cpu_cores_available
     res["num_cpu_cores_total"] = num_cpu_cores_total
@@ -75,17 +76,14 @@ def get_hardware_availability(
     return res
 
 
-def clear_memory_cache(logging_level=logging.DEBUG):
+def clear_memory_cache():
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         # Log current GPU memory usage
         allocated = torch.cuda.memory_allocated() / 1000**3  # GB
         cached = torch.cuda.memory_reserved() / 1000**3  # GB
-        logging.log(
-            logging_level,
-            f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached",
-        )
+        logger.info(f"GPU memory: {allocated:.2f}GB allocated, {cached:.2f}GB cached")
 
 
 def check_mixed_precision_status(
@@ -142,47 +140,41 @@ def check_mixed_precision_status(
     return status
 
 
-def setup_logger(name=None, level="warning") -> logging.Logger:
+def set_loguru_level(level: str) -> None:
+    """Set the logging level for loguru logger and intercept standard logging."""
+    # Remove existing loguru handlers
+    logger.remove()
+
+    # Add loguru handler with your desired level
+    logger.add(sink=sys.stderr, level=level)
+
+    # Silence info or less from matplotlib font manager and fontTools subset (from the normal logging module)
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("fontTools").setLevel(logging.WARNING)
+
+    # Intercept standard logging and redirect to loguru
+    logging.basicConfig(handlers=[InterceptHandler()], level=level.upper(), force=True)
+
+
+class InterceptHandler(logging.Handler):
     """
-    Set up and return a colorized logger.
-
-    Args:
-        name (str): Optional logger name. Defaults to root logger.
-        level (str or enum): Logging level (e.g. "info", "debug",
-            "warning") or logging constant (e.g. logging.INFO etc.).
-
-    Returns:
-        logging.Logger: Configured logger instance.
+    Handler that intercepts standard logging calls and redirects them to loguru.
     """
-    # Convert string level to logging constant if needed
-    if isinstance(level, str):
-        level = level.upper()
-        if not hasattr(logging, level):
-            raise ValueError(f"Invalid log level: {level}")
-        level = getattr(logging, level)
 
-    handler = colorlog.StreamHandler()
-    handler.setFormatter(
-        colorlog.ColoredFormatter(
-            "%(log_color)s%(asctime)s - %(levelname)s - %(message)s",
-            datefmt="%H:%M:%S",
-            log_colors={
-                "DEBUG": "cyan",
-                "INFO": "green",
-                "WARNING": "yellow",
-                "ERROR": "red",
-                "CRITICAL": "bold_red",
-            },
+    def emit(self, record: logging.LogRecord) -> None:
+        # Get corresponding Loguru level if it exists
+        level: str | int
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Find caller from where the logged message originated
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
         )
-    )
-
-    logger = colorlog.getLogger(name)
-    logger.setLevel(level)
-
-    # Avoid duplicate handlers if setup_logger() is called multiple times
-    if not logger.handlers:
-        logger.addHandler(handler)
-
-    logger.propagate = False
-
-    return logger

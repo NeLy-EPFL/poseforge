@@ -4,6 +4,7 @@ matplotlib.use("Agg")
 
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 import logging
 import cmasher
 import imageio.v2 as imageio
@@ -11,7 +12,7 @@ import time
 from PIL import Image
 from pathlib import Path
 from joblib import Parallel, delayed
-from pvio.video_io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video
 
 from poseforge.util.plot import configure_matplotlib_style
 from poseforge.neuromechfly.constants import kchain_plotting_colors
@@ -1041,3 +1042,55 @@ def render_frames_sequential(
 
     plt.close(fig)
     print("Frame rendering completed!")
+
+
+def visualize_leg_segment_lengths(
+    leg_segment_lengths_over_time: dict[str, np.ndarray],
+    average_leg_segment_lengths: dict[str, float],
+    output_dir: Path | str,
+) -> None:
+    fig_ts, axs_ts = plt.subplots(3, 2, figsize=(12, 12), tight_layout=True)
+    fig_distr, axs_distr = plt.subplots(3, 2, figsize=(12, 12), tight_layout=True)
+
+    for col, side in enumerate("LR"):
+        for row, pos in enumerate("FMH"):
+            ax_ts = axs_ts[row, col]
+            ax_distr = axs_distr[row, col]
+            for i, seg_name in enumerate(["Coxa", "Femur", "Tibia", "Tarsus"]):
+                leg = f"{side}{pos}"
+                segment_key = f"{leg}_{seg_name}"
+                lengths = leg_segment_lengths_over_time[segment_key]
+                color = f"C{i}"
+
+                # Draw variations of segment lengths over time
+                ax_ts.plot(lengths, label=seg_name, color=color)
+                ax_ts.axhline(
+                    average_leg_segment_lengths[segment_key],
+                    color=color,
+                    linestyle="--",
+                )
+
+                # Draw distribution of segment lengths
+                sns.kdeplot(
+                    lengths, ax=ax_distr, label=seg_name, fill=False, color=color
+                )
+                ax_distr.axvline(
+                    average_leg_segment_lengths[segment_key],
+                    color=color,
+                    linestyle="--",
+                )
+
+            ax_ts.set_title(f"{leg} Leg Segment Lengths Over Time")
+            ax_ts.set_xlabel("Frame")
+            ax_ts.set_ylabel("Length")
+            ax_ts.legend()
+
+            ax_distr.set_title(f"{leg} Leg Segment Length Distribution")
+            ax_distr.set_xlabel("Length")
+            ax_distr.set_ylabel("Density")
+            ax_distr.legend()
+
+    fig_ts.savefig(Path(output_dir) / "leg_segment_lengths_over_time.pdf")
+    fig_distr.savefig(Path(output_dir) / "leg_segment_length_distributions.pdf")
+    plt.close(fig_ts)
+    plt.close(fig_distr)

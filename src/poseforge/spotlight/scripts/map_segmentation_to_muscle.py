@@ -25,7 +25,7 @@ if __name__ == "__main__":
         spotlight_trial = spotlight_dir.stem
         bodyseg_output_path = (
             bodyseg_model_dir
-            / f"inference/{spotlight_trial}_model_prediction_not_flipped/bodyseg_pred.h5"
+            / f"production/epoch13_step18335/{spotlight_trial}_model_prediction_not_flipped/bodyseg_pred.h5"
         )
         cropped_behavior_dir = (
             cropped_behavior_basedir / spotlight_trial / "model_prediction/not_flipped"
@@ -35,11 +35,11 @@ if __name__ == "__main__":
         debug_plots_dir = muscle_traces_dir / "muscle_mapping_debug_plots"
         keypoints3d_prediction_path = (
             keypoints3d_model_dir
-            / f"production/epoch14/{spotlight_trial}/keypoints3d.h5"
+            / f"production/epoch14_step9167/{spotlight_trial}/keypoints3d.h5"
         )
         inverse_kinematics_data_path = (
             keypoints3d_model_dir
-            / f"production/epoch14/{spotlight_trial}/inverse_kinematics.h5"
+            / f"production/epoch14_step9167/{spotlight_trial}/inverse_kinematics.h5"
         )
 
         skipped_trials = []

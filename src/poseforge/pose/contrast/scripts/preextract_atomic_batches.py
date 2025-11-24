@@ -157,6 +157,9 @@ def extract_atomic_batches(
     def process_batch(batch_idx: int):
         frames, labels = sampler[batch_idx]
         # Split into multiple atomic batches if n_variants > atomic_batch_nvariants_max
+        # We need to roll the variants evenly in order to make sure each atomic batch
+        # evenly samples from all variants
+        frames = frames.roll(shifts=batch_idx % sampler.n_variants, dims=0)
         for atomic_batch_group_idx in range(n_atomic_batches_per_batch):
             variant_idx_start = atomic_batch_group_idx * atomic_batch_nvariants_max
             variant_idx_end = (atomic_batch_group_idx + 1) * atomic_batch_nvariants_max

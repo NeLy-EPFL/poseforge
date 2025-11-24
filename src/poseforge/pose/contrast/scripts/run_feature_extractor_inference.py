@@ -214,7 +214,7 @@ if __name__ == "__main__":
     # )
 
     # Example call using function directly (no CLI)
-    training_stages = ["untrained", "epoch000_step002000"]
+    training_stages = ["untrained", "epoch009_step003055"]
     style_transfer_models = [
         "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
         "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200",
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005/segment_003"
     ]
     pretraining_model_dir = (
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251011a/"
+        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251117a/"
     )
     batch_size = 1024
     run_feature_extractor_inference(

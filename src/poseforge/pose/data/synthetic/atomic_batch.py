@@ -4,7 +4,7 @@ import h5py
 import logging
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from pvio.video_io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video
 
 from poseforge.util.sys import get_hardware_availability
 

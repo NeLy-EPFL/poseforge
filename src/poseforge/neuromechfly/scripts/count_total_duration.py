@@ -1,6 +1,6 @@
 from pathlib import Path
 from tqdm import tqdm
-from pvio.video_io import check_num_frames
+from pvio.io import check_num_frames
 
 
 if __name__ == "__main__":

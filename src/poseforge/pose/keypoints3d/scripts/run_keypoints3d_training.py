@@ -34,7 +34,7 @@ def _setup_loss_func(loss_config: config.LossConfig) -> Pose2p5DLoss:
 def train_keypoints3d_model(
     n_epochs: int,
     model_architecture_config: config.ModelArchitectureConfig,
-    model_weights_config: config.ModelWeightsConfig | None,
+    model_weights_config: config.ModelWeightsConfig,
     loss_config: config.LossConfig,
     training_data_config: config.TrainingDataConfig,
     optimizer_config: config.OptimizerConfig,
@@ -48,7 +48,6 @@ def train_keypoints3d_model(
         n_epochs: Number of epochs to train for.
         model_architecture_config: Configuration for model architecture.
         model_weights_config: Configuration for model weights to load.
-            If None, will initialize model weights randomly.
         loss_config: Configuration for loss function.
         training_data_config: Configuration for training and validation
             data.
@@ -135,7 +134,7 @@ if __name__ == "__main__":
     # )
     # optimizer_config = config.OptimizerConfig()
     # training_artifacts_config = config.TrainingArtifactsConfig(
-    #     output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20251013a/",
+    #     output_basedir="bulk_data/pose_estimation/keypoints3d/trial_20251102z/",
     #     logging_interval=100,
     #     checkpoint_interval=100,
     #     validation_interval=100,
