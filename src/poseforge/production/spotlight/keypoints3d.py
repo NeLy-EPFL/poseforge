@@ -177,7 +177,7 @@ def run_inverse_and_forward_kinematics(
         :, :, nmf_constants.physical_keypoints_mask, :
     ]
 
-    # Convert fwdkin output from (n_frames, n_legs, n_keypoints, 3) to the cannonical
+    # Convert fwdkin output from (n_frames, n_legs, n_keypoints, 3) to the canonical
     # (n_frames, n_keypoints, 3) format used elsewhere
     fwdkin_world_xyz_pre_align, fwdkin_keypoint_names = (
         invkin.fwdkin_world_xyz_append_antennae(

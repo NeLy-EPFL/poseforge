@@ -19,7 +19,7 @@ dependencies = [
     "pillow>=11.3,<12",
     "tqdm>=4.67,<5",
     # "flygym>=1.2.1,<2",  # TODO: make it compatible with python 3.13
-    # "dm_control==1.0.27",  # TODO: flygym requires one specific verison of dm_control- make sure they match!
+    # "dm_control==1.0.27",  # TODO: flygym requires one specific version of dm_control- make sure they match!
     "tyro==0.9.31",
     "wandb==0.21.1",
     "packaging>=25.0,<26",
