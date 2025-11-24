@@ -7,7 +7,6 @@ import logging
 import sys
 from loguru import logger
 from psutil import Process
-from sys import stderr
 from typing import Iterator, Any
 
 

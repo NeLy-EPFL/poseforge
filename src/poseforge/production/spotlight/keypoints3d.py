@@ -9,7 +9,6 @@ import numpy as np
 import torchvision.transforms as transforms
 import h5py
 import matplotlib.pyplot as plt
-from sys import stderr
 from collections import defaultdict
 from time import perf_counter
 from tqdm import tqdm

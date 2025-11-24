@@ -57,7 +57,7 @@ def detect_usable_frames(
     logger.info(
         f"Out of {len(df)} frames, {is_not_flipped.sum()} frames are not flipped, "
         f"{is_not_too_close.sum()} frames are not too close to edge, and "
-        f"{df['usable'].sum()} frames meet both criteria."
+        f"{df['usable'].sum()} frames meet both criteria. "
         f"Saved usable frames metadata to {usable_frames_output_path}"
     )
     return df
@@ -75,7 +75,7 @@ def _detect_flipped_frames(
 ) -> pd.DataFrame:
     # Set up flip detection model
     logger.info("Setting up flip detection model")
-    model = flip_detection.model.FlipDetectionCNN(
+    model = flip_detection.FlipDetectionCNN(
         **flip_detection_model_config["init_params"]
     )
     checkpoint_path = Path(flip_detection_model_config["checkpoint"]).expanduser()

@@ -488,8 +488,8 @@ def visualize_inverse_kinematics_comparison(
         invkin.fwdkin_world_xyz_append_antennae(
             fwdkin_world_xyz=forward_kinematics_world_xyz,
             rawpred_world_xyz=keypoints_pos_raw,
-            legs_ik=legs_ik,
-            leg_keypoints_canonical_ik=leg_keypoints_canonical_ik,
+            legs=legs_ik,
+            leg_keypoints_canonical=leg_keypoints_canonical_ik,
         )
     )
 
