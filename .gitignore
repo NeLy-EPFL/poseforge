@@ -406,7 +406,7 @@ $RECYCLE.BIN/
 bulk_data
 production_models/**
 !production_models/**/
-!production_models/**/README.txt
+!production_models/**/README.md
 logs/
 wandb/
 *.mp4
