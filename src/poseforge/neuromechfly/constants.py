@@ -38,6 +38,18 @@ keypoint_segments_nmf = [
     f"{leg}{link}" for leg in legs for link in leg_keypoints_nmf
 ] + ["LPedicel", "RPedicel"]
 
+all_segment_names_per_leg = [
+    "Coxa",
+    "Femur",
+    "Tibia",
+    "Tarsus1",
+    "Tarsus2",
+    "Tarsus3",
+    "Tarsus4",
+    "Tarsus5",
+]
+
+
 kchain_plotting_colors = {
     "LF": np.array([15, 115, 153]) / 255,
     "LM": np.array([26, 141, 175]) / 255,
