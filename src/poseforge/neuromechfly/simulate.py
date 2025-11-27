@@ -13,39 +13,12 @@ from flygym.arena import BaseArena, FlatTerrain
 from flygym.preprogrammed import all_leg_dofs
 
 from poseforge.neuromechfly.data import interpolate_trajectories
-from poseforge.neuromechfly.constants import parse_nmf_joint_name
-
-
-# Define color combo by body segment
-color_by_link = {
-    "Coxa": "cyan",
-    "Femur": "yellow",
-    "Tibia": "blue",
-    "Tarsus": "green",
-    "Antenna": "magenta",
-    "Thorax": "gray",
-}
-color_by_kinematic_chain = {
-    "LF": "red",  # left front leg
-    "LM": "green",  # left mid leg
-    "LH": "blue",  # left hind leg
-    "RF": "cyan",  # right front leg
-    "RM": "magenta",  # right mid leg
-    "RH": "yellow",  # right hind leg
-    "L": "red",  # left antenna
-    "R": "green",  # right antenna
-    "Thorax": "white",  # thorax
-}
-color_palette = {
-    "red": (1, 0, 0, 1),
-    "green": (0, 1, 0, 1),
-    "blue": (0, 0, 1, 1),
-    "yellow": (1, 1, 0, 1),
-    "magenta": (1, 0, 1, 1),
-    "cyan": (0, 1, 1, 1),
-    "gray": (0.4, 0.4, 0.4, 1),
-    "white": (1, 1, 1, 1),
-}
+from poseforge.neuromechfly.constants import (
+    parse_nmf_joint_name,
+    color_by_link,
+    color_by_kinematic_chain,
+    color_palette,
+)
 
 
 class SpotlightArena(FlatTerrain):

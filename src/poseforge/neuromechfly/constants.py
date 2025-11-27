@@ -1,6 +1,10 @@
 import numpy as np
 
 
+###########################################################################
+##  NEUROMECHFLY BODY CONFIGURATION BELOW                                ##
+###########################################################################
+
 dof_name_lookup_nmf_to_canonical = {
     "Coxa": "ThC_pitch",
     "Coxa_roll": "ThC_roll",
@@ -49,8 +53,22 @@ all_segment_names_per_leg = [
     "Tarsus5",
 ]
 
+all_leg_dofs = [
+    f"joint_{side}{pos}{dof}"
+    for side in "LR"
+    for pos in "FMH"
+    for dof in [
+        "Coxa",
+        "Coxa_roll",
+        "Coxa_yaw",
+        "Femur",
+        "Femur_roll",
+        "Tibia",
+        "Tarsus1",
+    ]
+]
 
-kchain_plotting_colors = {
+kchain_plotting_colors = {  # these are only for plotting aesthetics
     "LF": np.array([15, 115, 153]) / 255,
     "LM": np.array([26, 141, 175]) / 255,
     "LH": np.array([117, 190, 203]) / 255,
@@ -60,6 +78,49 @@ kchain_plotting_colors = {
     "LAntenna": np.array([50, 120, 32]) / 255,
     "RAntenna": np.array([50, 120, 32]) / 255,
 }
+
+
+###########################################################################
+##  COLORS FOR BODY SEGMENT RENDERING BELOW                              ##
+##  These are set to artificially boost contrast between body segments   ##
+##  -- they are NOT just for aesthetics!                                 ##
+###########################################################################
+
+# Define color combo by body segment
+color_by_link = {
+    "Coxa": "cyan",
+    "Femur": "yellow",
+    "Tibia": "blue",
+    "Tarsus": "green",
+    "Antenna": "magenta",
+    "Thorax": "gray",
+}
+color_by_kinematic_chain = {
+    "LF": "red",  # left front leg
+    "LM": "green",  # left mid leg
+    "LH": "blue",  # left hind leg
+    "RF": "cyan",  # right front leg
+    "RM": "magenta",  # right mid leg
+    "RH": "yellow",  # right hind leg
+    "L": "red",  # left antenna
+    "R": "green",  # right antenna
+    "Thorax": "white",  # thorax
+}
+color_palette = {
+    "red": (1, 0, 0, 1),
+    "green": (0, 1, 0, 1),
+    "blue": (0, 0, 1, 1),
+    "yellow": (1, 1, 0, 1),
+    "magenta": (1, 0, 1, 1),
+    "cyan": (0, 1, 1, 1),
+    "gray": (0.4, 0.4, 0.4, 1),
+    "white": (1, 1, 1, 1),
+}
+
+
+###########################################################################
+##  PARAMETERS FOR INVERSE KINEMATICS WITH SEQIKPY BELOW                 ##
+###########################################################################
 
 # SeqIKPy considers the anchor point of every DoF a "joint" keypoint. However, some
 # anatomical joints have multiple DoFs (e.g., ThC has yaw, pitch, roll). This results in
