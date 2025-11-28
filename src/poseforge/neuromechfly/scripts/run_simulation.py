@@ -144,7 +144,7 @@ def simulate_using_kinematic_prior(
         #     min_sim_duration_sec=0.2,
         #     max_sim_steps=max_sim_steps_per_segment,
         # )
-        is_success = True
+        is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
             postprocess_segment(
                 output_subdir, visualize=False, min_subsegment_duration_sec=0.1  # TODO: enable visualization
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
-    # tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
+    tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
 
-    # # Run everything sequentially (for debugging)  # TODO: disable testing
-    run_sequentially_for_testing()
+    # Run everything sequentially (for debugging)  # TODO: disable testing
+    # run_sequentially_for_testing()
