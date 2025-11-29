@@ -11,14 +11,7 @@ from pathlib import Path
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-import poseforge.neuromechfly.simulate as simulate
-from poseforge.neuromechfly.constants import (
-    keypoint_name_lookup_canonical_to_nmf,
-    kchain_plotting_colors,
-    keypoint_segments_nmf,
-    legs,
-    leg_keypoints_canonical,
-)
+import poseforge.neuromechfly.constants as constants
 from poseforge.util.plot import (
     configure_matplotlib_style,
     get_segmentation_color_palette,
@@ -65,8 +58,10 @@ class SegmentLabelParser:
             for pos in "FMH":
                 for link in leg_segments:
                     leg = f"{side}{pos}"
-                    color0 = nmf_rendered_colors[simulate.color_by_link[link]]
-                    color1 = nmf_rendered_colors[simulate.color_by_kinematic_chain[leg]]
+                    color0 = nmf_rendered_colors[constants.color_by_link[link]]
+                    color1 = nmf_rendered_colors[
+                        constants.color_by_kinematic_chain[leg]
+                    ]
                     color_6d = np.array(list(color0) + list(color1))
                     label = f"{leg}{link}"
                     self.label_keys.append(label)
@@ -74,8 +69,8 @@ class SegmentLabelParser:
 
         # Antennas
         for side in "LR":
-            color0 = nmf_rendered_colors[simulate.color_by_link["Antenna"]]
-            color1 = nmf_rendered_colors[simulate.color_by_kinematic_chain[side]]
+            color0 = nmf_rendered_colors[constants.color_by_link["Antenna"]]
+            color1 = nmf_rendered_colors[constants.color_by_kinematic_chain[side]]
             color_6d = np.array(list(color0) + list(color1))
             label = f"{side}Antenna"
             self.label_keys.append(label)
@@ -288,7 +283,7 @@ def process_single_frame(
         # Gather keypoint positions in coordinates and rotate/center-crop accordingly
         keypoints_pos_dict_world_raw, keypoints_pos_dict_camera_raw = (
             extract_body_segment_positions(
-                h5_file, frame_idx, "pos_atparent", keypoint_segments_nmf
+                h5_file, frame_idx, "pos_atparent", constants.keypoint_segments_nmf
             )
         )
         keypoints_pos_dict_world_rotated = rotate_keypoint_positions_world(
@@ -352,8 +347,7 @@ def process_subsegment(
                 segment_label_parser,
             )
         )
-
-    # Process frames in parallel
+    # Parallel execution with joblib
     # Use 'loky' backend for CPU-intensive image processing operations
     parallel_executor = Parallel(n_jobs=n_jobs, backend="loky")
     effective_n_jobs = parallel_executor._effective_n_jobs()
@@ -446,9 +440,10 @@ def process_subsegment(
             keypoint_pos_group = postprocessed_group.create_group("keypoint_pos")
             for ref_frame in ["camera", "world"]:
                 data_block = np.empty(
-                    (num_frames, len(keypoint_segments_nmf), 3), dtype="float32"
+                    (num_frames, len(constants.keypoint_segments_nmf), 3),
+                    dtype="float32",
                 )
-                for seg_id, body_segment in enumerate(keypoint_segments_nmf):
+                for seg_id, body_segment in enumerate(constants.keypoint_segments_nmf):
                     key = f"keypoint_pos_{ref_frame}_{body_segment}"
                     values = np.array(derived_variables_by_key[key])
                     data_block[:, seg_id, :] = values
@@ -456,13 +451,13 @@ def process_subsegment(
                 pos_ds = keypoint_pos_group.create_dataset(
                     f"{ref_frame}_coords", data=data_block, dtype="float32"
                 )
-                pos_ds.attrs["keys"] = keypoint_segments_nmf
+                pos_ds.attrs["keys"] = constants.keypoint_segments_nmf
                 pos_ds.attrs["description"] = (
                     f"Keypoint positions in {ref_frame} coordinates. Shape is "
                     "(num_frames, num_keypoints, 3). See the `.attrs['keys']` for the "
                     "order of keypoints."
                 )
-            keypoint_pos_group.attrs["keys"] = keypoint_segments_nmf
+            keypoint_pos_group.attrs["keys"] = constants.keypoint_segments_nmf
             keypoint_pos_group.attrs["description"] = (
                 "This group contains positions of joint keypoints in the rotated image "
                 "centered around the fly, cropped, and rotated so that the fly faces "
@@ -492,6 +487,17 @@ def process_subsegment(
                 "for the mapping from label IDs (pixel values) to body segment names."
             )
 
+            # Add mesh state labels
+            seg_states_grp = postprocessed_group.create_group("body_segment_states")
+            seg_states_grp.attrs.update(source_h5_file["body_segment_states"].attrs)
+            for sensor_type in source_h5_file["body_segment_states"].keys():
+                source_ds = source_h5_file["body_segment_states"][sensor_type]
+                seg_states_grp.create_dataset(
+                    sensor_type,
+                    data=source_ds[frame_idx_start:frame_idx_end, :, :],
+                    dtype="float32",
+                )
+
 
 def _draw_pose_2d_and_3d(
     ax_pose2d: plt.Axes,
@@ -518,11 +524,11 @@ def _draw_pose_2d_and_3d(
         # Legs
         keypoint_pos_cam_ds = h5_file["postprocessed/keypoint_pos/camera_coords"]
         keypoints = keypoint_pos_cam_ds.attrs["keys"].tolist()
-        for leg in legs:
-            color = kchain_plotting_colors[leg]
+        for leg in constants.legs:
+            color = constants.kchain_plotting_colors[leg]
             all_positions = []
-            for kpt in leg_keypoints_canonical:
-                segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
+            for kpt in constants.leg_keypoints_canonical:
+                segment_name = constants.keypoint_name_lookup_canonical_to_nmf[kpt]
                 keypoint_idx = keypoints.index(f"{leg}{segment_name}")
                 pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
                 all_positions.append(pos)
@@ -535,17 +541,17 @@ def _draw_pose_2d_and_3d(
             segment_name = f"{side}Pedicel"
             keypoint_idx = keypoints.index(segment_name)
             pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
-            color = kchain_plotting_colors[f"{side}Antenna"]
+            color = constants.kchain_plotting_colors[f"{side}Antenna"]
             ax_pose2d.plot(pos[0], pos[1], marker="o", color=color, markersize=5)
 
         # Plot 3D keypoints
         keypoint_pos_world_ds = h5_file["postprocessed/keypoint_pos/world_coords"]
         # Legs
-        for leg in legs:
-            color = kchain_plotting_colors[leg]
+        for leg in constants.legs:
+            color = constants.kchain_plotting_colors[leg]
             all_positions = []
-            for kpt in leg_keypoints_canonical:
-                segment_name = keypoint_name_lookup_canonical_to_nmf[kpt]
+            for kpt in constants.leg_keypoints_canonical:
+                segment_name = constants.keypoint_name_lookup_canonical_to_nmf[kpt]
                 keypoint_idx = keypoints.index(f"{leg}{segment_name}")
                 pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
                 all_positions.append(pos)
@@ -563,7 +569,7 @@ def _draw_pose_2d_and_3d(
             segment_name = f"{side}Pedicel"
             keypoint_idx = keypoints.index(segment_name)
             pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
-            color = kchain_plotting_colors[f"{side}Antenna"]
+            color = constants.kchain_plotting_colors[f"{side}Antenna"]
             ax_pose3d.plot(
                 pos[0], pos[1], pos[2], marker="o", color=color, markersize=5
             )
