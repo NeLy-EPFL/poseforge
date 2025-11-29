@@ -5,11 +5,11 @@
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
 #SBATCH --mem 90GB
-#SBATCH --time 48:00:00
+#SBATCH --time 72:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251117a.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251125b_2variants.log
 
 echo "Hello from $(hostname)"
 
@@ -20,7 +20,7 @@ conda activate poseforge
 cd $HOME/poseforge
 echo "Training starting at $(date)"
 
-trial_name="trial_20251117a"
+trial_name="trial_20251125b_2variants"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
@@ -53,7 +53,7 @@ python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --training-data-config.val-data-dirs \
         "bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001" \
     --training-data-config.atomic-batch-n-samples 32 \
-    --training-data-config.atomic-batch-n-variants 4 \
+    --training-data-config.atomic-batch-n-variants 2 \
     --training-data-config.train-batch-size 960 \
     --training-data-config.val-batch-size 256 \
     --training-data-config.image-size 256 256 \
