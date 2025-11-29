@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from flygym.preprogrammed import all_leg_dofs
 
-from poseforge.neuromechfly.constants import parse_nmf_joint_name
+from poseforge.neuromechfly.constants import (
+    parse_nmf_joint_name, 
+    all_leg_dofs
+)
 
 
 def extract_joint_angles_trajectory(
