@@ -53,7 +53,7 @@ Pipeline:
 from pathlib import Path
 
 from poseforge.neuromechfly.data import load_kinematic_recording
-from poseforge.neuromechfly.simulate import simulate_one_segment
+# from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
 from poseforge.neuromechfly.postprocessing import postprocess_segment
 from poseforge.util import get_hardware_availability
 
@@ -134,19 +134,20 @@ def simulate_using_kinematic_prior(
         print(f"=== Simulating segment #{segment_id} ({num_segments} total) ===")
         segment = kinematic_recording_segments[segment_id]
         output_subdir = trial_output_dir / f"segment_{segment_id:03d}"
-        is_success = simulate_one_segment(
-            kinematic_recording_segment=segment,
-            output_dir=output_subdir,
-            input_timestep=input_timestep,
-            sim_timestep=sim_timestep,
-            output_data_freq=output_data_freq,
-            render_play_speed=render_play_speed,
-            min_sim_duration_sec=0.2,
-            max_sim_steps=max_sim_steps_per_segment,
-        )
+        # is_success = simulate_one_segment(  # TODO: revert
+        #     kinematic_recording_segment=segment,
+        #     output_dir=output_subdir,
+        #     input_timestep=input_timestep,
+        #     sim_timestep=sim_timestep,
+        #     output_data_freq=output_data_freq,
+        #     render_play_speed=render_play_speed,
+        #     min_sim_duration_sec=0.2,
+        #     max_sim_steps=max_sim_steps_per_segment,
+        # )
+        is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
             postprocess_segment(
-                output_subdir, visualize=True, min_subsegment_duration_sec=0.1
+                output_subdir, visualize=False, min_subsegment_duration_sec=0.1  # TODO: enable visualization
             )
     print(f"### Done processing trial: {trial_name} ###")
 
@@ -154,19 +155,22 @@ def simulate_using_kinematic_prior(
 def run_sequentially_for_testing():
     """Run everything sequentially (for debugging)"""
     # Configs
-    output_basedir = Path("bulk_data/nmf_rendering_test/")
+    output_basedir = Path("bulk_data/nmf_rendering_new/")  # TODO: change back to *_test
     input_timestep = 0.01
     sim_timestep = 0.0001
-    trial_paths = [
-        # For testing: change this list to limit the scope
-        Path("bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl")
-    ]
+    # trial_paths = [
+    #     # For testing: change this list to limit the scope
+    #     Path("bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl")
+    # ]
+    trial_paths = sorted(  # TODO: revert
+        Path("bulk_data/kinematic_prior/aymanns2022/trials/").glob("*.pkl")
+    )
 
     # Limit scope of simulation as this is only for testing
     # Don't make `max_sim_steps_per_segment` too small; otherwise no subsegment-level
     # postprocessing will be performed
-    max_segments_per_trial = 2
-    max_sim_steps_per_segment = 3000
+    max_segments_per_trial = None  # 2  # TODO: revert
+    max_sim_steps_per_segment = None  # 3000  # TODO: revert
 
     # Process each trial
     for trial_path in trial_paths:
@@ -187,7 +191,7 @@ if __name__ == "__main__":
     get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
-    tyro.cli(simulate_using_kinematic_prior)
+    tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
 
-    # # Run everything sequentially (for debugging)
+    # Run everything sequentially (for debugging)  # TODO: disable testing
     # run_sequentially_for_testing()
