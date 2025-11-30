@@ -79,6 +79,11 @@ kchain_plotting_colors = {  # these are only for plotting aesthetics
     "RAntenna": np.array([50, 120, 32]) / 255,
 }
 
+segments_for_6dpose_per_leg = ["Coxa", "Femur", "Tibia", "Tarsus1"]
+segments_for_6dpose = [
+    f"{leg}{seg}" for leg in legs for seg in segments_for_6dpose_per_leg
+] + ["Thorax"]
+
 
 ###########################################################################
 ##  COLORS FOR BODY SEGMENT RENDERING BELOW                              ##

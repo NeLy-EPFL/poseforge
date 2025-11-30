@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Iterator
 from pvio.io import get_video_metadata, read_frames_from_video
 
+from poseforge.neuromechfly.constants import segments_for_6dpose
+
 
 class SimulatedDataSequence:
     def __init__(
@@ -119,7 +121,7 @@ class SimulatedDataSequence:
         *,
         load_dof_angles: bool = True,
         load_keypoint_pos: bool = True,
-        load_mesh_states: bool = False,
+        load_mesh_states: bool = True,
         load_body_seg_maps: bool = True,
     ) -> dict[str, np.ndarray]:
         self._check_frame_indices_validity(frame_indices)
@@ -143,10 +145,22 @@ class SimulatedDataSequence:
                 labels["keypoint_pos"] = keypoint_pos
 
             if load_mesh_states:
-                raise NotImplementedError(
-                    "Mesh states tracking (xyz + quat for 3D rotation) has not been "
-                    "implemented yet"
+                pose6d_grp = ds["body_segment_states"]
+                all_avail_segments = pose6d_grp.attrs["keys"]
+                # segment_indices_lookup = {
+                #     name: i for i, name in enumerate(all_avail_segments)
+                # }
+                # segment_indices = [
+                #     segment_indices_lookup[seg_name] for seg_name in segments_for_6dpose
+                # ]
+                seg_mask = np.array(
+                    [name in segments_for_6dpose for name in all_avail_segments]
                 )
+                # h5py only supports fancy indexing along one axis
+                mesh_pos = pose6d_grp["pos_global"][frame_indices, :, :]
+                labels["mesh_pos"] = mesh_pos[:, seg_mask, :]
+                mesh_quat = pose6d_grp["quat_global"][frame_indices, :, :]
+                labels["mesh_quat"] = mesh_quat[:, seg_mask, :]
 
             if load_body_seg_maps:
                 seg_labels_ds = ds["segmentation_labels"]
