@@ -95,6 +95,7 @@ def test_bodyseg_model(
             shuffle=True,
         )
         ds_probs.attrs["scale"] = 100  # transform from 0-1 to 0-100 for uint8 storage
+        ds_probs.attrs["class_labels"] = pipeline.class_labels
 
     # Inference loop
     log_interval = max(len(dataloader) // 10, 1)
