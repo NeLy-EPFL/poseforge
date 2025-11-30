@@ -497,6 +497,7 @@ def process_subsegment(
                     data=source_ds[frame_idx_start:frame_idx_end, :, :],
                     dtype="float32",
                 )
+            # ! TODO: Convert to camera coords here!
 
 
 def _draw_pose_2d_and_3d(

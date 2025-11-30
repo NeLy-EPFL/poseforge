@@ -8,6 +8,10 @@ from pvio.io import get_video_metadata, read_frames_from_video
 
 from poseforge.neuromechfly.constants import segments_for_6dpose
 
+# ! TODO Can be removed later
+from scipy.linalg import rq
+from scipy.spatial.transform import Rotation
+
 
 class SimulatedDataSequence:
     def __init__(
@@ -127,8 +131,8 @@ class SimulatedDataSequence:
         self._check_frame_indices_validity(frame_indices)
 
         labels = {}
-        with h5py.File(self.simulated_labels_path, "r") as ds:
-            ds = ds["postprocessed"]
+        with h5py.File(self.simulated_labels_path, "r") as f:
+            ds = f["postprocessed"]
 
             if load_dof_angles:
                 labels["dof_angles"] = ds["dof_angles"][frame_indices, :]
@@ -147,12 +151,6 @@ class SimulatedDataSequence:
             if load_mesh_states:
                 pose6d_grp = ds["body_segment_states"]
                 all_avail_segments = pose6d_grp.attrs["keys"]
-                # segment_indices_lookup = {
-                #     name: i for i, name in enumerate(all_avail_segments)
-                # }
-                # segment_indices = [
-                #     segment_indices_lookup[seg_name] for seg_name in segments_for_6dpose
-                # ]
                 seg_mask = np.array(
                     [name in segments_for_6dpose for name in all_avail_segments]
                 )
@@ -161,6 +159,39 @@ class SimulatedDataSequence:
                 labels["mesh_pos"] = mesh_pos[:, seg_mask, :]
                 mesh_quat = pose6d_grp["quat_global"][frame_indices, :, :]
                 labels["mesh_quat"] = mesh_quat[:, seg_mask, :]
+
+                # ! TODO: Move the following logic to neuromechfly.postprocess
+                frame_range_in_full_sim = ds.attrs["frame_indices_in_full_simulation"]
+                full_sim_frame_start, full_sim_frame_end = frame_range_in_full_sim
+                cam_matrices_all = f["raw/camera_matrix"][
+                    full_sim_frame_start:full_sim_frame_end, :, :
+                ]
+                assert cam_matrices_all.shape[0] == pose6d_grp["pos_global"].shape[0]
+                cam_matrices = cam_matrices_all[frame_indices, :, :]
+                assert cam_matrices.shape == (len(frame_indices), 3, 4)
+                for frame_idx in range(len(frame_indices)):
+                    cam_mat = cam_matrices[frame_idx, :, :]
+                    cam_intrinsics, cam_rotation = rq(cam_mat[:, :3])
+                    _sign_multiplier = np.diag(np.sign(np.diag(cam_intrinsics)))
+                    cam_intrinsics = cam_intrinsics @ _sign_multiplier
+                    cam_rotation = _sign_multiplier @ cam_rotation
+                    cam_translation = np.linalg.inv(cam_intrinsics) @ cam_mat[:, 3]
+                    # Ensure proper rotation matrix (det = 1)
+                    if np.linalg.det(cam_rotation) < 0:
+                        cam_rotation = -cam_rotation
+                        cam_intrinsics = -cam_intrinsics
+                    rot_world_to_cam = Rotation.from_matrix(cam_rotation)
+
+                    for seg_idx in range(seg_mask.sum()):
+                        glob_pos = labels["mesh_pos"][frame_idx, seg_idx, :]
+                        glob_quat = labels["mesh_quat"][frame_idx, seg_idx, :]
+                        pos_rel_cam = cam_rotation @ glob_pos + cam_translation
+                        rot_mesh = Rotation.from_quat(glob_quat, scalar_first=True)
+                        rot_rel_cam = rot_world_to_cam * rot_mesh
+                        quat_rel_cam = rot_rel_cam.as_quat(scalar_first=True)
+                        labels["mesh_pos"][frame_idx, seg_idx, :] = pos_rel_cam
+                        labels["mesh_quat"][frame_idx, seg_idx, :] = quat_rel_cam
+                # ! TODO end
 
             if load_body_seg_maps:
                 seg_labels_ds = ds["segmentation_labels"]
