@@ -1,5 +1,6 @@
 import torch
 import h5py
+from loguru import logger
 from pathlib import Path
 from torchvision.transforms import Resize
 from torchsummary import summary
@@ -9,18 +10,18 @@ from pvio.torch_tools import SimpleVideoCollectionLoader
 import poseforge.pose.bodyseg.config as config
 from poseforge.pose.bodyseg import BodySegmentationModel, BodySegmentationPipeline
 from poseforge.util.sys import get_hardware_availability
-from poseforge.util.data import OutputBuffer
 
 
 def test_bodyseg_model(
-    input_basedir: Path,
+    *,
+    input_dir: Path,
     model_dir: Path,
     model_checkpoint_path: Path,
+    save_prob: bool = False,
     output_basedir: Path | None = None,
     batch_size: int = 512,
     n_workers: int = 16,
     inference_image_size: tuple[int, int] = (256, 256),
-    output_buffer_log_interval: int = 10,
 ):
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
@@ -28,19 +29,21 @@ def test_bodyseg_model(
         raise RuntimeError("No GPU available for testing")
     torch.backends.cudnn.benchmark = True
 
-    # Find all trials to process
-    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
-    print(f"Found {len(list(input_trials))} trials to process")
-    input_trials = [trial for trial in input_trials if len(list(trial.iterdir())) > 0]
-    print(f"{len(input_trials)} trials have images to process")
-
     # Create dataset and dataloader
+    input_img_dir = input_dir / "model_prediction/not_flipped/"
+    if len(list(input_img_dir.iterdir())) == 0:
+        logger.warning(f"Trial {input_img_dir} is empty - skipping")
+        return
     transform = Resize(inference_image_size)
     dataloader = SimpleVideoCollectionLoader(
-        input_trials, transform=transform, batch_size=batch_size, num_workers=n_workers
+        [input_img_dir],
+        transform=transform,
+        batch_size=batch_size,
+        num_workers=n_workers,
     )
-    print(f"Found {len(dataloader.dataset)} frames to process")
-    print(
+    n_frames = len(dataloader.dataset)
+    logger.info(f"Found {n_frames} frames to process")
+    logger.info(
         f"Using batch size {dataloader.batch_size} with {dataloader.num_workers} "
         f"workers. This will generate {len(dataloader)} batches."
     )
@@ -55,105 +58,93 @@ def test_bodyseg_model(
     summary(model, (3, *inference_image_size))
     pipeline = BodySegmentationPipeline(model, device="cuda", use_float16=True)
 
-    # Make an output buffer - output data for multiple videos will arrive out of sync
-    def save_predictions(input_video_idx, data_items):
-        video_obj = dataloader.dataset.videos[input_video_idx]
-        input_video_path = video_obj.path
-        exp_trial_name = "_".join(input_video_path.parts[-3:])
-        out_dir = output_basedir / exp_trial_name
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with h5py.File(out_dir / f"bodyseg_pred.h5", "w") as f:
-            pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset(
-                "pred_segmap",
-                data=pred_segmaps,
-                dtype="uint8",
-                compression="gzip",
-                shuffle=True,
-            )
-            ds.attrs["class_labels"] = pipeline.class_labels
-            confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset(
-                "pred_confidence",
-                data=confs,
-                dtype="uint8",
-                compression="gzip",
-                shuffle=True,
-            )
-            # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
-            ds.attrs["scale"] = 100
-            ds.attrs["method"] = model.confidence_method
-            frame_ids = [
-                int(p.stem.split("_")[1])
-                for p in video_obj.phy_frame_id_to_path.values()
-            ]
-            # These are the actual, raw frame IDs from the original video assigned by
-            # the Spotlight recording software. They may not be contiguous because
-            # frames where the fly is upside down or too close to the edge, etc. are
-            # already removed.
-            f.create_dataset(
-                "frame_ids",
-                data=frame_ids,
-                dtype="int",
-                compression="gzip",
-                shuffle=True,
-            )
-
-    buckets_and_sizes = {
-        i: n_frames for i, n_frames in enumerate(dataloader.dataset.n_frames_by_video)
-    }
-    output_buffer = OutputBuffer(
-        buckets_and_expected_sizes=buckets_and_sizes,
-        closing_func=save_predictions,
+    # Set up output H5 files
+    exp_trial_name = input_img_dir.parts[-3]
+    out_dir = output_basedir / exp_trial_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    f_pred = h5py.File(out_dir / f"bodyseg_pred.h5", "w")
+    f_prob = h5py.File(out_dir / f"bodyseg_prob.h5", "w") if save_prob else None
+    ds_segmap = f_pred.create_dataset(
+        "pred_segmap",
+        shape=(n_frames, inference_image_size[0], inference_image_size[1]),
+        dtype="uint8",
+        compression="gzip",
+        shuffle=True,
     )
+    ds_segmap.attrs["class_labels"] = pipeline.class_labels
+    ds_conf = f_pred.create_dataset(
+        "pred_confidence",
+        shape=(n_frames, inference_image_size[0], inference_image_size[1]),
+        dtype="uint8",
+        compression="gzip",
+        shuffle=True,
+    )
+    ds_conf.attrs["scale"] = 100  # transform from 0-1 to 0-100 for uint8 storage
+    ds_conf.attrs["method"] = model.confidence_method
+    if save_prob:
+        ds_probs = f_prob.create_dataset(
+            "pred_probabilities",
+            shape=(
+                n_frames,
+                model.n_classes,
+                inference_image_size[0],
+                inference_image_size[1],
+            ),
+            dtype="uint8",
+            compression="gzip",
+            shuffle=True,
+        )
+        ds_probs.attrs["scale"] = 100  # transform from 0-1 to 0-100 for uint8 storage
 
-    # Run inference
+    # Inference loop
+    log_interval = max(len(dataloader) // 10, 1)
     for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
-        # No need to move data to and from the GPU, pipeline will do that
+        # Forward pass (no need to move data to and from the GPU; pipeline will do that)
         pred_dict = pipeline.inference(batch["frames"])
         logits = pred_dict["logits"]
+
+        # Save outputs
+        frame_ids = batch["frame_indices"]
         pred_seg = torch.argmax(logits, dim=1).to(torch.uint8).detach().cpu()
-        confidence = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
+        conf = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
+        ds_segmap[frame_ids, :, :] = pred_seg.numpy()
+        ds_conf[frame_ids, :, :] = conf.numpy()
+        if save_prob:
+            prob = (torch.softmax(logits, dim=1) * 100).to(torch.uint8).detach().cpu()
+            ds_probs[frame_ids, :, :, :] = prob.numpy()
 
-        for i in range(logits.shape[0]):
-            data_item = (pred_seg[i, :, :], confidence[i, :, :])
-            output_buffer.add_data(
-                bucket=batch["video_indices"][i],
-                index=batch["frame_indices"][i],
-                data=data_item,
-            )
-        if (batch_idx + 1) % output_buffer_log_interval == 0:
-            print(
-                f"{batch_idx + 1}/{len(dataloader)} batches - "
-                f"{output_buffer.n_open_buckets} partially processed videos, "
-                f"{output_buffer.n_data_total} total frames in buffer"
-            )
+        if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == len(dataloader):
+            logger.info(f"Processed batch {batch_idx + 1} / {len(dataloader)}")
 
-    assert output_buffer.n_data_total == 0
-    assert output_buffer.n_open_buckets == 0
-    print("Inference complete")
+    logger.info("Inference complete")
 
 
 if __name__ == "__main__":
+    from poseforge.util.sys import set_loguru_level
+
+    set_loguru_level("INFO")
+
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251118a")
+    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251127a")
     batch_size = 192
     n_workers = 16
     inference_image_size = (256, 256)
     output_buffer_log_interval = 10
-    epoch = 14  # chosen by validation performance and visual inspection
-    step = 12000  # last step of each epoch
+    epoch = 8  # chosen by validation performance and visual inspection
+    step = 18335  # last step of each epoch
 
     model_checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
     output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
     output_basedir.mkdir(parents=True, exist_ok=True)
-    test_bodyseg_model(
-        input_basedir=input_basedir,
-        model_dir=model_dir,
-        model_checkpoint_path=model_checkpoint_path,
-        output_basedir=output_basedir,
-        batch_size=batch_size,
-        n_workers=n_workers,
-        inference_image_size=inference_image_size,
-        output_buffer_log_interval=output_buffer_log_interval,
-    )
+    for input_dir in sorted(input_basedir.iterdir()):
+        print(f"Processing {input_dir}")
+        test_bodyseg_model(
+            input_dir=input_dir,
+            model_dir=model_dir,
+            model_checkpoint_path=model_checkpoint_path,
+            output_basedir=output_basedir,
+            batch_size=batch_size,
+            n_workers=n_workers,
+            inference_image_size=inference_image_size,
+            save_prob=True,
+        )

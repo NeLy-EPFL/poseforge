@@ -223,13 +223,13 @@ if __name__ == "__main__":
     label_alpha = 0.3
     n_workers = -1
 
-    epoch = 14  # chosen by validation performance and visual inspection
-    step = 12000  # last step of each epoch
+    epoch = 8  # chosen by validation performance and visual inspection
+    step = 18335  # last step of each epoch
     pred_basedir = Path(
-        f"bulk_data/pose_estimation/bodyseg/trial_20251118a/production/epoch{epoch}_step{step}/"
+        f"bulk_data/pose_estimation/bodyseg/trial_20251127a/production/epoch{epoch}_step{step}/"
     )
-    pred_path = pred_basedir / f"{trial}_model_prediction_not_flipped/bodyseg_pred.h5"
-    output_path = pred_basedir / f"{trial}_model_prediction_not_flipped/viz.mp4"
+    pred_path = pred_basedir / f"{trial}/bodyseg_pred.h5"
+    output_path = pred_basedir / f"{trial}/viz.mp4"
 
     visualize_bodyseg_prediction(
         recording_dir=recording_dir,
