@@ -507,9 +507,9 @@ def visualize_predictions(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251118a")
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251127a")
     recordings = ["20250613-fly1b-002"]
-    epoch = 19  # these must be consistent with run_keypoints3d_inference.py
+    epoch = 15  # these must be consistent with run_keypoints3d_inference.py
     step = 9167  # same as above
 
     for recording in recordings:
