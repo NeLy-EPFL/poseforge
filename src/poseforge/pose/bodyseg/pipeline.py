@@ -98,7 +98,7 @@ class BodySegmentationPipeline:
         # Set up optimizer
         optimizer = self._create_optimizer(optimizer_config)
 
-        # Set up mixed-point training
+        # Set up mixed-precision training
         grad_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         self._check_amp_status_for_model_params(
             grad_scaler, subtitle="Model parameters before training"
@@ -118,10 +118,9 @@ class BodySegmentationPipeline:
             epoch_start_time = time()
             running_start_time = time()
 
-            for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
-                train_loader
-            ):
+            for step_idx, atomic_batches in enumerate(train_loader):
                 # Format data
+                atomic_batches_frames, atomic_batches_sim_data = atomic_batches
                 frames, sim_data = atomic_batches_to_simple_batch(
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
