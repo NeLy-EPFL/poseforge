@@ -374,7 +374,8 @@ def visualize_predictions(
     with h5py.File(inference_output_path, "r") as f:
         frame_ids = f["frame_ids"][:]
         # 3D world coordinates (n_frames, n_kp, 3)
-        # Upstream inference currently writes this as 'keypoints_world_xyz' in run_keypoints3d_inference
+        # Upstream inference currently writes this as 'keypoints_world_xyz' in
+        # run_inference_on_spotlight_data.py
         if "keypoints_pos" in f:
             keypoints_pos = f["keypoints_pos"][:]
             keypoints_order = list(f["keypoints_pos"].attrs["keypoints"])
@@ -509,7 +510,7 @@ if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
     model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251127a")
     recordings = ["20250613-fly1b-002"]
-    epoch = 15  # these must be consistent with run_keypoints3d_inference.py
+    epoch = 15  # these must be consistent with run_inference_on_spotlight_data.py
     step = 9167  # same as above
 
     for recording in recordings:

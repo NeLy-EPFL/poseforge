@@ -168,9 +168,8 @@ class BodySegmentationPipeline:
                         for k, x in running_loss_dict.items()
                     }
                     time_now = time()
-                    throughput = artifacts_config.logging_interval / (
-                        time_now - running_start_time
-                    )
+                    time_elapsed = time_now - running_start_time
+                    throughput = artifacts_config.logging_interval / time_elapsed
 
                     running_loss_dict = defaultdict(lambda: 0.0)
                     running_start_time = time_now
@@ -244,6 +243,7 @@ class BodySegmentationPipeline:
             raise ValueError("Loss function must be provided for validation")
 
         total_loss_dict = defaultdict(lambda: 0.0)
+        n_steps_iterated = 0
         self.model.eval()
         with torch.no_grad():
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
@@ -273,6 +273,7 @@ class BodySegmentationPipeline:
                 # Accumulate losses
                 for key, loss in loss_dict.items():
                     total_loss_dict[key] += loss.item()
+                n_steps_iterated += 1
 
         del (
             atomic_batches_frames,
@@ -283,7 +284,6 @@ class BodySegmentationPipeline:
         )
         clear_memory_cache()
         self.model.train()
-        n_steps_iterated = step_idx + 1
         return {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
 
     def inference(self, frames: torch.Tensor) -> dict[str, torch.Tensor]:

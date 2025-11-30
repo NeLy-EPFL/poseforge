@@ -829,7 +829,7 @@ if __name__ == "__main__":
     #     --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/
 
     # * Processing from this script directly
-    epoch = 15  # these must be consistent with run_keypoints3d_inference.py
+    epoch = 15  # these must be consistent with run_inference_on_spotlight_data.py
     step = 9167  # same as above
     production_model_basedir = Path(
         f"bulk_data/pose_estimation/keypoints3d/trial_20251127a/production/epoch{epoch}_step{step}/"

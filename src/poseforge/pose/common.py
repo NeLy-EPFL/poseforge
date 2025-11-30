@@ -87,8 +87,10 @@ class ResNetFeatureExtractor(nn.Module):
         std = torch.tensor(std, device=x.device).view(1, 3, 1, 1)
         x_normalized = (x - mean) / std
         return x_normalized
-    
-    def forward_with_intermediates(self, x: torch.Tensor):
+
+    def forward_with_intermediates(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run forward pass, returning intermediate feature maps as well as
         the final features.
 
@@ -148,8 +150,8 @@ class ResNetFeatureExtractor(nn.Module):
             self._first_time_forward = False
 
         return x0, x1, x2, x3, x4
-        
-    def forward(self, x: torch.Tensor):
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run forward pass through the ResNet-18 backbone and return the
         final extracted features.
 

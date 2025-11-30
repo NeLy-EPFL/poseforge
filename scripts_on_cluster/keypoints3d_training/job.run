@@ -18,7 +18,7 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
-training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
+training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_training.py"
 training_trial_name="trial_20251127a"
 contrastive_pretraining_trial_name="trial_20251125a_lowlr"
 contrastive_pretraining_epoch="epoch009"
