@@ -14,13 +14,11 @@ class Pose6DModel(nn.Module):
         n_segments: int,
         feature_extractor: ResNetFeatureExtractor,
         final_upsampler_n_hidden_channels: int,
-        pose6d_head_hidden_sizes: list[int],
     ):
         super(Pose6DModel, self).__init__()
         self.n_segments = n_segments
         self.feature_extractor = feature_extractor
         self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
-        self.pose6d_head_hidden_sizes = pose6d_head_hidden_sizes
 
         # Create decoder (decoder1/2/3/4 mirror encoder layers 1/2/3/4)
         # Note that when upsampling, we actually run decoder4 first, decoder1 last
@@ -30,16 +28,30 @@ class Pose6DModel(nn.Module):
         # information.
         self.dec_layer4 = DecoderBlock(512, 256, 512)
         self.dec_layer3 = DecoderBlock(512, 128, 256)
-        self.dec_layer2 = DecoderBlock(256, 64, 256)
-        self.dec_layer1 = DecoderBlock(256, 64, final_upsampler_n_hidden_channels)
+        self.dec_layer2 = DecoderBlock(256, 64, final_upsampler_n_hidden_channels)
 
         # 6D pose prediction head (one per segment)
-        self.pose6d_heads = nn.ModuleList(
-            [self._make_pose6d_head() for _ in range(n_segments)]
-        )
+        _pose6d_heads = []
+        for _ in range(n_segments):
+            attention_conv = nn.Conv2d(
+                in_channels=self.final_upsampler_n_hidden_channels + n_segments,
+                out_channels=self.final_upsampler_n_hidden_channels,
+                kernel_size=3,
+                padding=1,
+            )
+            pool = nn.AdaptiveAvgPool2d((1, 1))
+            linear1 = nn.Linear(self.final_upsampler_n_hidden_channels, 256)
+            relu = nn.ReLU(inplace=True)
+            dropout = nn.Dropout(p=0.3)
+            linear2 = nn.Linear(256, 7)  # 3 translation + 4 rotation (quaternion)
+            pose6d_head = nn.Sequential(
+                attention_conv, pool, nn.Flatten(), linear1, relu, dropout, linear2
+            )
+            _pose6d_heads.append(pose6d_head)
+        self.pose6d_heads = nn.ModuleList(_pose6d_heads)
 
     @classmethod
-    def from_config(
+    def create_from_config(
         cls, architecture_config: config.ModelArchitectureConfig | Path | str
     ) -> "Pose6DModel":
         # Load from file if config is a path
@@ -53,24 +65,10 @@ class Pose6DModel(nn.Module):
         feature_extractor = ResNetFeatureExtractor()
 
         # Initialize Pose6DModel (self) from config (WITHOUT WEIGHTS at this step!)
-        try:
-            # Parse pose6d_head_hidden_sizes from string
-            # (don't specify directly as list[int] in YAML - mutability issues)
-            pose6d_head_hidden_sizes = [
-                int(x.strip())
-                for x in architecture_config.pose6d_head_hidden_sizes.split(",")
-            ]
-        except ValueError as e:
-            logger.critical(
-                f"Invalid pose6d_head_hidden_sizes in ModelArchitectureConfig: {e}. "
-                f"Expected a comma-separated list of integers."
-            )
-            raise e
         obj = cls(
             n_segments=architecture_config.n_segments,
             feature_extractor=feature_extractor,
             final_upsampler_n_hidden_channels=architecture_config.final_upsampler_n_hidden_channels,
-            pose6d_head_hidden_sizes=pose6d_head_hidden_sizes,
         )
 
         logger.info("Initialized Pose6DModel from architecture config")
@@ -116,49 +114,32 @@ class Pose6DModel(nn.Module):
             f"{weights_config.feature_extractor_weights}"
         )
 
-    def _make_pose6d_head(self) -> nn.Module:
-        all_layers = []
-        n_channels_in = self.final_upsampler_n_hidden_channels
-        for hidden_size in self.pose6d_head_hidden_sizes:
-            layers_within_block = [
-                nn.Linear(n_channels_in, hidden_size),
-                nn.ReLU(inplace=True),
-                nn.Dropout(p=0.3),
-            ]
-            all_layers.extend(layers_within_block)
-            n_channels_in = hidden_size
-        # 3 translation + 4 rotation (quaternion)
-        all_layers.append(nn.Linear(n_channels_in, 7))
-        return nn.Sequential(*all_layers)
+    def forward(self, image: torch.Tensor, bodyseg_prob: torch.Tensor) -> dict:
+        bat_size = image.shape[0]
+        assert image.shape == (bat_size, 3, 256, 256)
 
-    def forward(self, input_img: torch.Tensor, bodyseg_probs: torch.Tensor) -> dict:
-        # Extract features with ResNet backbone and upsample to 128x128
-        features = self.feature_extractor(input_img)
-        x = self.dec_layer4(features)
-        x = self.dec_layer3(x)
-        x = self.dec_layer2(x)
-        x = self.dec_layer1(x)
-        # Now x has shape (B, final_upsampler_n_hidden_channels, 128, 128)
+        # Run feature extractor and upsample to 64x64
+        e0, e1, e2, e3, e4 = self.feature_extractor.forward_with_intermediates(image)
+        d4 = e4  # this is just the bottleneck
+        d3 = self.dec_layer4(d4, e3)
+        d2 = self.dec_layer3(d3, e2)
+        d1 = self.dec_layer2(d2, e1)
+
+        # Attention using bodyseg prediction happens at 64x64 resolution (stride 4)
+        assert d1.shape == (bat_size, self.final_upsampler_n_hidden_channels, 64, 64)
+        assert bodyseg_prob.shape == (bat_size, self.n_segments, 64, 64)
+        # (B, n_channels_feature_map + n_segments, H, W)
+        feature_map_with_seg_prob = torch.cat([d1, bodyseg_prob], dim=1)
 
         # Process each segment separately
         translation_pred_list = []
         quaternion_pred_list = []
-
         for seg_idx in range(self.n_segments):
-            # Confidence-weighted global average pooling
-            mask_probs = bodyseg_probs[:, seg_idx, :, :].unsqueeze(1)  # (B, 1, H, W)
-            weighted_features = x * mask_probs  # (B, C, H, W)
-            feature_sums = weighted_features.sum(dim=(2, 3))  # (B, C)
-            confidence_sums = mask_probs.sum(dim=(2, 3)) + 1e-6  # (B, 1)
-            pooled_features = feature_sums / confidence_sums.clamp_min(1e-6)  # (B, C)
-
-            # Predict 6D pose
-            pose_pred = self.pose6d_heads[seg_idx](pooled_features)  # (B, 7)
-            translation_pred = pose_pred[:, 0:3]  # (B, 3)
-            quaternion_pred = pose_pred[:, 3:7]  # (B, 4)
-            # Normalize quaternion to unit length
-            quaternion_pred = F.normalize(quaternion_pred, p=2, dim=1)
-
+            head = self.pose6d_heads[seg_idx]
+            pose6d_pred = head(feature_map_with_seg_prob)  # (B, 7)
+            translation_pred = pose6d_pred[:, 0:3]  # (B, 3)
+            quaternion_pred = pose6d_pred[:, 3:7]  # (B, 4)
+            quaternion_pred = F.normalize(quaternion_pred, p=2, dim=1)  # normalize quat
             translation_pred_list.append(translation_pred)
             quaternion_pred_list.append(quaternion_pred)
 
@@ -181,14 +162,7 @@ class Pose6DLoss(nn.Module):
         quaternion_pred: torch.Tensor,
         translation_label: torch.Tensor,
         quaternion_label: torch.Tensor,
-        valid_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # If the segment is too small, don't include it in loss computation
-        translation_pred = translation_pred[valid_mask, ...]
-        quaternion_pred = quaternion_pred[valid_mask, ...]
-        translation_label = translation_label[valid_mask, ...]
-        quaternion_label = quaternion_label[valid_mask, ...]
-
         # Compute losses
         translation_loss = self.translation_loss(
             translation_pred.view(-1, 3), translation_label.view(-1, 3)
@@ -196,10 +170,16 @@ class Pose6DLoss(nn.Module):
         rotation_loss = self.rotation_loss(
             quaternion_pred.view(-1, 4), quaternion_label.view(-1, 4)
         )
-        return (
+        total_loss = (
             self.translation_weight * translation_loss
             + self.rotation_weight * rotation_loss
         )
+
+        return {
+            "translation_loss_unweighted": translation_loss,
+            "rotation_loss_unweighted": rotation_loss,
+            "total_loss": total_loss,
+        }
 
     @classmethod
     def create_from_config(

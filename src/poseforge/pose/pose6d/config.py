@@ -8,13 +8,8 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Number of object segments.
     # Default: 6 legs * (coxa, femur, tibia, tarsus1) + thorax = 25
     n_segments: int = 25
-    # Feature extractor configuration
-    feature_extractor: dict = None
     # Number of hidden channels in the final upsampling layer before pose regression
-    final_upsampler_n_hidden_channels: int = 64
-    # Hidden sizes of intermediate layers of the MLP mesh heads
-    # (comma-separated list of ints)
-    pose6d_head_hidden_sizes: str = "512,256"
+    final_upsampler_n_hidden_channels: int = 256
 
 
 @dataclass(frozen=True)
