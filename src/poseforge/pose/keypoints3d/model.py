@@ -416,9 +416,7 @@ class Pose2p5DModel(nn.Module):
                 └──(bottleneck/identity)──┘
         """
         # Run feature extractor
-        e0, e1, e2, e3, e4 = self.feature_extractor.forward(
-            x, return_intermediates=True
-        )
+        e0, e1, e2, e3, e4 = self.feature_extractor.forward_with_intermediates(x)
 
         d4 = e4  # this is just the bottleneck
 
