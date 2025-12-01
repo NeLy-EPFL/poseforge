@@ -155,8 +155,8 @@ class Pose6DPipeline:
                         pred_pos, pred_quat, sim_data["mesh_pos"], sim_data["mesh_quat"]
                     )
 
-                    # Check if float16 is used
                     if epoch_idx == 0 and step_idx == 0:
+                        # Check if float16 is used
                         self._check_amp_status_for_model_params(
                             grad_scaler,
                             subtitle="Model parameters at start of training",
@@ -170,6 +170,16 @@ class Pose6DPipeline:
                             grad_scaler,
                             subtitle="Variables at start of training",
                         )
+
+                        # Check magnitude of predictions
+                        for i, seg_name in enumerate(segments_for_6dpose):
+                            _pos = pred_pos[0, i, :].detach().cpu().tolist()
+                            _quat = pred_quat[0, i, :].detach().cpu().tolist()
+                            logger.info(
+                                f"Sample {i}, {seg_name}: "
+                                f"pred_pos={[round(x, 3) for x in _pos]}, "
+                                f"pred_quat={[round(x, 3) for x in _quat]}"
+                            )
 
                 # Backpropagate and optimize
                 optimizer.zero_grad(set_to_none=True)
