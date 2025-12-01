@@ -1,0 +1,42 @@
+#!/bin/bash -l
+
+#SBATCH --job-name exabat_<<<TRIAL_NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 200GB
+#SBATCH --time 8:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output logs/<<<TRIAL_NAME>>>.log
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge_temp
+
+# Define paths
+project_root="/work/upramdya/sibo_temp/poseforge"
+extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
+synthetic_videos_basedir="bulk_data/style_transfer/production/translated_videos/"
+nmf_rendering_basedir="bulk_data/nmf_rendering_with_6dpose/"
+output_basedir="/work/upramdya/sibo/poseforge/bulk_data/pose_estimation/atomic_batches/4variants_with_6dpose/"
+
+# Setup
+cd $project_root
+
+# Training
+echo "Processing $trial_name at $(date)"
+python -u $extraction_cli_path \
+    --n_jobs 8 \
+    --atomic-batch-nframes 32 \
+    --atomic-batch-nvariants-max 4 \
+    --minimum-time-diff-frames 60 \
+    --original-image-size 464 464 \
+    --input-basedir $synthetic_videos_basedir/<<<TRIAL_NAME>>> \
+    --nmf-sim-rendering-basedir $nmf_rendering_basedir \
+    --output-dir $output_basedir/<<<TRIAL_NAME>>>
+
+echo "Extraction ends at $(date)"
