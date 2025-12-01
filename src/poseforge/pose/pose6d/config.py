@@ -56,15 +56,13 @@ class TrainingDataConfig(SerializableDataClass):
     val_batch_size: int
     # Number of workers for data loading. Use number of CPU cores if None.
     n_workers: int | None = None
-    # Optional kernel size for dilating bodyseg masks
-    mask_dilation_kernel: int | None = None
 
 
 @dataclass(frozen=True)
 class OptimizerConfig(SerializableDataClass):
     learning_rate_encoder: float = 3e-5
-    learning_rate_deconv: float = 3e-4
-    learning_rate_attention_heads: float = 3e-4
+    learning_rate_upsample: float = 3e-4
+    learning_rate_attention: float = 3e-4
     learning_rate_pose6d_heads: float = 3e-4
     weight_decay: float = 1e-5
 

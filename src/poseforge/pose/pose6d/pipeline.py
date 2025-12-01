@@ -373,7 +373,7 @@ class Pose6DPipeline:
                         self.model.dec_layer4.parameters(),
                     )
                 ),
-                "lr": optimizer_config.learning_rate_deconv,
+                "lr": optimizer_config.learning_rate_upsample,
             },
             {
                 "params": self.model.pose6d_heads.parameters(),
@@ -384,7 +384,7 @@ class Pose6DPipeline:
             params.append(
                 {
                     "params": self.model.attention_heads.parameters(),
-                    "lr": optimizer_config.learning_rate_attention_heads,
+                    "lr": optimizer_config.learning_rate_attention,
                 }
             )
 
