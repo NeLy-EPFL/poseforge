@@ -10,6 +10,8 @@ from collections import defaultdict
 from pathlib import Path
 from tqdm import tqdm
 from joblib import Parallel, delayed
+from scipy.linalg import rq
+from scipy.spatial.transform import Rotation
 
 import poseforge.neuromechfly.constants as constants
 from poseforge.util.plot import (
@@ -304,7 +306,61 @@ def process_single_frame(
         # Save object segmentation masks
         seg_labels = segment_label_parser(rendered_images_transformed)
 
+        # Transform mesh states to camera's coordinate system
+        pos_glob = h5_file["body_segment_states/pos_global"][frame_idx, :, :]
+        quat_glob = h5_file["body_segment_states/quat_global"][frame_idx, :, :]
+        cam_projmat = h5_file["camera_matrix"][frame_idx, :, :]  # 3x4 mat from mujoco
+        derived_variables["pos_rel_cam"], derived_variables["quat_rel_cam"] = (
+            calculate_6dpose_relative_to_camera(pos_glob, quat_glob, cam_projmat)
+        )
+
         return rendered_images_transformed, derived_variables, seg_labels
+
+
+def calculate_6dpose_relative_to_camera(pos_global, quat_global, cam_projmat):
+    """Convert global mesh positions and orientations to camera-relative coordinates.
+
+    Args:
+        pos_global: (num_segments, 3) array of global positions
+        quat_global: (num_segments, 4) array of global quaternions (scalar first)
+        cam_projmat: (3, 4) camera projection matrix
+
+    Returns:
+        pos_rel_cam: (num_segments, 3) array of positions relative to camera
+        quat_rel_cam: (num_segments, 4) array of quaternions relative to camera
+    """
+    assert pos_global.shape[0] == quat_global.shape[0], "Number of segments mismatch."
+    n_segments = pos_global.shape[0]
+
+    # Decompose camera projection matrix to get camera intrinsics, rotation, translation
+    cam_intrinsics, cam_rotation = rq(cam_projmat[:, :3])
+    _sign_multiplier = np.diag(np.sign(np.diag(cam_intrinsics)))
+    cam_intrinsics = cam_intrinsics @ _sign_multiplier
+    cam_rotation = _sign_multiplier @ cam_rotation
+    if np.linalg.det(cam_rotation) < 0:
+        cam_rotation = -cam_rotation  # ensure proper rotation matrix (det = 1)
+        cam_intrinsics = -cam_intrinsics
+    cam_translation = np.linalg.inv(cam_intrinsics) @ cam_projmat[:, 3]
+
+    # Compute rotation from world to camera coordinates
+    rot_world_to_cam = Rotation.from_matrix(cam_rotation)
+
+    # Convert each segment's position and orientation
+    pos_rel_cam = np.zeros_like(pos_global)
+    quat_rel_cam = np.zeros_like(quat_global)
+    for seg_idx in range(n_segments):
+        this_pos_glob = pos_global[seg_idx, :]
+        this_quat_glob = quat_global[seg_idx, :]
+
+        this_pos_rel_cam = cam_rotation @ this_pos_glob + cam_translation
+        mesh_rot = Rotation.from_quat(this_quat_glob, scalar_first=True)
+        mesh_rot_rel_cam = rot_world_to_cam * mesh_rot
+        this_quat_rel_cam = mesh_rot_rel_cam.as_quat(scalar_first=True)
+
+        pos_rel_cam[seg_idx, :] = this_pos_rel_cam
+        quat_rel_cam[seg_idx, :] = this_quat_rel_cam
+
+    return pos_rel_cam, quat_rel_cam
 
 
 def process_subsegment(
@@ -488,16 +544,20 @@ def process_subsegment(
             )
 
             # Add mesh state labels
-            seg_states_grp = postprocessed_group.create_group("body_segment_states")
+            seg_states_grp = postprocessed_group.create_group("mesh_pose6d_rel_camera")
+            seg_states_grp.create_dataset(
+                "pos_rel_cam",
+                data=np.array(derived_variables_by_key["pos_rel_cam"]),
+                dtype="float32",
+                compression="lzf",
+            )
+            seg_states_grp.create_dataset(
+                "quat_rel_cam",
+                data=np.array(derived_variables_by_key["quat_rel_cam"]),
+                dtype="float32",
+                compression="lzf",
+            )
             seg_states_grp.attrs.update(source_h5_file["body_segment_states"].attrs)
-            for sensor_type in source_h5_file["body_segment_states"].keys():
-                source_ds = source_h5_file["body_segment_states"][sensor_type]
-                seg_states_grp.create_dataset(
-                    sensor_type,
-                    data=source_ds[frame_idx_start:frame_idx_end, :, :],
-                    dtype="float32",
-                )
-            # ! TODO: Convert to camera coords here!
 
 
 def _draw_pose_2d_and_3d(
