@@ -13,12 +13,22 @@ class Pose6DModel(nn.Module):
         self,
         n_segments: int,
         feature_extractor: ResNetFeatureExtractor,
-        final_upsampler_n_hidden_channels: int,
+        n_attention_gated_feature_channels: int,
+        n_global_feature_channels: int,
+        camera_distance: float,
     ):
         super(Pose6DModel, self).__init__()
         self.n_segments = n_segments
         self.feature_extractor = feature_extractor
-        self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
+        self.n_attention_gated_feature_channels = n_attention_gated_feature_channels
+        self.n_global_feature_channels = n_global_feature_channels
+        self.n_feature_channels_total = (
+            n_attention_gated_feature_channels + n_global_feature_channels
+        )
+        self.camera_distance = camera_distance
+        # MuJoCo convention: in front of camera = negative z, so floor is at
+        # (*, *, -camera_distance)
+        self.z_center = -camera_distance
 
         # Create decoder (decoder1/2/3/4 mirror encoder layers 1/2/3/4)
         # Note that when upsampling, we actually run decoder4 first, decoder1 last
@@ -28,47 +38,62 @@ class Pose6DModel(nn.Module):
         # information.
         self.dec_layer4 = DecoderBlock(512, 256, 512)
         self.dec_layer3 = DecoderBlock(512, 128, 256)
-        self.dec_layer2 = DecoderBlock(256, 64, final_upsampler_n_hidden_channels)
+        self.dec_layer2 = DecoderBlock(256, 64, self.n_feature_channels_total)
+
+        # Attention layer
+        if n_attention_gated_feature_channels > 0:
+            _attention_heads = [
+                nn.Sequential(
+                    nn.Conv2d(
+                        in_channels=self.n_feature_channels_total + n_segments,
+                        out_channels=128,
+                        kernel_size=3,
+                        padding=1,
+                    ),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(in_channels=128, out_channels=1, kernel_size=1),
+                    nn.Sigmoid(),
+                )
+                for _ in range(n_segments)
+            ]
+            self.attention_heads = nn.ModuleList(_attention_heads)
+        else:
+            self.attention_heads = None
 
         # 6D pose prediction head (one per segment)
-        _pose6d_heads = []
-        for _ in range(n_segments):
-            attention_conv = nn.Conv2d(
-                in_channels=self.final_upsampler_n_hidden_channels + n_segments,
-                out_channels=self.final_upsampler_n_hidden_channels,
-                kernel_size=3,
-                padding=1,
+        _pose6d_heads = [
+            nn.Sequential(
+                nn.Linear(in_features=self.n_feature_channels_total, out_features=512),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=0.3),
+                nn.Linear(in_features=512, out_features=256),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=0.3),
+                nn.Linear(in_features=256, out_features=7),
             )
-            pool = nn.AdaptiveAvgPool2d((1, 1))
-            linear1 = nn.Linear(self.final_upsampler_n_hidden_channels, 256)
-            relu = nn.ReLU(inplace=True)
-            dropout = nn.Dropout(p=0.3)
-            linear2 = nn.Linear(256, 7)  # 3 translation + 4 rotation (quaternion)
-            pose6d_head = nn.Sequential(
-                attention_conv, pool, nn.Flatten(), linear1, relu, dropout, linear2
-            )
-            _pose6d_heads.append(pose6d_head)
+            for _ in range(n_segments)
+        ]
         self.pose6d_heads = nn.ModuleList(_pose6d_heads)
 
     @classmethod
     def create_from_config(
-        cls, architecture_config: config.ModelArchitectureConfig | Path | str
+        cls, arch_config: config.ModelArchitectureConfig | Path | str
     ) -> "Pose6DModel":
         # Load from file if config is a path
-        if isinstance(architecture_config, (str, Path)):
-            architecture_config = config.ModelArchitectureConfig.load(
-                architecture_config
-            )
-            logger.info(f"Loaded model architecture config from {architecture_config}")
+        if isinstance(arch_config, (str, Path)):
+            arch_config = config.ModelArchitectureConfig.load(arch_config)
+            logger.info(f"Loaded model architecture config from {arch_config}")
 
         # Initialize feature extractor (WITHOUT WEIGHTS at this step!)
         feature_extractor = ResNetFeatureExtractor()
 
         # Initialize Pose6DModel (self) from config (WITHOUT WEIGHTS at this step!)
         obj = cls(
-            n_segments=architecture_config.n_segments,
+            n_segments=arch_config.n_segments,
             feature_extractor=feature_extractor,
-            final_upsampler_n_hidden_channels=architecture_config.final_upsampler_n_hidden_channels,
+            n_attention_gated_feature_channels=arch_config.n_attention_gated_feature_channels,
+            n_global_feature_channels=arch_config.n_global_feature_channels,
+            camera_distance=arch_config.camera_distance,
         )
 
         logger.info("Initialized Pose6DModel from architecture config")
@@ -123,20 +148,44 @@ class Pose6DModel(nn.Module):
         d4 = e4  # this is just the bottleneck
         d3 = self.dec_layer4(d4, e3)
         d2 = self.dec_layer3(d3, e2)
-        d1 = self.dec_layer2(d2, e1)
+        features = self.dec_layer2(d2, e1)  # (B, n_feature_channels_total, 64, 64)
 
         # Attention using bodyseg prediction happens at 64x64 resolution (stride 4)
-        assert d1.shape == (bat_size, self.final_upsampler_n_hidden_channels, 64, 64)
+        assert features.shape == (bat_size, self.n_feature_channels_total, 64, 64)
         assert bodyseg_prob.shape == (bat_size, self.n_segments, 64, 64)
         # (B, n_channels_feature_map + n_segments, H, W)
-        feature_map_with_seg_prob = torch.cat([d1, bodyseg_prob], dim=1)
+        feature_map_with_seg_prob = torch.cat([features, bodyseg_prob], dim=1)
 
         # Process each segment separately
         translation_pred_list = []
         quaternion_pred_list = []
         for seg_idx in range(self.n_segments):
+            # Global features
+            global_features_pooled = torch.mean(
+                features[:, : self.n_global_feature_channels, :, :], dim=[2, 3]
+            )
+
+            # Attention gated features
+            if self.n_attention_gated_feature_channels > 0:
+                attn_head = self.attention_heads[seg_idx]
+                attn_map = attn_head(feature_map_with_seg_prob)  # (B, 1, H, W)
+                gated_features = (
+                    features[:, -self.n_attention_gated_feature_channels :, :, :]
+                    * attn_map
+                )
+                attn_weight_total = torch.sum(attn_map, dim=[2, 3]) + 1e-6  # (B, 1)
+                gated_features_pooled = (
+                    gated_features.sum(dim=[2, 3]) / attn_weight_total
+                )  # (B, C)
+                all_features_pooled = torch.cat(
+                    [global_features_pooled, gated_features_pooled], dim=1
+                )
+            else:
+                all_features_pooled = global_features_pooled
+
+            # FC layers for 6D pose prediction
             head = self.pose6d_heads[seg_idx]
-            pose6d_pred = head(feature_map_with_seg_prob)  # (B, 7)
+            pose6d_pred = head(all_features_pooled)  # (B, 7)
             translation_pred = pose6d_pred[:, 0:3]  # (B, 3)
             quaternion_pred = pose6d_pred[:, 3:7]  # (B, 4)
             quaternion_pred = F.normalize(quaternion_pred, p=2, dim=1)  # normalize quat
@@ -145,6 +194,7 @@ class Pose6DModel(nn.Module):
 
         # Stack predictions into single tensors of shape (B, n_segments, 3 or 4)
         translation_pred_all = torch.stack(translation_pred_list, dim=1)
+        translation_pred_all[:, :, 2] += self.z_center
         quaternion_pred_all = torch.stack(quaternion_pred_list, dim=1)
 
         return translation_pred_all, quaternion_pred_all

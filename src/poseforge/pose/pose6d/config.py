@@ -8,8 +8,12 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Number of object segments.
     # Default: 6 legs * (coxa, femur, tibia, tarsus1) + thorax = 25
     n_segments: int = 25
-    # Number of hidden channels in the final upsampling layer before pose regression
-    final_upsampler_n_hidden_channels: int = 256
+    # Number of feature channels that are gated by a per-segment attention mechanism
+    n_attention_gated_feature_channels: int = 128
+    # Number of feature channels that are not gated by attention
+    n_global_feature_channels: int = 128
+    # Camera distance
+    camera_distance: float = 100.0
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class TrainingDataConfig(SerializableDataClass):
 class OptimizerConfig(SerializableDataClass):
     learning_rate_encoder: float = 3e-5
     learning_rate_deconv: float = 3e-4
+    learning_rate_attention_heads: float = 3e-4
     learning_rate_pose6d_heads: float = 3e-4
     weight_decay: float = 1e-5
 

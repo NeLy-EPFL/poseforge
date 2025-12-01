@@ -376,14 +376,17 @@ class Pose6DPipeline:
                 "lr": optimizer_config.learning_rate_deconv,
             },
             {
-                "params": list(
-                    chain(
-                        self.model.pose6d_heads.parameters(),
-                    )
-                ),
+                "params": self.model.pose6d_heads.parameters(),
                 "lr": optimizer_config.learning_rate_pose6d_heads,
             },
         ]
+        if self.model.n_attention_gated_feature_channels > 0:
+            params.append(
+                {
+                    "params": self.model.attention_heads.parameters(),
+                    "lr": optimizer_config.learning_rate_attention_heads,
+                }
+            )
 
         optimizer = torch.optim.AdamW(
             params, weight_decay=optimizer_config.weight_decay

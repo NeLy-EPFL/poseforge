@@ -150,10 +150,10 @@ if __name__ == "__main__":
     )
     optimizer_config = config.OptimizerConfig()
     training_artifacts_config = config.TrainingArtifactsConfig(
-        output_basedir="bulk_data/pose_estimation/mesh6d/trial_20251130z/",
+        output_basedir="bulk_data/pose_estimation/mesh6d/trial_20251130z2/",
         logging_interval=10,  # 1000
-        checkpoint_interval=30,  # 1000
-        validation_interval=30,  # 1000
+        checkpoint_interval=100,  # 1000
+        validation_interval=100,  # 1000
         n_batches_per_validation=30,  # 300
     )
     train_mesh6d_model(
