@@ -15,14 +15,14 @@ echo "Hello from $(hostname)"
 # Set up environment and package
 . ~/spack/share/spack/setup-env.sh
 spack load ffmpeg
-conda activate poseforge_temp
+conda activate poseforge
 
 # Define paths
-project_root="/work/upramdya/sibo_temp/poseforge"
+project_root="/home/sibwang/poseforge"
 extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
 synthetic_videos_basedir="bulk_data/style_transfer/production/translated_videos/"
-nmf_rendering_basedir="bulk_data/nmf_rendering_with_6dpose/"
-output_basedir="/work/upramdya/sibo/poseforge/bulk_data/pose_estimation/atomic_batches/4variants_with_6dpose/"
+nmf_rendering_basedir="bulk_data/nmf_rendering/"
+output_basedir="/home/sibwang/poseforge/bulk_data/pose_estimation/atomic_batches/4variants/"
 
 # Setup
 cd $project_root
