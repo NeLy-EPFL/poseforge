@@ -145,15 +145,10 @@ class Pose6DSequence:
                     "Nothing will be saved and the output path will be ignored."
                 )
 
-            def _update_with_cleanup(step):
-                _update_scene_by_frameid(step)
-                if step == len(self) - 1:
-                    plotter.close()
-
             plotter.add_timer_event(
                 max_steps=len(self),
                 duration=int(1000 / render_fps),  # in ms
-                callback=_update_with_cleanup,
+                callback=_update_scene_by_frameid,
             )
             plotter.show()
         else:
