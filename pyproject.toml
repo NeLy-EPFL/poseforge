@@ -9,8 +9,8 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "numpy>=2.0,<3",
-    "scipy>=1.16.1,<2",
-    "pandas>=2.3,<3",
+    "scipy>=1.16.2,<1.17.0",
+    "pandas>=2.3.3,<2.4.0",
     "matplotlib>=3.10,<4",
     "torch==2.9.*",  # specific version required by torchvision and torchcodec!
     "torchvision==0.24.*",  # specific to torch 2.9
@@ -41,6 +41,9 @@ dependencies = [
     "filelock>=3.20.0,<4",
     "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
     "loguru==0.7.*",
+    # PEP561 stub packages for better static analysis
+    "pandas-stubs (>=2.3.3,<2.4.0)",
+    "scipy-stubs (>=1.16.2,<1.17.0)"
     # The following should be installed manually (pip install -e .):
     # flygym & dm_control
     # parallel-video-io
