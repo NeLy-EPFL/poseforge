@@ -5,6 +5,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Hashable, Callable, Any
 
+import poseforge
+
 
 @dataclasses.dataclass(frozen=True)
 class SerializableDataClass:
@@ -143,3 +145,7 @@ class OutputBuffer:
     @property
     def n_data_total(self) -> int:
         return sum(len(buf) for buf in self.buffers.values())
+
+
+assert len(poseforge.__path__) == 1, "poseforge.__path__ contains multiple paths"
+bulk_data_dir = Path(poseforge.__path__[0]).parent.parent / "bulk_data"
