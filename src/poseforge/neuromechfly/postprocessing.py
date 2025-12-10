@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.ndimage as ndimage
@@ -8,6 +10,8 @@ import os
 import h5py
 from collections import defaultdict
 from pathlib import Path
+
+from numpy import ndarray, dtype
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from scipy.linalg import rq
@@ -80,7 +84,9 @@ class SegmentLabelParser:
 
         self.label_colors_6d = np.array(self.label_colors_6d)
 
-    def __call__(self, images_by_color_coding: list[np.ndarray]):
+    def __call__(
+        self, images_by_color_coding: list[np.ndarray] | np.ndarray
+    ) -> np.ndarray:
         assert (
             len(images_by_color_coding) == 2
         ), "Expecting two images each with a different color coding."
@@ -89,8 +95,8 @@ class SegmentLabelParser:
         ), "Color coding images must have the same shape."
         if not isinstance(images_by_color_coding, list):
             images_by_color_coding = [
-                images_by_color_coding[0, :, :, :],
-                images_by_color_coding[1, :, :, :],
+                images_by_color_coding[0, ...],
+                images_by_color_coding[1, ...],
             ]
 
         image_6d = np.concatenate(images_by_color_coding, axis=-1)
@@ -103,7 +109,7 @@ class SegmentLabelParser:
         return label_indices
 
 
-def load_video_frames(video_path: Path) -> list[np.ndarray]:
+def load_video_frames(video_path: Path) -> tuple[list[np.ndarray], float]:
     """Load video frames from a video file."""
     if not video_path.is_file():
         raise FileNotFoundError(f"{video_path} is not a file.")
@@ -122,7 +128,7 @@ def load_video_frames(video_path: Path) -> list[np.ndarray]:
     return frames, fps
 
 
-def get_rotation_angle_and_matrix(forward_vector: np.ndarray) -> np.ndarray:
+def get_rotation_angle_and_matrix(forward_vector: np.ndarray) -> tuple[float, ndarray]:
     """Get a rotation matrix that rotates the forward vector to the z-axis."""
     orientation = np.arctan2(forward_vector[1], forward_vector[0])
     rotation_matrix = np.array(
@@ -141,7 +147,9 @@ def rotate_image(image: np.ndarray, rotation_angle) -> np.ndarray:
     )
 
 
-def center_square_crop_image(image: np.ndarray, side_length) -> np.ndarray:
+def center_square_crop_image(
+    image: np.ndarray, side_length: int
+) -> tuple[np.ndarray, int, int]:
     """Crop the image to a square of given side length, centered on the image."""
     height, width = image.shape[:2]
     start_col = (width - side_length) // 2
@@ -206,7 +214,7 @@ def rotate_keypoint_positions_camera(
     image_shape: tuple[int, int],
     start_col: int,
     start_row: int,
-):
+) -> dict[str, np.ndarray]:
     """
     Apply rotation and cropping transformations to camera/image coordinates.
     Uses a simplified approach based on the working code snippet.
@@ -215,7 +223,12 @@ def rotate_keypoint_positions_camera(
         keypoints_pos_lookup: Dict mapping segment names to (x, y, depth) positions
         rotation_matrix: 3x3 rotation matrix used for coordinate transformation
         image_shape: (height, width) of the original image before rotation
-        start_col, start_row: Cropping offsets after rotation
+        start_col: Cropping offsets after rotation (column)
+        start_row: Cropping offsets after rotation (row)
+
+    Returns:
+        keypoints_pos_lookup_rotated: Dict mapping segment names to transformed
+            (x, y, depth) positions
     """
     keypoints_pos_lookup_rotated = {}
     height, width = image_shape
@@ -239,7 +252,7 @@ def rotate_keypoint_positions_camera(
 
 def rotate_keypoint_positions_world(
     keypoints_pos_lookup: dict[str, np.ndarray], rotation_matrix: np.ndarray
-):
+) -> dict[str, np.ndarray]:
     keypoints_pos_lookup_rotated = {}
     for body_segment_name, pos_before_rotation in keypoints_pos_lookup.items():
         # Apply the rotation matrix to the keypoints
@@ -368,7 +381,7 @@ def process_subsegment(
     segment_h5_file_path: Path,
     frames_range: tuple[int, int],
     processed_subsegment_dir: Path,
-    fps: int,
+    fps: int | float,
     crop_size: int = 464,
     num_color_codings: int = 2,
     n_jobs: int = -1,
@@ -724,16 +737,18 @@ def visualize_single_frame(
 
 def visualize_subsegment(
     processed_subsegment_dir: Path,
-    fps: int,
+    render_fps: float | None = None,
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
     n_jobs: int = -1,  # Default to all available cores
 ) -> None:
     # Load video frames
-    frames, fps = load_video_frames(
+    frames, input_fps = load_video_frames(
         processed_subsegment_dir / "processed_nmf_sim_render_colorcode_0.mp4"
     )
+    if render_fps is None:
+        render_fps = input_fps
 
     # Find processed simulation data
     processed_data_path = processed_subsegment_dir / "processed_simulation_data.h5"
@@ -789,7 +804,7 @@ def visualize_subsegment(
     # Merge video
     with imageio.get_writer(
         str(processed_subsegment_dir / "visualization.mp4"),
-        fps=fps,
+        fps=render_fps,
         codec="libx264",
         quality=10,  # 10 is highest for imageio, lower is lower quality
         ffmpeg_params=["-crf", "18", "-preset", "slow"],  # lower crf = higher quality
@@ -803,7 +818,7 @@ def visualize_subsegment(
 
 
 def select_subsegments(
-    upward_cardinal_vectors: np.array,
+    upward_cardinal_vectors: np.ndarray,
     max_tilt_angle_deg: float,
     mask_morph_closing_size_sec: float,
     min_subsegment_duration_sec: float,
@@ -898,7 +913,7 @@ def postprocess_segment(
             if visualize:
                 visualize_subsegment(
                     processed_subsegment_dir=output_dir,
-                    fps=fps,
+                    render_fps=fps,
                     camera_elevation=camera_elevation,
                     max_abs_azimuth=max_abs_azimuth,
                     azimuth_rotation_period=azimuth_rotation_period,
