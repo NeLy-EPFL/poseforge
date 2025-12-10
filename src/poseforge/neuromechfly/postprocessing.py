@@ -323,9 +323,20 @@ def process_single_frame(
         pos_glob = h5_file["body_segment_states/pos_global"][frame_idx, :, :]
         quat_glob = h5_file["body_segment_states/quat_global"][frame_idx, :, :]
         cam_projmat = h5_file["camera_matrix"][frame_idx, :, :]  # 3x4 mat from mujoco
-        derived_variables["pos_rel_cam"], derived_variables["quat_rel_cam"] = (
+        pos_rel_cam_pre_alignment, quat_rel_cam_pre_alignment = (
             calculate_6dpose_relative_to_camera(pos_glob, quat_glob, cam_projmat)
         )
+        # As before, we're rotating the camera capture post hoc so that the fly is
+        # always upright. Therefore, upon computing the position and rotation of the
+        # mesh relative to the camera, we still need to rotate them around the z axis
+        alignment_rotation = z_rotation = Rotation.from_rotvec([0, 0, rotation_angle])
+        pos_rel_cam_aligned = alignment_rotation.apply(pos_rel_cam_pre_alignment)
+        quat_rel_cam_aligned = (
+            alignment_rotation
+            * Rotation.from_quat(quat_rel_cam_pre_alignment, scalar_first=True)
+        ).as_quat(scalar_first=True)
+        derived_variables["pos_rel_cam"] = pos_rel_cam_aligned
+        derived_variables["quat_rel_cam"] = quat_rel_cam_aligned
 
         return rendered_images_transformed, derived_variables, seg_labels
 
