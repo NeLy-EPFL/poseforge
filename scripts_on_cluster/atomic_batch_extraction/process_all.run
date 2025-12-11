@@ -19,7 +19,7 @@ conda activate poseforge
 
 # Define paths
 project_root="/home/$USER/poseforge"
-extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
+extraction_cli_path="src/poseforge/pose/data/scripts/preextract_atomic_batches.py"
 all_trials_basedir="/home/sibwang/poseforge/bulk_data/style_transfer/production/translated_videos/"
 
 # Setup
