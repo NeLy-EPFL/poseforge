@@ -7,7 +7,7 @@ batch_scripts_dir = Path("batch_scripts/")
 batch_scripts_dir.mkdir(exist_ok=True, parents=True)
 
 # Configs by task
-synthetic_videos_basedir = Path("/work/upramdya/sibo_temp/poseforge/bulk_data/style_transfer/production/translated_videos/")
+synthetic_videos_basedir = Path("/home/sibwang/poseforge/bulk_data/style_transfer/production/translated_videos/")
 trial_names_all = [x.name for x in synthetic_videos_basedir.glob("BO_Gal4_*")]
 
 # Generate batch scripts

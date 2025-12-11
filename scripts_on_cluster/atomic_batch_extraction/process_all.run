@@ -18,9 +18,9 @@ spack load ffmpeg
 conda activate poseforge
 
 # Define paths
-project_root="/home/$USER/poseforge"
+project_root="$HOME/poseforge"
 extraction_cli_path="src/poseforge/pose/data/scripts/preextract_atomic_batches.py"
-all_trials_basedir="/home/sibwang/poseforge/bulk_data/style_transfer/production/translated_videos/"
+all_trials_basedir="bulk_data/style_transfer/production/translated_videos/"
 
 # Setup
 cd $project_root

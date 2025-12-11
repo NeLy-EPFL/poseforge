@@ -191,7 +191,7 @@ if __name__ == "__main__":
     get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
-    # tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
+    tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
 
     # Run everything sequentially (for debugging)  # TODO: disable testing
-    run_sequentially_for_testing()
+    # run_sequentially_for_testing()
