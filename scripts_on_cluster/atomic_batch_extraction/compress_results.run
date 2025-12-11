@@ -1,0 +1,66 @@
+#!/bin/bash -l
+
+#SBATCH --job-name=compress_output
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 96GB
+#SBATCH --time 1:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output=logs/compress_output.log
+
+# -------------------------------------------------------------------
+# CRASH CHECK: Ensure SLURM_CPUS_PER_TASK is set
+# -------------------------------------------------------------------
+
+# Get the requested number of CPUs from the Slurm environment
+max_jobs=$SLURM_CPUS_PER_TASK 
+
+# Check if the variable is empty or null.
+if [ -z "$max_jobs" ]; then
+    echo "ERROR: SLURM_CPUS_PER_TASK environment variable is not set." >&2
+    echo "This script must be submitted using 'sbatch' and requires the --cpus-per-task flag in the header." >&2
+    exit 1
+fi
+
+echo "Running up to $max_jobs concurrent tar jobs ($(date))."
+echo "----------------------------------------------"
+
+input_basedir="$HOME/poseforge/bulk_data/pose_estimation/atomic_batches/4variants"
+output_basedir="$HOME/poseforge/bulk_data/pose_estimation/atomic_batches/4variants_tarballs"
+mkdir -p $output_basedir
+
+# Loop through all subdirectories
+job_count=0
+for dir_path in "$input_basedir"/*/; do
+    if [ -d "$dir_path" ]; then
+        
+        dir_name=$(basename "$dir_path")
+        output_file="$output_basedir/${dir_name}.tar.gz"
+        
+        # Launch the tar command in the background
+        # Note the -C flag to change directory to the parent 
+        # *before* archiving. This keeps the archive clean.
+        
+        tar -czf "$output_file" -C "$dir_path/.." "$dir_name" &
+        
+        echo "Launched job for $dir_name (PID: $!)"
+        job_count=$((job_count + 1))
+        
+        # When we hit the max number of concurrent jobs, we wait for *one*
+        # of the currently running background jobs to complete (wait -n).
+        if [ "$job_count" -ge "$max_jobs" ]; then
+            wait -n 
+            job_count=$((job_count - 1))
+            echo "A background job finished. Resuming launch..."
+        fi
+    fi
+done
+
+# Wait for ALL remaining background jobs to finish
+echo "----------------------------------------------"
+echo "All jobs launched. Waiting for final completion..."
+wait
+
+echo "All parallel tar operations complete ($(date))."
