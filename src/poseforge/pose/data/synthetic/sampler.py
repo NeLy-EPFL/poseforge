@@ -105,6 +105,19 @@ class SyntheticFramesSampler:
         assert self.sampling_stride >= 1, "`sampling_stride` must be >= 1"
         assert len(simulated_data_sequences) > 0, "At least 1 simulation required"
 
+        # Check if all simulations have the same metadata
+        metadata_li = [seq.get_sim_data_metadata() for seq in simulated_data_sequences]
+        md_ref = metadata_li[0]
+        for metadata in metadata_li[1:]:
+            assert metadata == md_ref, "All simulations must have the same metadata"
+        self.label_keys = {
+            "dof_angles": md_ref["dof_angles"]["keys"],
+            "keypoint_pos": md_ref["keypoint_pos"]["keys"],
+            "mesh_pos": md_ref["mesh_pose6d"]["keys"],
+            "mesh_quat": md_ref["mesh_pose6d"]["keys"],
+            "body_seg_maps": md_ref["segmentation_labels"]["keys"],
+        }
+
         # Check number of variants per frame
         assert (
             len(set([seq.n_variants for seq in simulated_data_sequences])) == 1
@@ -113,14 +126,14 @@ class SyntheticFramesSampler:
 
         # Check image size and FPS
         _image_sizes = set()
-        _fpss = set()
+        _fps = set()
         for seq in simulated_data_sequences:
             _image_sizes.add(seq.frame_size)
-            _fpss.add(seq.fps)
+            _fps.add(seq.fps)
         assert len(_image_sizes) == 1, "All simulations must have the same image size"
-        assert len(_fpss) == 1, "All simulations must have the same FPS"
+        assert len(_fps) == 1, "All simulations must have the same FPS"
         self.frame_size = _image_sizes.pop()
-        self.fps = _fpss.pop()
+        self.fps = _fps.pop()
 
         # Check number of frames per simulation and in total
         self.n_frames_per_sim = np.array(

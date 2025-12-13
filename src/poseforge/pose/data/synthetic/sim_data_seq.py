@@ -56,13 +56,14 @@ class SimulatedDataSequence:
 
     def get_sim_data_metadata(self) -> dict:
         metadata = {}
-        with h5py.File(self.simulated_labels_path, "r") as ds:
-            postprocessed_ds = ds["postprocessed"]
-            metadata["dof_angles"] = dict(postprocessed_ds["dof_angles"].attrs)
-            metadata["keypoint_pos"] = dict(postprocessed_ds["keypoint_pos"].attrs)
-            metadata["segmentation_labels"] = dict(
-                postprocessed_ds["segmentation_labels"].attrs
-            )
+        with h5py.File(self.simulated_labels_path, "r") as f:
+            ds = f["postprocessed"]
+            metadata["dof_angles"] = dict(ds["dof_angles"].attrs)
+            metadata["keypoint_pos"] = dict(ds["keypoint_pos"].attrs)
+            metadata["segmentation_labels"] = dict(ds["segmentation_labels"].attrs)
+            metadata["mesh_pose6d"] = dict(ds["mesh_pose6d_rel_camera"].attrs)
+            for inner_dict in metadata.values():
+                inner_dict["keys"] = list(inner_dict["keys"])
         return metadata
 
     def __len__(self) -> int:

@@ -208,9 +208,9 @@ class AtomicBatchDataset(Dataset):
 
     @staticmethod
     def save_atomic_batch_sim_data(
-        sim_data: dict[str, np.ndarray],
         output_path: Path,
-        metadata: dict | None = None,
+        sim_data: dict[str, np.ndarray],
+        label_keys: dict[str, list[str]],
     ):
         """Save simulation data for an atomic batch to an HDF5 file.
 
@@ -226,11 +226,9 @@ class AtomicBatchDataset(Dataset):
                 # these files will be accessed very frequently during training, so we
                 # use lzf (faster than gzip) and no shuffling to optimize for speed
                 compression = "lzf" if key == "body_seg_maps" else None
-                f.create_dataset(key, data=value, compression=compression)
+                ds = f.create_dataset(key, data=value, compression=compression)
+                ds.attrs["keys"] = label_keys[key]
             f.attrs["n_frames"] = next(iter(sim_data.values())).shape[0]
-            if metadata is not None:
-                for key, value in metadata.items():
-                    f.attrs[key] = value
 
     @staticmethod
     def load_atomic_batch_sim_data(
