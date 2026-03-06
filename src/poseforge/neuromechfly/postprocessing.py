@@ -1,3 +1,4 @@
+import matplotlib as mpl
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.ndimage as ndimage
@@ -12,12 +13,7 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 
 import poseforge.neuromechfly.constants as constants
-from poseforge.util.plot import (
-    configure_matplotlib_style,
-    get_segmentation_color_palette,
-)
-
-configure_matplotlib_style()
+from poseforge.util.plot import get_segmentation_color_palette
 
 
 class SegmentLabelParser:
@@ -518,7 +514,8 @@ def _draw_pose_2d_and_3d(
 
     with h5py.File(processed_sim_data_path, "r") as h5_file:
         # Plot 2D image
-        ax_pose2d.imshow(frame)
+        frame = frame.mean(axis=-1)  # make grayscale for visualization
+        ax_pose2d.imshow(frame, cmap="gray", vmin=0, vmax=255)
 
         # Overlay keypoints on 2D image (note that coords are in row, col, depth)
         # Legs
@@ -563,6 +560,7 @@ def _draw_pose_2d_and_3d(
                 marker="o",
                 color=color,
                 linewidth=2,
+                markersize=3,
             )
         # Antenna
         for side in "LR":
@@ -571,16 +569,19 @@ def _draw_pose_2d_and_3d(
             pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
             color = constants.kchain_plotting_colors[f"{side}Antenna"]
             ax_pose3d.plot(
-                pos[0], pos[1], pos[2], marker="o", color=color, markersize=5
+                pos[0], pos[1], pos[2], marker="o", color=color, markersize=3
             )
 
         ax_pose2d.set_axis_off()
-        ax_pose3d.set_xlabel("anterior-posterior")
-        ax_pose3d.set_ylabel("lateral")
-        ax_pose3d.set_zlabel("dorsal-ventral")
-        ax_pose3d.set_xlim(-2, 3)
-        ax_pose3d.set_ylim(-2, 2)
-        ax_pose3d.set_zlim(-0.5, 2)
+        ax_pose3d.set_xlabel("x", labelpad=-10)
+        ax_pose3d.set_ylabel("y", labelpad=-10)
+        ax_pose3d.set_zlabel("z", labelpad=-10)
+        ax_pose3d.set_xlim(-2.2, 2.8)
+        ax_pose3d.set_ylim(-1.8, 1.8)
+        ax_pose3d.set_zlim(-0.5, 1.2)
+        ax_pose3d.set_xticklabels([])
+        ax_pose3d.set_yticklabels([])
+        ax_pose3d.set_zticklabels([])
         ax_pose3d.set_aspect("equal")
 
 
@@ -611,6 +612,7 @@ def visualize_single_frame(
     azimuth_rotation_period: float,
     max_abs_azimuth: float,
     seg_labels_color_palette: list[np.ndarray],
+    dark_background: bool = True,
 ):
     """
     Worker function for parallel frame visualization.
@@ -625,38 +627,60 @@ def visualize_single_frame(
         camera_elevation: 3D plot camera elevation
         azimuth_rotation_period: Period for azimuth rotation
         max_abs_azimuth: Maximum azimuth angle
+        seg_labels_color_palette: Color palette for visualizing segmentation labels
+        dark_background: Whether to use a dark background for the visualization
 
     Returns:
         Tuple of (frame_index, path_to_saved_frame)
     """
     # Create a new figure for this worker (thread-safe)
-    fig = plt.figure(figsize=(18, 6))
-    ax_pose2d = fig.add_subplot(1, 3, 1)
-    ax_pose3d = fig.add_subplot(1, 3, 2, projection="3d")
-    ax_seglabel = fig.add_subplot(1, 3, 3)
-    ax_pose2d.set_title("2D pose overlay")
-    ax_pose3d.set_title("3D pose")
-    ax_seglabel.set_title("Segmentation labels")
+    with mpl.style.context("dark_background" if dark_background else plt.rcParams):
+        plt.rcParams["font.family"] = "Arial"
 
-    # Plot 2D and 3D pose
-    _draw_pose_2d_and_3d(
-        ax_pose2d,
-        ax_pose3d,
-        frame_index=frame_index,
-        frame=frame,
-        processed_sim_data_path=processed_sim_data_path,
-        camera_elevation=camera_elevation,
-        azimuth_rotation_period=azimuth_rotation_period,
-        max_abs_azimuth=max_abs_azimuth,
-    )
+        fig = plt.figure(figsize=(9, 3.6))
+        fig.subplots_adjust(wspace=0.3, left=0.05, right=0.95, top=0.95, bottom=0.05)
+        ax_pose2d = fig.add_subplot(1, 3, 1)
+        ax_pose3d = fig.add_subplot(1, 3, 2, projection="3d")
+        ax_seglabel = fig.add_subplot(1, 3, 3)
+        ax_pose2d.set_title("NeuroMechFly rendering")
+        ax_pose3d.set_title("Ground-truth 3D pose")
+        ax_seglabel.set_title("Ground-truth segmentation map")
 
-    # Draw segmentation labels map
-    _draw_segmentation_labels_map(ax_seglabel, seg_labels, seg_labels_color_palette)
+        if dark_background:
+            for axis in [ax_pose3d.xaxis, ax_pose3d.yaxis, ax_pose3d.zaxis]:
+                # Pane (background panel) color
+                axis.pane.set_facecolor((0.05, 0.05, 0.05, 1))
+                # Axis line color and width
+                axis.line.set_color((0.4, 0.4, 0.4, 1))
+                axis.line.set_linewidth(1)
+                # Tick color and width
+                axis.set_tick_params(colors=(0.4, 0.4, 0.4, 1), width=1)
+                # Label color
+                axis.label.set_color((0.4, 0.4, 0.4, 1))
+                # Grid - no public API for 3d grid styling, update _axinfo dict instead
+                axis._axinfo["grid"]["color"] = (0.4, 0.4, 0.4, 1)
+                axis._axinfo["grid"]["linewidth"] = 0.5
+                
 
-    # Save the figure
-    viz_frame_path = temp_dir / f"frame_{frame_index:06d}.png"
-    fig.savefig(viz_frame_path)
-    plt.close(fig)
+        # Plot 2D and 3D pose
+        _draw_pose_2d_and_3d(
+            ax_pose2d,
+            ax_pose3d,
+            frame_index=frame_index,
+            frame=frame,
+            processed_sim_data_path=processed_sim_data_path,
+            camera_elevation=camera_elevation,
+            azimuth_rotation_period=azimuth_rotation_period,
+            max_abs_azimuth=max_abs_azimuth,
+        )
+
+        # Draw segmentation labels map
+        _draw_segmentation_labels_map(ax_seglabel, seg_labels, seg_labels_color_palette)
+
+        # Save the figure
+        viz_frame_path = temp_dir / f"frame_{frame_index:06d}.png"
+        fig.savefig(viz_frame_path, dpi=150)
+        plt.close(fig)
 
     return frame_index, viz_frame_path
 
@@ -668,6 +692,7 @@ def visualize_subsegment(
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
     n_jobs: int = -1,  # Default to all available cores
+    dark_background: bool = True,
 ) -> None:
     # Load video frames
     frames, fps = load_video_frames(
@@ -712,6 +737,7 @@ def visualize_subsegment(
             azimuth_rotation_period,
             max_abs_azimuth,
             seg_labels_color_palette=color_palette,
+            dark_background=dark_background,
         )
         for i, frame in tqdm(
             enumerate(frames),

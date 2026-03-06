@@ -186,7 +186,10 @@ def run_sequentially_for_testing():
 
 
 if __name__ == "__main__":
+    from poseforge.util.plot import configure_matplotlib_style
     import tyro
+
+    configure_matplotlib_style()
 
     get_hardware_availability(check_gpu=False, print_results=True)
 

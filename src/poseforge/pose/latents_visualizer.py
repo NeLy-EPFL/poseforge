@@ -221,7 +221,7 @@ def visualize_latent_trajectory(
     latent_space_data: np.ndarray,
     source_data_freq: int,
     play_speed: float = 0.1,
-    trail_duration_sec: float = 1.0,
+    trail_duration_sec: float = 0.05,
     output_fps: int = 30,
     video_path: Path | None = None,
     headless: bool = True,
@@ -255,18 +255,20 @@ def visualize_latent_trajectory(
         fill_value="extrapolate",
     )
     latent_space_data_resampled = interp_func(t_resampled)
-    n_variants, n_samples, latent_dim = latent_space_data_resampled.shape
+    latent_dim = latent_space_data_resampled.shape[2]
 
     # Fit PCA
     pca = PCA(n_components=3)
     pca_x_mat = latent_space_data_resampled.reshape(-1, latent_dim)
     pca.fit(pca_x_mat)
-    latent_space_data_pca = pca.transform(pca_x_mat).reshape(n_variants, n_samples, 3)
+    full_x_mat = latent_space_data.reshape(-1, latent_dim)
+    n_variants, n_samples, _ = latent_space_data.shape
+    latent_space_data_pca = pca.transform(full_x_mat).reshape(n_variants, n_samples, 3)
 
     # Visualize
     visualizer = LatentSpaceTrajectoryVisualizer(
         latent_space_data_pca,
-        trail_length=int(trail_duration_sec * output_fps),
+        trail_length=int(trail_duration_sec * source_data_freq),
         fps=output_fps,
         headless=headless,
     )

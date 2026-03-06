@@ -836,7 +836,8 @@ if __name__ == "__main__":
     input_images_basedir = Path(
         "bulk_data/behavior_images/spotlight_aligned_and_cropped/"
     )
-    input_dirs = sorted(list(production_model_basedir.glob("20250613-fly1b-002/")))
+    # input_dirs = sorted(list(production_model_basedir.glob("20250613-fly1b-002/")))
+    input_dirs = sorted(list(production_model_basedir.glob("*")))
     print(f"Found {len(input_dirs)} directories to process")
 
     # Process directories in parallel. Note that each task is parallelized internally

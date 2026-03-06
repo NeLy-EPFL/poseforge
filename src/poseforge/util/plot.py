@@ -4,13 +4,15 @@ from matplotlib import pyplot as plt
 from distinctipy import get_colors
 
 
-def configure_matplotlib_style():
-    matplotlib.style.use("fast")
+def configure_matplotlib_style(dark_background: bool = False):
     plt.rcParams["font.family"] = "Arial"
     plt.rcParams["pdf.fonttype"] = 42
     # suppress matplotlib font manager warnings
     logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
-
+    if dark_background:
+        matplotlib.style.use("dark_background")
+    else:
+        matplotlib.style.use("fast")
 
 def get_segmentation_color_palette(
     n_classes: int, fix_background_body_thorax: bool = True

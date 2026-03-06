@@ -6,7 +6,7 @@ authors = [
     {name = "Sibo Wang-Chen",email = "sibo.wang@epfl.ch"}
 ]
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.0,<3",
     "scipy>=1.16.1,<2",
@@ -39,7 +39,7 @@ dependencies = [
     "imagecodecs==2025.8.2",
     "opencv-python>=4.12,<5",
     "filelock>=3.20.0,<4",
-    "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
+    "av>=16,<17",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
     "loguru==0.7.*",
     # The following should be installed manually (pip install -e .):
     # flygym & dm_control
