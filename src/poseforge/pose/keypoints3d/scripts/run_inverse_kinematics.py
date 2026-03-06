@@ -13,6 +13,8 @@ from tqdm import tqdm
 from PIL import Image
 from joblib import Parallel, delayed
 from pvio.io import write_frames_to_video
+import argparse
+from importlib.resources import files
 
 import poseforge.pose.keypoints3d.invkin as invkin
 import poseforge.pose.keypoints3d.visualizer as visualizer
@@ -810,6 +812,46 @@ def _save_seqikpy_output(
                 shuffle=True,
             )
 
+def start():
+    parser = argparse.ArgumentParser(
+        description="Run inverse kinematics on keypoints inference."
+    )
+    parser.add_argument(
+        "aligned_data_dir",
+        type=Path,
+        default=Path("bulk_data/spotlight_aligned_and_cropped"),
+        help="Base directory containing aligned and cropped spotlight recording trials.",
+    )
+    parser.add_argument(
+        "glob_pattern",
+        type=str,
+        default="fly*",
+        help="Glob pattern to match spotlight trial directories.",
+    )
+    parser.add_argument(
+        "--keypoints_basedir",
+        type=Path,
+        default=None,
+        help="Base directory containing keypoints3d inference outputs. If not provided, will be inferred from aligned_data_dir.",
+    )
+    parser.add_argument(
+        "--epoch",
+        type=int,
+        help="Epoch number of the model checkpoint to use for inference.",
+        default=19,
+    )
+    parser.add_argument(
+        "--step",
+        type=int,
+        help="Step number of the model checkpoint to use for inference.",
+        default=9167,
+    )
+    
+
+    args = parser.parse_args()
+    
+    return args.aligned_data_dir, args.glob_pattern, args.epoch, args.step, args.keypoints_basedir
+
 
 if __name__ == "__main__":
     import tyro
@@ -828,15 +870,15 @@ if __name__ == "__main__":
     #     --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/
 
     # * Processing from this script directly
-    epoch = 19  # these must be consistent with run_keypoints3d_inference.py
-    step = 9167  # same as above
-    production_model_basedir = Path(
-        f"bulk_data/pose_estimation/keypoints3d/trial_20251118a/production/epoch{epoch}_step{step}/"
-    )
-    input_images_basedir = Path(
-        "bulk_data/behavior_images/spotlight_aligned_and_cropped/"
-    )
-    input_dirs = sorted(list(production_model_basedir.glob("20250613-fly1b-002/")))
+    input_images_basedir, glob_pattern, epoch, step, keypoints_basedir = start()
+    
+    if keypoints_basedir is None:
+        production_root = files("poseforge").parent.parent / "production_models"
+        production_model_basedir = production_root / f"keypoints3d/trial_20251118a/production/epoch{epoch}_step{step}"
+    else:
+        production_model_basedir = keypoints_basedir / f"keypoints3d/epoch{epoch}_step{step}"
+    print(production_model_basedir)
+    input_dirs = sorted(list(production_model_basedir.glob(glob_pattern)))
     print(f"Found {len(input_dirs)} directories to process")
 
     # Process directories in parallel. Note that each task is parallelized internally
