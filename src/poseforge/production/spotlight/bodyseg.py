@@ -132,6 +132,7 @@ def visualize_body_segmentation(
     loading_buffer_size: int = 128,
     loading_cache_video_metadata: bool = True,
     rendering_n_workers: int = 12,
+    frame_range: tuple[int, int] | None = None,
 ):
     logger.info("Visualizing body segmentation predictions")
 
@@ -170,6 +171,9 @@ def visualize_body_segmentation(
             rendered_fps=rendered_fps,
             n_data_frames=len(video_loader.dataset),
         )
+        if frame_range is not None:
+            start, end = frame_range
+            rendered_ids = [fid for fid in rendered_ids if start <= fid < end]
 
         def iter_frames():
             for batch in video_loader:
@@ -227,14 +231,17 @@ class _BodySegAnimator(Animator):
             ax.set_aspect("equal", adjustable="box")
 
         ax_input.set_title("Input")
+        ax_input.set_facecolor("black")
         self.input_artist = ax_input.imshow(
             np.zeros(self.image_shape), vmin=0, vmax=1, cmap="gray"
         )
         ax_segmap.set_title("Predicted labels")
+        ax_segmap.set_facecolor("black")
         self.labels_artist = ax_segmap.imshow(
             np.zeros((*self.image_shape, 3), dtype=np.uint8),
         )
         ax_conf.set_title("Confidence")
+        ax_conf.set_facecolor("black")
         self.conf_artist = ax_conf.imshow(
             np.zeros(self.image_shape), vmin=0, vmax=1, cmap=cmr.eclipse
         )

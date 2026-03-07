@@ -131,6 +131,8 @@ class SpotlightRecordingProcessor:
         loading_buffer_size: int = 128,
         loading_cache_video_metadata: bool = True,
         rendering_n_workers: int = 12,
+        ax3d_pan_period_dispsec: float = 10.0,
+        frame_range: tuple[int, int] | None = None,
     ) -> None:
         if not self.keypoints3d_predicted:
             raise RuntimeError(
@@ -159,6 +161,8 @@ class SpotlightRecordingProcessor:
             loading_buffer_size=loading_buffer_size,
             loading_cache_video_metadata=loading_cache_video_metadata,
             rendering_n_workers=rendering_n_workers,
+            ax3d_pan_period_dispsec=ax3d_pan_period_dispsec,
+            frame_range=frame_range,
         )
 
         self.keypoints3d_ik_visualized = True
@@ -192,6 +196,7 @@ class SpotlightRecordingProcessor:
         loading_buffer_size: int = 128,
         loading_cache_video_metadata: bool = True,
         rendering_n_workers: int = 12,
+        frame_range: tuple[int, int] | None = None,
     ):
         if not self.bodyseg_predicted:
             raise RuntimeError(
@@ -211,5 +216,6 @@ class SpotlightRecordingProcessor:
             loading_buffer_size=loading_buffer_size,
             loading_cache_video_metadata=loading_cache_video_metadata,
             rendering_n_workers=rendering_n_workers,
+            frame_range=frame_range,
         )
         self.bodyseg_visualized = True
