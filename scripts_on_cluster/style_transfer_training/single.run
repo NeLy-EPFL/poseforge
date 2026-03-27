@@ -1,0 +1,109 @@
+#!/bin/bash -l
+
+#SBATCH --job-name cut_single
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 32
+#SBATCH --mem 64GB
+#SBATCH --time 71:59:59
+#SBATCH --partition=l40s
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /scratch/%u/poseforge/bulk_data/style_transfer/20250905_continued_training/outputs/single_%j.out
+
+set -euo pipefail
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment setup
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Project / data paths (edit as needed)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
+DATASET_PATH="bulk_data/style_transfer/aymanns2022_pseudocolor_spotlight_dataset"
+
+# Base output directories
+CAMPAIGN_TAG="20250905_continued_training"
+OUTPUT_BASE="/scratch/$USER/poseforge/bulk_data/style_transfer/${CAMPAIGN_TAG}"
+CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
+LOG_BASEDIR="${OUTPUT_BASE}/logs"
+WANDB_BASEDIR="${OUTPUT_BASE}/wandb"
+OUT_BASEDIR="${OUTPUT_BASE}/outputs"
+
+# -----------------------------------------------------------------------------
+# Exposed model/training hyperparameters
+# -----------------------------------------------------------------------------
+# Naming
+RUN_SUFFIX="cont1"
+
+# Architecture / loss
+NGF=32
+NETG="stylegan2"
+LAMBDA_GAN=0.5
+
+# Optimization / schedule
+BATCH_SIZE=4
+LR=0.0001
+START_EPOCH=100
+N_EPOCHS=100
+N_EPOCHS_DECAY=100
+
+# Runtime / logging
+CUT_MODE="CUT"
+SAVE_EPOCH_FREQ=1
+NUM_THREADS=32
+WANDB_PROJECT="poseforge-image-style-transfer"
+
+# -----------------------------------------------------------------------------
+# Run name logic (same style as gen_batch_scripts.py)
+# -----------------------------------------------------------------------------
+BASE_RUN_NAME="ngf${NGF}_netG${NETG}_batsize${BATCH_SIZE}_lambGAN${LAMBDA_GAN}"
+RUN_NAME="${BASE_RUN_NAME}-${RUN_SUFFIX}"
+
+CHECKPOINT_DIR="${CHECKPOINT_BASEDIR}/${BASE_RUN_NAME}"
+LOG_DIR="${LOG_BASEDIR}/${BASE_RUN_NAME}"
+WANDB_DIR="${WANDB_BASEDIR}/${BASE_RUN_NAME}"
+
+mkdir -p "$CHECKPOINT_DIR" "$LOG_DIR" "$WANDB_DIR" "$OUT_BAS
+# Optional: expose WANDB_DIR to training process
+export WANDB_DIR
+
+# -----------------------------------------------------------------------------
+# Train
+# -----------------------------------------------------------------------------
+cd "$PROJECT_ROOT"
+
+echo "Training starting at $(date)"
+echo "Run name: $RUN_NAME"
+echo "Checkpoints: $CHECKPOINT_DIR"
+echo "Logs: $LOG_DIR"
+echo "WandB: $WANDB_DIR"
+
+python -u "$TRAINING_SCRIPT_PATH" \
+    --dataroot "$DATASET_PATH" \
+    --name "$RUN_NAME" \
+    --CUT_mode "$CUT_MODE" \
+    --checkpoints_dir "$CHECKPOINT_DIR" \
+    --tensorboard_log_dir "$LOG_DIR" \
+    --epoch "$START_EPOCH" \
+    --n_epochs "$N_EPOCHS" \
+    --n_epochs_decay "$N_EPOCHS_DECAY" \
+    --lr "$LR" \
+    --ngf "$NGF" \
+    --netG "$NETG" \
+    --batch_size "$BATCH_SIZE" \
+    --lambda_GAN "$LAMBDA_GAN" \
+    --save_epoch_freq "$SAVE_EPOCH_FREQ" \
+    --num_threads "$NUM_THREADS" \
+    --wandb_project "$WANDB_PROJECT" \
+    --preprocess "resize_and_center_patch" \
+    --load_size 900
+
+echo "Training ends at $(date)"
