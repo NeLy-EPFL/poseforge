@@ -46,6 +46,13 @@ NGF=32
 NETG="stylegan2"
 LAMBDA_GAN=0.1
 PREPROCESS="resize_and_crop"
+# Set load_size depending on preprocess
+if [[ "$PREPROCESS" == *center_patch* ]]; then
+    LOAD_SIZE=900
+else
+    LOAD_SIZE=286
+fi
+
 
 # Optimization / schedule
 BATCH_SIZE=4
@@ -103,6 +110,7 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --num_threads "$NUM_THREADS" \
     --preprocess "$PREPROCESS" \
     --crop_size 256 \
+    --load_size "$LOAD_SIZE" \  
     #--wandb_project "$WANDB_PROJECT" \
 
 echo "Training ends at $(date)"
