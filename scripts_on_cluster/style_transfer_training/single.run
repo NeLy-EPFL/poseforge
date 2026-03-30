@@ -5,7 +5,7 @@
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
 #SBATCH --mem 64GB
-#SBATCH --time 71:59:59
+#SBATCH --time 24:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
@@ -45,21 +45,16 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 NGF=32
 NETG="stylegan2"
 LAMBDA_GAN=0.1
-PREPROCESS="resize_and_crop"
-# Set load_size depending on preprocess
-if [[ "$PREPROCESS" == *center_patch* ]]; then
-    LOAD_SIZE=900
-else
-    LOAD_SIZE=286
-fi
-
+PREPROCESS="resize_and_center_patch"
+LOAD_SIZE=286
+LR_POLICY="linear"
 
 # Optimization / schedule
 BATCH_SIZE=4
-LR=0.0005
+LR=0.0001
 START_EPOCH="latest"
-N_EPOCHS=50
-N_EPOCHS_DECAY=100
+N_EPOCHS=500
+N_EPOCHS_DECAY=0
 
 # Runtime / logging
 CUT_MODE="CUT"
@@ -110,7 +105,8 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --num_threads "$NUM_THREADS" \
     --preprocess "$PREPROCESS" \
     --crop_size 256 \
-    --load_size "$LOAD_SIZE" \  
+    --load_size "$LOAD_SIZE" \
+    --lr_policy "$LR_POLICY" \
     #--wandb_project "$WANDB_PROJECT" \
 
 echo "Training ends at $(date)"
