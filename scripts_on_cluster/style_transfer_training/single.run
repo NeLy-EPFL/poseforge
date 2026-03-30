@@ -40,6 +40,7 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
+RUN_NAME="cntrl_lr"
 
 # Architecture / loss
 NGF=32
@@ -66,7 +67,7 @@ WANDB_PROJECT="poseforge-image-style-transfer"
 # Run name logic (same style as gen_batch_scripts.py)
 # -----------------------------------------------------------------------------
 RUN_ID=$(date +"%Y%m%d_%H%M%S")
-BASE_RUN_NAME="${RUN_ID}_ngf${NGF}_netG${NETG}_bs${BATCH_SIZE}_lG${LAMBDA_GAN}_LR${LR}_${PREPROCESS}"
+BASE_RUN_NAME="${RUN_ID}_${RUN_NAME}"
 
 CHECKPOINT_DIR="${CHECKPOINT_BASEDIR}/${BASE_RUN_NAME}"
 LOG_DIR="${LOG_BASEDIR}/${BASE_RUN_NAME}"
