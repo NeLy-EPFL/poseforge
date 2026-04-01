@@ -1,36 +1,52 @@
 import numpy as np
 import pandas as pd
-import dm_control.mujoco
 import imageio
 import h5py
 from collections import defaultdict
 from tqdm import trange
 from pathlib import Path
-from dm_control.rl.control import PhysicsError
-from dm_control.mjcf import Physics
-from flygym import Fly, SingleFlySimulation, Camera
-from flygym.arena import BaseArena, FlatTerrain
-from flygym.preprogrammed import all_leg_dofs
+
+from flygym.compose import Fly, KinematicPosePreset, ActuatorType
+from flygym.anatomy import Skeleton, AxisOrder, JointPreset, ActuatedDOFPreset
+
+from flygym.anatomy import JointDOF, RotationAxis, BodySegment
+from flygym.compose import FlatGroundWorld, TetheredWorld
+from flygym.utils.math import Rotation3D
+from flygym import Simulation, Renderer
+
+import mujoco as mj
+import dm_control.mjcf as mjcf
+import numpy as np
+from jaxtyping import Float
 
 from poseforge.neuromechfly.data import interpolate_trajectories
 from poseforge.neuromechfly.constants import (
     parse_nmf_joint_name,
-    color_by_link,
-    color_by_kinematic_chain,
-    color_palette,
+    # color_by_link,
+    # color_by_kinematic_chain,
+    # color_palette,
 )
 
+axis_order = AxisOrder.ROLL_YAW_PITCH
+articulated_joints = JointPreset.LEGS_ONLY
+actuated_dofs = ActuatedDOFPreset.LEGS_ACTIVE_ONLY
+neutral_pose = KinematicPosePreset.NEUTRAL
+actuator_type = ActuatorType.POSITION
+skeleton = Skeleton(axis_order=axis_order, joint_preset=articulated_joints)
 
-class SpotlightArena(FlatTerrain):
+
+class SpotlightArena(TetheredWorld):
     def __init__(
         self,
+        name: str = "spotlight_arena",
         size: tuple[float, float] = (100, 100),
         friction: tuple[float, float, float] = (1, 0.005, 0.0001),
     ):
-        BaseArena.__init__(self)
+        super().__init__(name)
+        #self.ground_geom.remove() # remove the ground with texture add transparent floor
 
         ground_size = [*size, 1]
-        self.root_element.worldbody.add(
+        self.ground_geom = self.mjcf_root.worldbody.add(
             "geom",
             type="plane",
             name="ground",
@@ -39,134 +55,54 @@ class SpotlightArena(FlatTerrain):
             conaffinity=0,
             rgba=(1, 1, 1, 0),
         )
-        self.root_element.worldbody.add(
-            "geom",
-            type="box",  # somehow plane doesn't work
-            name="background",
-            size=(100, 100, 1),
-            pos=(0, 0, 5),
-            friction=friction,
-            conaffinity=0,
-            rgba=(0, 0, 0, 1),
-        )
         self.friction = friction
 
-        # Remove lights
-        for light in self.root_element.root.worldbody.light:
-            light.remove()
+        # # Remove lights
+        # for light in self.root_element.root.worldbody.light:
+        #     light.remove()
 
-        # Make lights non-shadow-casting to make segments look more uniform
-        self.root_element.default.light.castshadow = False
+        # # Make lights non-shadow-casting to make segments look more uniform
+        # self.root_element.default.light.castshadow = False
+
+        self.legpos_to_groundcontactsensors_by_fly = None
 
     def get_spawn_position(self, rel_pos, rel_angle):
         return rel_pos, rel_angle
 
 
 class FlyForRendering(Fly):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, visual_paths:list[Path], *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.all_body_segment_names = [
-            body.name for body in self.model.find_all("body") if body.name != "FlyBody"
+        self.all_body_segments_names = [
+            b.name for b in self.get_bodysegs_order()
         ]
+        self.visual_paths = visual_paths
         self._add_mesh_state_sensors()
-        self._assign_colors()
+        self._add_cardinal_sensors()
         self.current_color_coding: int = -1
-
-    def get_color_combo_rgba(self, segment_name: str):
-        return self._segment_name_to_color_combo_rgba.get(
-            segment_name, self._default_color_combo_rgba
-        )
-
-    def _assign_colors(self):
-        self._segment_name_to_color_combo_rgba = {}
-
-        # Leg segments
-        for side in "LR":
-            for pos in "FMH":
-                leg = f"{side}{pos}"
-                for link in ["Coxa", "Femur", "Tibia"]:
-                    segment_name = f"{leg}{link}"
-                    color_combo = (
-                        color_palette[color_by_link[link]],
-                        color_palette[color_by_kinematic_chain[leg]],
-                    )
-                    self._segment_name_to_color_combo_rgba[segment_name] = color_combo
-
-                # All tarsal segments share the same color
-                for tarsus_idx in range(1, 6):
-                    segment_name = f"{leg}Tarsus{tarsus_idx}"
-                    color_combo = (
-                        color_palette[color_by_link["Tarsus"]],
-                        color_palette[color_by_kinematic_chain[leg]],
-                    )
-                    self._segment_name_to_color_combo_rgba[segment_name] = color_combo
-
-        # Antennal segments
-        for side in "LR":
-            for link in ["Pedicel", "Funiculus", "Arista"]:
-                segment_name = f"{side}{link}"
-                color_combo = (
-                    color_palette[color_by_link["Antenna"]],
-                    color_palette[color_by_kinematic_chain[side]],
-                )
-                self._segment_name_to_color_combo_rgba[segment_name] = color_combo
-
-        # Special case for Thorax
-        thorax_color_combo = (
-            color_palette[color_by_link["Thorax"]],
-            color_palette[color_by_kinematic_chain["Thorax"]],
-        )
-        self._segment_name_to_color_combo_rgba["Thorax"] = thorax_color_combo
-
-        # Set default color combo for segments not listed above
-        self._default_color_combo_rgba = (color_palette["gray"], color_palette["gray"])
-
-    def _set_geom_colors(self):
-        """This method is inherited fly flygym.Fly, but we override it to
-        set material properties. We don't really set colors (they are
-        handled upon rendering). We simply set the material property to
-        make the label rendering look uniform.
-        """
-        # Define material for each different color to be rendered
-        self.model.asset.add(
-            "material",
-            name=f"seglabel_material",
-            emission=1.0,
-            specular=0.0,
-            shininess=0.0,
-            reflectance=0.0,
-        )
-
-        # Assign material to each geom
-        for geom in self.model.find_all("geom"):
-            if hasattr(geom, "material"):
-                geom.material = f"seglabel_material"
-            else:
-                print(f"Geom {geom.name} has no material attribute")
-            geom._remove_attribute("rgba")
-
-    def change_color_coding(self, physics: Physics, color_coding_idx: int):
-        if color_coding_idx == self.current_color_coding:
+    
+    def colorize(self, next_color_coding_idx: int):
+        if next_color_coding_idx == self.current_color_coding:
             return
-        for geom in self.model.find_all("geom"):
-            rgba = self.get_color_combo_rgba(geom.name)[color_coding_idx]
-            self.change_segment_color(physics, geom.name, rgba)
+        super().colorize(self.visual_paths[next_color_coding_idx])
+        self.current_color_coding = next_color_coding_idx
+        return
 
     def _add_pos_and_quat_sensors(self, segment_name):
         sensors = {}
 
         # Position in body frame (xbody), i.e. at joint with parent body
-        sensors["pos_atparent"] = self.model.sensor.add(
+        sensors["pos_atparent"] = self.mjcf_root.sensor.add(
             "framepos",
             name=f"{segment_name}_pos_atparent",
-            objtype="xbody",
+            objtype="geom",
             objname=segment_name,
         )
 
         # The following sensors are not currently used, so we comment them out to
         # avoid cluttering the simulation with too many sensors.
         # # Rotation in body frame (xbody), i.e. at joint with parent body
-        # sensors["quat_atparent"] = self.model.sensor.add(
+        # sensors["quat_atparent"] = self.mjcf_root.sensor.add(
         #     "framequat",
         #     name=f"{segment_name}_quat_atparent",
         #     objtype="xbody",
@@ -174,7 +110,7 @@ class FlyForRendering(Fly):
         # )
 
         # # Position in inertial frame (body), i.e. at COM of body
-        # sensors["pos_com"] = self.model.sensor.add(
+        # sensors["pos_com"] = self.mjcf_root.sensor.add(
         #     "framepos",
         #     name=f"{segment_name}_pos_com",
         #     objtype="body",
@@ -182,7 +118,7 @@ class FlyForRendering(Fly):
         # )
 
         # # Rotation in inertial frame (body), i.e. at COM of body
-        # sensors["quat_com"] = self.model.sensor.add(
+        # sensors["quat_com"] = self.mjcf_root.sensor.add(
         #     "framequat",
         #     name=f"{segment_name}_quat_com",
         #     objtype="body",
@@ -193,114 +129,121 @@ class FlyForRendering(Fly):
 
     def _add_mesh_state_sensors(self):
         self.body_segment_sensor_lookup = defaultdict(dict)
-        for segment_name in self.all_body_segment_names:
+        for segment_name in self.all_body_segments_names:
             sensors = self._add_pos_and_quat_sensors(segment_name)
             for sensor_type, sensor_obj in sensors.items():
                 self.body_segment_sensor_lookup[sensor_type][segment_name] = sensor_obj
 
-
-class SingleFlySimulationForRendering(SingleFlySimulation):
-    num_color_codings = 2
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        assert len(self.cameras) == 1, "Only single camera supported."
-        assert len(self.flies) == 1, "Only single fly supported."
-
-    def render(self):
-        images = []
-        for color_coding_idx in range(self.num_color_codings):
-            self.fly.change_color_coding(self.physics, color_coding_idx)
-            img = self.cameras[0].render(
-                self.physics, self._floor_height, self.curr_time, color_coding_idx
+    def _add_cardinal_sensors(self):
+        self.thorax_orient_sensor_lookup = defaultdict(dict)
+        for axis_name in ["x", "y", "z"]:
+            self.thorax_orient_sensor_lookup[axis_name] = self.mjcf_root.sensor.add(
+                f"frame{axis_name}axis",
+                name=f"thorax_orient{axis_name}",
+                objtype="body", # need to figure out why the order is y z x in the output
+                objname="c_thorax",
             )
-            if img is None:
-                return None
-            images.append(img)
-        return images
+    
 
-
-class CameraForRendering(Camera):
-    """Modified from `flygym.Camera.render()` to support multiple color codings.
-
-    The functional differences are:
-    1. The `CameraForRendering` class maintains a `self._frames_by_color_coding` list
-       containing `num_color_codings` lists of frames, instead of a single
-       `self._frames list`.
-    2. The `.render()` method receives an additional `color_coding_idx` that is used to
-       put the rendered frame into the appropriate list in
-       `self._frames_by_color_coding`.
-    3. The `.save_video()` method saves a separate video for each color coding.
-    """
-
-    num_color_codings = 2
+class SingleFlySimulationForRendering(Simulation):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        del self._frames
-        self._frames_by_color_coding = [[] for _ in range(self.num_color_codings)]
+        assert len(self.world.fly_lookup) == 1, "Expecting exactly one fly in the simulation."
+        assert len(self.world.fly_lookup["nmf"].cameraname_to_mjcfcamera)
+        self._map_internal_meshstatesensor_ids()
+        self._map_internal_cardinalsensor_ids()
+    
+    def _map_internal_meshstatesensor_ids(self) -> None:
+        internal_meshstatesensorids_by_fly = defaultdict(list)
+        for fly_name, fly in self.world.fly_lookup.items():
+            if len(fly.body_segment_sensor_lookup) == 0:
+                continue
+            for segment_name in fly.all_body_segments_names:
+                sensor = fly.body_segment_sensor_lookup["pos_atparent"][segment_name]
+                internal_id = mj.mj_name2id(
+                    self.mj_model, mj.mjtObj.mjOBJ_SENSOR, sensor.full_identifier
+                )
+                start_idx = self.mj_model.sensor_adr[internal_id]
+                sensor_dim = self.mj_model.sensor_dim[internal_id]
+                internal_meshstatesensorids_by_fly[fly_name].extend(
+                    np.arange(start_idx, start_idx + sensor_dim, dtype=np.int32)
+                    )
 
-    def render(
-        self,
-        physics: Physics,
-        floor_height: float,
-        curr_time: float,
-        color_coding_idx: int,
-        last_obs: dict | None = None,
-    ) -> np.ndarray | None:
-        """Mostly copied from `flygym.Camera.render()`"""
-        if (
-            curr_time
-            < len(self._frames_by_color_coding[color_coding_idx])
-            * self._eff_render_interval
-        ):
-            return None
+        
+        self._internal_meshstatesensorids_by_fly = {
+            k: np.array(v, dtype=np.int32) for k, v in internal_meshstatesensorids_by_fly.items()
+        }
 
-        if last_obs is not None:
-            self._update_camera(physics, floor_height, last_obs[0])
+    def get_mesh_state_info(self, fly_name:str)-> tuple[
+        Float[np.ndarray, "n_segments(69) 3"],  # framepos xyz for the 69 segments
+    ]:
+        internal_meshstatesensorids = self._internal_meshstatesensorids_by_fly[fly_name]
+        sensor_data = self.mj_data.sensordata[internal_meshstatesensorids]
+        return sensor_data.reshape(-1, 3)
+    
+    def _map_internal_cardinalsensor_ids(self) -> None:
+        internal_cardinalsensorids_by_fly = defaultdict(dict)
+        for fly_name, fly in self.world.fly_lookup.items():
+            for axis_name in ["x", "y", "z"]:
+                sensor = fly.thorax_orient_sensor_lookup[axis_name]
+                internal_id = mj.mj_name2id(
+                    self.mj_model, mj.mjtObj.mjOBJ_SENSOR, sensor.full_identifier
+                )
+                start_idx = self.mj_model.sensor_adr[internal_id]
+                sensor_dim = self.mj_model.sensor_dim[internal_id]
+                internal_cardinalsensorids_by_fly[fly_name][axis_name] = np.arange(start_idx, start_idx + sensor_dim, dtype=np.int32)
+        self._internal_cardinalsensorids_by_fly = internal_cardinalsensorids_by_fly
 
-        width, height = self.window_size
-        img = physics.render(width=width, height=height, camera_id=self.camera_id)
-        img = img.copy()
-        if last_obs is not None:
-            if self.draw_contacts:
-                for i in range(len(self.targeted_fly_names)):
-                    img = self._draw_contacts(img, physics, last_obs[i])
-            if self.draw_gravity:
-                img = self._draw_gravity(img, physics, last_obs[0]["pos"])
+    def get_cardinal_vectors(self, fly_name:str) -> Float[np.ndarray, "3 3"]:
+        internal_cardinalsensorids = self._internal_cardinalsensorids_by_fly[fly_name]
+        x_axis = self.mj_data.sensordata[internal_cardinalsensorids["x"]].copy()
+        y_axis = self.mj_data.sensordata[internal_cardinalsensorids["y"]].copy()
+        z_axis = self.mj_data.sensordata[internal_cardinalsensorids["z"]].copy()
+        # assert orthonormality of the axes
+        assert np.isclose(x_axis @ y_axis, 0, atol=1e-3), f"x and y axes are not orthogonal: dot product is {x_axis @ y_axis}"
+        assert np.isclose(x_axis @ z_axis, 0, atol=1e-3), f"x and z axes are not orthogonal: dot product is {x_axis @ z_axis}"
+        return np.stack([x_axis, y_axis, z_axis], axis=0)
 
-        self._frames_by_color_coding[color_coding_idx].append(img)
-        self._timestamp_per_frame.append(curr_time)
-        return img
+def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths):
 
-    def save_video(self, save_dir: Path):
-        save_dir.mkdir(parents=True, exist_ok=True)
-
-        for color_coding_idx in range(self.num_color_codings):
-            path = save_dir / f"nmf_sim_render_colorcode_{color_coding_idx}.mp4"
-            with imageio.get_writer(path, fps=self.fps) as video_writer:
-                for img in self._frames_by_color_coding[color_coding_idx]:
-                    video_writer.append_data(img)
-
-
-def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep):
-    # Set up fly
-    fly = FlyForRendering(
-        init_pose="stretch",
-        control="position",
-        actuated_joints=all_leg_dofs,
-        xml_variant="deepfly3d",
-        spawn_pos=(0, 0, 0.5),
-        joint_stiffness=0.1,
+    # This controlls how strongly the actuators try to track the target joint angles
+    actuator_gain = 150.0  # in uN*mm/rad (torque applied per angular discrepancy)
+    
+    fly = FlyForRendering(visual_paths=visual_paths)
+    fly.add_joints(skeleton, neutral_pose=neutral_pose)
+    
+    actuated_dofs_list = fly.skeleton.get_actuated_dofs_from_preset(actuated_dofs)
+    fly.add_actuators(
+        actuated_dofs_list,
+        actuator_type=actuator_type,
+        kp=actuator_gain,
+        neutral_input=neutral_pose,
     )
+    
+    fly.mjcf_root.visual.get_children("global").offwidth = render_window_size[0]
+    fly.mjcf_root.visual.get_children("global").offheight = render_window_size[1]
 
-    # Set up camera
-    camera_params = {
-        "mode": "track",
-        "pos": (0, 0, -100),
-        "euler": (0, np.pi, -np.pi / 2),
-        "fovy": 5,
-    }
+    fly.mjcf_root.root.option.timestep = sim_timestep
+
+    assert fly.name == "nmf", "Expecting fly name to be 'nmf' for consistency with sensors and data recording."
+
+    fly.colorize(0)
+    cam_offset = (0, 0, -100)
+    cam_rot = Rotation3D(format="euler", values=(0, np.pi, -np.pi / 2))
+    cam_offset = (0, 10, 0)
+    cam_rot = Rotation3D(format="euler", values=(0, np.pi/2, 0))
+    tracking_cam = fly.add_tracking_camera()#pos_offset=cam_offset, rotation=cam_rot, fovy=5)
+    fly.add_leg_adhesion()
+
+    spawn_pos = [0, 0, 0.7]  # center of thorax is at 0.7 mm above the ground
+    spawn_rot = Rotation3D(format="quat", values=[1, 0, 0, 0])  # no rotation
+
+    world = SpotlightArena()
+    world.add_fly(fly, spawn_pos, spawn_rot)
+
+    sim = SingleFlySimulationForRendering(world)
+
     # The FlyGym camera receives two parameters: a FPS and a play speed. For example,
     # you might tell the camera "I want a video that replays my simulation at 0.1 speed,
     # and I want this slow-mo video to have a FPS of 25 FPS." You give these parameters
@@ -312,45 +255,28 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
     # data saving/rendering rate based on the desired play speed and FPS, we need to
     # decide the FPS based on the desired play speed and the target data rate.
     flygym_camera_fps = render_fps * render_play_speed
-    camera = CameraForRendering(
-        attachment_point=fly.model.worldbody,
-        camera_name=f"flytrack_cam",
-        camera_parameters=camera_params,
-        window_size=render_window_size,
-        play_speed=render_play_speed,
-        fps=flygym_camera_fps,
-        draw_contacts=False,
-        play_speed_text=False,
-    )
-
-    # Set up simulation
-    sim = SingleFlySimulationForRendering(
-        fly=fly,
-        cameras=[camera],
-        arena=SpotlightArena(),
-        timestep=sim_timestep,
-    )
-    # Get a dm_control.mujoco.Camera object shadowing the FlyGym Camera
-    # that we set up above. This is used to extract the camera matrix more
-    # easily during simulation.
-    dm_camera = dm_control.mujoco.Camera(
-        sim.physics,
-        camera_id=camera.camera_id,
-        width=camera.window_size[0],
-        height=camera.window_size[1],
-    )
+    renderers = [
+        Renderer(
+            sim.mj_model,
+            tracking_cam,
+            camera_res=render_window_size,
+            playback_speed=render_play_speed,
+            output_fps=flygym_camera_fps,
+        )
+        for _ in range(len(visual_paths)) # one renderer per visual path/color coding 
+    ]
 
     # Set up state sensors for body segments
-    body_segment_sensor_lookup = {}
-    for sensor_type, sensors_dict in fly.body_segment_sensor_lookup.items():
-        body_segment_sensor_lookup[sensor_type] = {
-            "segments_list": list(sensors_dict.keys()),
-            "sensor_names_list": [sensor.name for sensor in sensors_dict.values()],
-            "sensor_mjcf_objects_list": list(sensors_dict.values()),
-            "bound_sensors_list": sim.physics.bind(sensors_dict.values()),
-        }
+    # body_segment_sensor_lookup = {}
+    # for sensor_type, sensors_dict in fly.body_segment_sensor_lookup.items():
+    #     body_segment_sensor_lookup[sensor_type] = {
+    #         "segments_list": list(sensors_dict.keys()),
+    #         "sensor_names_list": [sensor.name for sensor in sensors_dict.values()],
+    #         "sensor_mjcf_objects_list": list(sensors_dict.values()),
+    #         "bound_sensors_list": sim.physics.bind(sensors_dict.values()),
+    #     }
 
-    return sim, camera, dm_camera, body_segment_sensor_lookup
+    return sim, renderers, tracking_cam
 
 
 def run_neuromechfly_simulation(
@@ -360,22 +286,12 @@ def run_neuromechfly_simulation(
     render_fps,
     sim_timestep,
     min_sim_duration_sec,
+    visual_paths,
     max_sim_steps=None,
 ):
-    sim, camera, dm_camera, body_segment_sensor_lookup = set_up_simulation(
-        render_window_size, render_play_speed, render_fps, sim_timestep
+    sim, renderers, cam = set_up_simulation(
+        render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths
     )
-    body_prefix = [
-        x for x in sim.physics.named.data.xpos.axes.row.names if x.endswith("/FlyBody")
-    ]
-    assert (
-        len(body_prefix) == 1
-    ), r"Expecting exactly one body named '{prefix}/FlyBody'."
-    body_prefix = body_prefix[0].split("/")[0]  # should be something like "0/" or "1/"
-    body_segments_list_with_prefix = [
-        f"{body_prefix}/{segment_name}"
-        for segment_name in sim.fly.all_body_segment_names
-    ]
 
     # list[float]
     timestamps_hist = []
@@ -398,6 +314,10 @@ def run_neuromechfly_simulation(
     # list[ndarray of shape (3,)], fly base position in world coordinates
     fly_base_pos_hist = []
 
+    all_bodies = sim.world.fly_lookup["nmf"].all_body_segments_names
+    base_pose_idx = all_bodies.index("c_thorax")  # used to track fly base position and flipping
+
+    sim.warmup()
     # Simulation loop
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
         # Stop if we have reached the desired number of simulation steps (for testing)
@@ -405,63 +325,67 @@ def run_neuromechfly_simulation(
             break
 
         # Step physics simulation
-        action = {"joints": trajectories_interp[sim_frame_id]}
-        try:
-            observation, reward, terminated, truncated, info = sim.step(action)
-        except PhysicsError as e:
-            print(f"Simulation error at frame {sim_frame_id}: {e}")
-            break
-        frame_rendered = sim.render()
+        sim.set_actuator_inputs("nmf",
+                                actuator_type,
+                                trajectories_interp[sim_frame_id])
+        sim.step()
 
-        # Check if a new frame is rendered. If not, continue without extracting any data
-        if frame_rendered is None:
-            continue
+        curr_time = sim.time
+        if curr_time >= renderers[0]._last_render_time_sec + renderers[0]._secs_between_renders:
+            for i, renderer in enumerate(renderers):
+                sim.world.fly_lookup["nmf"].colorize(i)  # update fly's visual appearance to match the renderer's visual path/color coding
+                ret = renderer.render_as_needed(sim.mj_data)
+                assert ret, "Expect rendering to be needed but render_as_needed() returned False."
+        else:
+            continue  # skip rendering and data recording if there is no frame
 
         # Store timestamps
-        timestamps_hist.append(sim.curr_time)
+        timestamps_hist.append(sim.time)
 
         # Store joint angles
-        joints_angles_hist.append(observation["joints"][0, :].copy())
+        joints_angles_hist.append(sim.get_joint_angles("nmf"))
 
         # Store mesh states (from sensors added to each body segment)
-        for sensor_type, sensor_info in body_segment_sensor_lookup.items():
-            num_sensors = len(sensor_info["segments_list"])
-            bound_sensors = sensor_info["bound_sensors_list"]
-            sensor_readings = bound_sensors.sensordata.copy()
-            sensor_readings = sensor_readings.reshape((num_sensors, -1))
-            body_segment_state_hists[sensor_type].append(sensor_readings)
+        state_sensor_data = sim.get_mesh_state_info("nmf")
+        body_segment_state_hists["pos_atparent"].append(state_sensor_data)
+        # for sensor_type, sensor_info in body_segment_sensor_lookup.items():
+        #     num_sensors = len(sensor_info["segments_list"])
+        #     bound_sensors = sensor_info["bound_sensors_list"]
+        #     sensor_readings = bound_sensors.sensordata.copy()
+        #     sensor_readings = sensor_readings.reshape((num_sensors, -1))
+        #     body_segment_state_hists[sensor_type].append(sensor_readings)
 
         # Store global body segment states (from MjData)
-        pos_global = sim.physics.named.data.xpos[body_segments_list_with_prefix]
-        quat_global = sim.physics.named.data.xquat[body_segments_list_with_prefix]
+        pos_global = sim.get_body_positions("nmf")
+        quat_global = sim.get_body_rotations("nmf")
         body_segment_state_hists["pos_global"].append(pos_global)
         body_segment_state_hists["quat_global"].append(quat_global)
 
         # Store forward vector
-        cardinal_vectors_hist.append(observation["cardinal_vectors"].copy())
+        cardinal_vectors = sim.get_cardinal_vectors("nmf")
+        cardinal_vectors_hist.append(cardinal_vectors)  # forward/left/up vectors in world coordinates
 
         # Store camera matrix
-        camera_matrix_hist.append(dm_camera.matrix.copy())
+        cam_xmat = renderers[0].get_xmat_for_camera(cam, sim.mj_data)  # assuming all renderers use the same camera
+        camera_matrix_hist.append(cam_xmat.reshape(-1))
 
         # Store fly base position
-        fly_base_pos = observation["fly"][0, :].copy()
-        fly_base_pos_hist.append(fly_base_pos)
+        fly_base_pos_hist.append(pos_global[base_pose_idx])
 
         # Check if the fly has flipped over
-        up_vector_z_component = observation["cardinal_vectors"][2, 2]
+        up_vector_z_component = cardinal_vectors[1, 2]
         if up_vector_z_component < 0:
             print(f"Fly flipped over at frame {sim_frame_id}. Stopping simulation.")
             break
 
-    final_simulated_time_sec = sim.curr_time
-    sim.close()
+    final_simulated_time_sec = sim.time
 
     if final_simulated_time_sec < min_sim_duration_sec or sim_frame_id == 0:
         print(
             f"Simulation failed too early at {final_simulated_time_sec:.3f} sec. "
             f"Discarding results."
         )
-        return camera, None
+        return renderers, None
 
     hist_dict = {
         "values": {
@@ -473,12 +397,12 @@ def run_neuromechfly_simulation(
             "fly_base_pos": fly_base_pos_hist,
         },
         "keys": {
-            "joint_angles": sim.fly.actuated_joints,
-            "body_segments": sim.fly.all_body_segment_names,
+            "joint_angles": [j.name for j in sim.world.fly_lookup["nmf"].get_jointdofs_order()],
+            "body_segments": sim.world.fly_lookup["nmf"].all_body_segments_names,
             "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
         },
     }
-    return camera, hist_dict
+    return renderers, hist_dict
 
 
 def make_simulation_data_h5(hist_dict, h5_path: Path):
@@ -633,6 +557,7 @@ def simulate_one_segment(
     output_dir: Path,
     input_timestep: float,
     sim_timestep: float,
+    visual_paths: list[Path],
     output_data_freq: int = 300,
     render_play_speed: float = 0.1,
     render_window_size=(720, 720),
@@ -692,26 +617,32 @@ def simulate_one_segment(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Interpolate the trajectories to match the simulation timestep
+    actuated_joints_list = skeleton.get_actuated_dofs_from_preset(actuated_dofs)
     trajectories_interp, interp_factor = interpolate_trajectories(
-        kinematic_recording_segment, input_timestep, sim_timestep
+        kinematic_recording_segment, input_timestep, sim_timestep, actuated_joints_list
     )
     print(f"Simulating segment with {len(kinematic_recording_segment)} frames.")
     print(f"Interpolation factor: {interp_factor}")
     print(f"Output directory: {output_dir}")
 
     # Run the simulation
-    camera, hist_dict = run_neuromechfly_simulation(
+    renderers, hist_dict = run_neuromechfly_simulation(
         trajectories_interp,
         render_window_size,
         render_play_speed,
         output_data_freq,
         sim_timestep,
         min_sim_duration_sec,
+        visual_paths,
         max_sim_steps=max_sim_steps,
     )
 
     # Do nothing if simulation failed before the minimum required duration is reached
     if hist_dict is None:
+        # Save rendered frames as a video
+        for i, renderer in enumerate(renderers):
+            video_path = output_dir / f"rendered_video_{visual_paths[i].name}.mp4"
+            renderer.save_video(video_path)
         return False
 
     # Save kinematic states as Pandas DataFrame
@@ -719,6 +650,8 @@ def simulate_one_segment(
     make_simulation_data_h5(hist_dict, h5_path)
 
     # Save rendered frames as a video
-    camera.save_video(output_dir)
+    for i, renderer in enumerate(renderers):
+        video_path = output_dir / f"rendered_video_{visual_paths[i].name}.mp4"
+        renderer.save_video(video_path)
 
     return True

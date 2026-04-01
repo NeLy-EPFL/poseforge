@@ -53,10 +53,14 @@ Pipeline:
 from pathlib import Path
 
 from poseforge.neuromechfly.data import load_kinematic_recording
-# from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
+from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
 from poseforge.neuromechfly.postprocessing import postprocess_segment
 from poseforge.util import get_hardware_availability
 
+# sets the rendering rules
+visual_paths = [
+       Path(__file__).parent.parent / "visuals/base.yaml",
+    ]
 
 def simulate_using_kinematic_prior(
     recorded_trial_path: str,
@@ -133,17 +137,20 @@ def simulate_using_kinematic_prior(
     for segment_id in segment_ids:
         print(f"=== Simulating segment #{segment_id} ({num_segments} total) ===")
         segment = kinematic_recording_segments[segment_id]
+        print(segment[["Angle__LH_leg_ThC_yaw", "Angle__RH_leg_ThC_yaw", "Angle__LF_leg_ThC_yaw", "Angle__RF_leg_ThC_yaw"]])
         output_subdir = trial_output_dir / f"segment_{segment_id:03d}"
-        # is_success = simulate_one_segment(  # TODO: revert
-        #     kinematic_recording_segment=segment,
-        #     output_dir=output_subdir,
-        #     input_timestep=input_timestep,
-        #     sim_timestep=sim_timestep,
-        #     output_data_freq=output_data_freq,
-        #     render_play_speed=render_play_speed,
-        #     min_sim_duration_sec=0.2,
-        #     max_sim_steps=max_sim_steps_per_segment,
-        # )
+        is_success = simulate_one_segment(  # TODO: revert
+            kinematic_recording_segment=segment,
+            output_dir=output_subdir,
+            input_timestep=input_timestep,
+            sim_timestep=sim_timestep,
+            output_data_freq=output_data_freq,
+            render_play_speed=render_play_speed,
+            visual_paths=visual_paths,
+            min_sim_duration_sec=0.2,
+
+            max_sim_steps=max_sim_steps_per_segment,
+        )
         is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
             postprocess_segment(
@@ -188,7 +195,7 @@ def run_sequentially_for_testing():
 if __name__ == "__main__":
     import tyro
 
-    get_hardware_availability(check_gpu=False, print_results=True)
+    #get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
     tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
