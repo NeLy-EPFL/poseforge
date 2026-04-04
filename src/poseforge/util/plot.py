@@ -16,18 +16,16 @@ def get_segmentation_color_palette(
     n_classes: int, fix_background_body_thorax: bool = True
 ):
     if fix_background_body_thorax:
-        fixed_colors = [
-            (0.0, 0.0, 0.0),  # Background
-            (0.5, 0.5, 0.5),  # OtherSegments
-            (0.75, 0.75, 0.75),  # Thorax
-        ]
+        thorax_color = [(0.75, 0.75, 0.75)]  # light gray
+        background_color = [(0.0, 0.0, 0.0)]  # black
+        fixed_colors = background_color + thorax_color
         additional_colors = get_colors(
-            n_classes - 3,
+            n_classes - 2,
             exclude_colors=fixed_colors,
             colorblind_type="Deuteranomaly",
             rng=42,
         )
-        color_palette = fixed_colors + additional_colors
+        color_palette = thorax_color + additional_colors + background_color
     else:
         color_palette = get_colors(
             n_classes,

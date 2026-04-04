@@ -1,72 +1,60 @@
 import numpy as np
+from flygym.anatomy import JointDOF
 
 
 ###########################################################################
 ##  NEUROMECHFLY BODY CONFIGURATION BELOW                                ##
 ###########################################################################
 
-dof_name_lookup_nmf_to_canonical = {
-    "Coxa": "ThC_pitch",
-    "Coxa_roll": "ThC_roll",
-    "Coxa_yaw": "ThC_yaw",
-    "Femur": "CTr_pitch",
-    "Femur_roll": "CTr_roll",
-    "Tibia": "FTi_pitch",
-    "Tarsus1": "TiTa_pitch",
-}
-dof_name_lookup_canonical_to_nmf = {
-    v: k for k, v in dof_name_lookup_nmf_to_canonical.items()
+keypoint_name_lookup_nmf_to_canonical = {
+    "coxa": "ThC",
+    "trochanterfemur": "CTr",
+    "tibia": "FTi",
+    "tarsus1": "TiTa",
+    "tarsus5": "Claw",
+    "pedicel": "HeadAnt",
 }
 
-keypoint_name_lookup_nmf_to_canonical = {
-    "Coxa": "ThC",
-    "Femur": "CTr",
-    "Tibia": "FTi",
-    "Tarsus1": "TiTa",
-    "Tarsus5": "Claw",
-    "Pedicel": "HeadAnt",
-}
 keypoint_name_lookup_canonical_to_nmf = {
     v: k for k, v in keypoint_name_lookup_nmf_to_canonical.items()
-}
-
+    }
 legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
 leg_keypoints_canonical = ["ThC", "CTr", "FTi", "TiTa", "Claw"]
-leg_keypoints_nmf = [
-    keypoint_name_lookup_canonical_to_nmf[link] for link in leg_keypoints_canonical
-]
+leg_keypoints_nmf = [keypoint_name_lookup_canonical_to_nmf[kp] for kp in leg_keypoints_canonical]
 keypoint_segments_canonical = [
-    f"{leg}{link}" for leg in legs for link in leg_keypoints_canonical
+    f"{leg}{link.replace("-", "")}" for leg in legs for link in leg_keypoints_canonical
 ] + ["LPedicel", "RPedicel"]
 keypoint_segments_nmf = [
-    f"{leg}{link}" for leg in legs for link in leg_keypoints_nmf
+    f"{leg.lower()}{link}" for leg in legs for link in leg_keypoints_nmf
 ] + ["LPedicel", "RPedicel"]
 
-all_segment_names_per_leg = [
-    "Coxa",
-    "Femur",
-    "Tibia",
-    "Tarsus1",
-    "Tarsus2",
-    "Tarsus3",
-    "Tarsus4",
-    "Tarsus5",
-]
+keypoint_segments_nmf = [f"{leg.lower()}_{kp}" for leg in legs for kp in leg_keypoints_nmf] + ["l_pedicel", "r_pedicel"] 
 
-all_leg_dofs = [
-    f"joint_{side}{pos}{dof}"
-    for side in "LR"
-    for pos in "FMH"
-    for dof in [
-        "Coxa",
-        "Coxa_roll",
-        "Coxa_yaw",
-        "Femur",
-        "Femur_roll",
-        "Tibia",
-        "Tarsus1",
-    ]
-]
+# all_segment_names_per_leg = [
+#     "Coxa",
+#     "Femur",
+#     "Tibia",
+#     "Tarsus1",
+#     "Tarsus2",
+#     "Tarsus3",
+#     "Tarsus4",
+#     "Tarsus5",
+# ]
+
+# all_leg_dofs = [
+#     f"joint_{side}{pos}{dof}"
+#     for side in "LR"
+#     for pos in "FMH"
+#     for dof in [
+#         "Coxa",
+#         "Coxa_roll",
+#         "Coxa_yaw",
+#         "Femur",
+#         "Femur_roll",
+#         "Tibia",
+#         "Tarsus1",
+#     ]
+# ]
 
 kchain_plotting_colors = {  # these are only for plotting aesthetics
     "LF": np.array([15, 115, 153]) / 255,
@@ -88,23 +76,23 @@ kchain_plotting_colors = {  # these are only for plotting aesthetics
 
 # Define color combo by body segment
 color_by_link = {
-    "Coxa": "cyan",
-    "Femur": "yellow",
-    "Tibia": "blue",
-    "Tarsus": "green",
-    "Antenna": "magenta",
-    "Thorax": "gray",
+    "coxa": "cyan",
+    "trochanterfemur": "yellow",
+    "tibia": "blue",
+    "tarsus": "green",
+    "antenna": "magenta",
+    "thorax": "gray",
 }
 color_by_kinematic_chain = {
-    "LF": "red",  # left front leg
-    "LM": "green",  # left mid leg
-    "LH": "blue",  # left hind leg
-    "RF": "cyan",  # right front leg
-    "RM": "magenta",  # right mid leg
-    "RH": "yellow",  # right hind leg
-    "L": "red",  # left antenna
-    "R": "green",  # right antenna
-    "Thorax": "white",  # thorax
+    "lf_": "red",  # left front leg
+    "lm_": "green",  # left mid leg
+    "lh_": "blue",  # left hind leg
+    "rf_": "cyan",  # right front leg
+    "rm_": "magenta",  # right mid leg
+    "rh_": "yellow",  # right hind leg
+    "l_": "red",  # left antenna
+    "r_": "green",  # right antenna
+    "thorax": "white",  # thorax
 }
 color_palette = {
     "red": (1, 0, 0, 1),
@@ -137,36 +125,78 @@ color_palette = {
 #   8. Claw (physical)
 physical_keypoints_mask = np.array([1, 0, 0, 0, 1, 0, 1, 1, 1], dtype=bool)
 
+joint_segments_nmf_to_canonical = {
+    "thorax":"Th",
+    "coxa":"C",
+    "trochanterfemur_parent":"F",
+    "trochanterfemur_child":"Tr",
+    "tibia":"Ti",
+    "tarsus1":"Ta",
+    "pedicel":"HeadAnt",
+    "tarsus5":"Claw",
+}
+def parse_nmf_joint_seg(parent_name:str, child_name:str, dof:str) -> tuple[str, str]:
+    """Parse a NeuroMechFly joint name (e.g. parent: "c_thorax", child: "lf_coxa", dof: "yaw") into
+    Aymanns et al. 2022 joint name, return leg and the DOF name.
 
-def parse_nmf_joint_name(nmf_joint_name: str) -> tuple[str, str]:
-    """Parse a NeuromechFly joint name (e.g. "joint_LFCoxa" or "LFCoxa")
-    into a tuple of leg and canonical DoF name (e.g. ("LF", "ThC_pitch")).
-    The latter is also used in Aymanns et al. 2022."""
-    nmf_dof_name = nmf_joint_name.replace("joint_", "")
-    leg = nmf_dof_name[:2]
-    nmf_dof_name_no_leg = nmf_dof_name[2:]
-    canonical_dof_name = dof_name_lookup_nmf_to_canonical[nmf_dof_name_no_leg]
-    return leg, canonical_dof_name
+    Args:
+        parent_name: e.g. "c_thorax"
+        child_name: e.g. "lf_coxa"
+        dof: e.g. "yaw"
+
+    Returns:
+        leg: e.g. "LF"
+        aymanns_dof: e.g. "ThC_yaw"
+    """
+    _, parent_seg = parent_name.split("_")
+    leg, child_seg = child_name.split("_")
+    if child_seg=="trochanterfemur":
+        child_seg = "trochanterfemur_child"
+    if parent_seg=="trochanterfemur":
+        parent_seg = "trochanterfemur_parent"
+    leg = leg.upper()  # e.g. "lf" -> "LF"
+    p_canonical = joint_segments_nmf_to_canonical[parent_seg]
+    c_canonical = joint_segments_nmf_to_canonical[child_seg]
+    dof_low = dof.lower()
+    aymanns_dof = f"{p_canonical}{c_canonical}_{dof_low}"  # e.g. "ThC_CTr_yaw"
+    return leg, aymanns_dof
 
 
-def parse_nmf_keypoint_name(nmf_keypoint_name: str) -> tuple[str | None, str]:
-    """Parse a NeuromechFly keypoint name (e.g. "LFCoxa" or "LFTarsus5")
-    into canonical keypoint name (e.g. ("LF", "ThC") or ("LF", "Claw"))."""
-    if nmf_keypoint_name[:3].isupper():  # leg: e.g. LFCoxa
-        kchain = nmf_keypoint_name[:2]
-        nmf_keypoint_name_no_leg = nmf_keypoint_name[2:]
-        link = keypoint_name_lookup_nmf_to_canonical[nmf_keypoint_name_no_leg]
-    elif nmf_keypoint_name[:2].isupper():  # single side, e.g. LEye
-        kchain = nmf_keypoint_name[0]
-        link = keypoint_name_lookup_nmf_to_canonical[nmf_keypoint_name[1:]]
-    elif nmf_keypoint_name[0].isupper():  # no side, e.g. Thorax
-        kchain = None
-        link = keypoint_name_lookup_nmf_to_canonical[nmf_keypoint_name]
-    else:
-        raise ValueError(
-            f"Cannot parse NeuroMechFly keypoint name: {nmf_keypoint_name}"
-        )
-    return kchain, link
+def parse_nmf_joint(joint: JointDOF) -> tuple[str, str]:
+    """Parse a joint to extract Aymanns et al. 2022 joint name, return
+    leg and the DOF name.
+
+    Args:
+        joint: joint from skeleton.get_actuated_dofs_from_preset() with .name attribute
+        e.g. "c_thorax-lf_coxa-yaw"
+
+    Returns:
+        leg: e.g. "LF"
+        aymanns_dof: e.g. "ThC_yaw"
+    """
+
+    parent, child = joint.parent.name, joint.child.name
+    return parse_nmf_joint_seg(parent, child, joint.axis.name)
+
+
+# def parse_nmf_keypoint_name(nmf_keypoint_name: str) -> tuple[str | None, str]:
+#     """Parse a NeuromechFly keypoint name (e.g. "lf_coxa" or "lf_tarsus5")
+#     into canonical keypoint name (e.g. ("lf", "coxa") or ("lf", "tarsus5"))."""
+#     if nmf_keypoint_name[:3].isupper():  # leg: e.g. LFCoxa
+#         kchain = nmf_keypoint_name[:2]
+#         nmf_keypoint_name_no_leg = nmf_keypoint_name[2:]
+#         link = keypoint_name_lookup_nmf_to_canonical[nmf_keypoint_name_no_leg]
+#     elif nmf_keypoint_name[:2].isupper():  # single side, e.g. LEye
+#         kchain = nmf_keypoint_name[0]
+#         link = keypoint_name_lookup_nmf_to_canonical[nmf_keypoint_name[1:]]
+#     elif nmf_keypoint_name[0].isupper():  # no side, e.g. Thorax
+#         kchain = None
+#         link = keypoint_name_lookup_nmf_to_canonical[nmf_keypoint_name]
+#     else:
+#         raise ValueError(
+#             f"Cannot parse NeuroMechFly keypoint name: {nmf_keypoint_name}"
+#         )
+#     return kchain, link
 
 
 # Source of hardcoded values below are taken from NeuroMechFly v2 (by Alfie)

@@ -2,45 +2,8 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+from poseforge.neuromechfly.constants import parse_nmf_joint #, all_leg_dofs
 from flygym.anatomy import JointDOF
-#from poseforge.neuromechfly.constants import parse_nmf_joint_name, all_leg_dofs
-
-seg_lookup = {
-    "thorax":"Th",
-    "coxa":"C",
-    "trochanterfemur_parent":"Tr",
-    "trochanterfemur_child":"F",
-    "tibia":"Ti",
-    "tarsus1":"Ta"
-}
-
-def parse_nmf_joint(joint: JointDOF) -> tuple[str, str]:
-    """Parse a joint to extract Aymanns et al. 2022 joint name, return
-    leg and the DOF name.
-
-    Args:
-        joint: joint from skeleton.get_actuated_dofs_from_preset() with .name attribute
-        e.g. "c_thorax-lf_coxa-yaw"
-
-    Returns:
-        leg: e.g. "LF"
-        aymanns_dof: e.g. "ThC_yaw"
-    """
-    print(joint.name)
-    parent, child = joint.parent.name, joint.child.name
-    _, p_seg = parent.split("_")
-    leg, c_seg = child.split("_")
-    dof = joint.axis.name
-    if c_seg=="trochanterfemur":
-        c_seg = "trochanterfemur_parent"
-    if p_seg=="trochanterfemur":
-        p_seg = "trochanterfemur_child"
-    
-    cap_leg = leg.upper()
-    low_dof = dof.lower()
-    aymanns_dof = f"{seg_lookup[p_seg]}{seg_lookup[c_seg]}_{low_dof}"
-    return cap_leg, aymanns_dof
-
 
 def extract_joint_angles_trajectory(
     kinematic_recording_segment: pd.DataFrame, interp_factor: int, actuated_joints_list: list[JointDOF]
@@ -64,7 +27,6 @@ def extract_joint_angles_trajectory(
         n_joints += 1
         
     original_trajectories_array = np.array(original_trajectories_list).T
-    print(original_trajectories_array.shape)
     # Interpolate the joint angles to match the simulation timestep
     num_frames = len(kinematic_recording_segment)
     interp_num_frames = num_frames * interp_factor

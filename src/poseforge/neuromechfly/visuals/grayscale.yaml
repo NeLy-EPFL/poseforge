@@ -1,0 +1,144 @@
+grayscale_wing:
+  apply_to: '*_wing'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.8114, 0.8114, 0.8114, 0.3]
+grayscale_eye:
+  apply_to: '*_eye'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.33728, 0.33728, 0.33728, 1]
+grayscale_arista:
+  apply_to: '*_arista'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.21338000000000001, 0.21338000000000001, 0.21338000000000001, 1]
+grayscale_haltere:
+  apply_to: '*_haltere'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.45618, 0.45618, 0.45618, 1]
+grayscale_headthorax:
+  apply_to: [c_head, c_thorax]
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: flat
+    rgb1: [0.41902, 0.41902, 0.41902]
+    rgb2: [0.41902, 0.41902, 0.41902]
+    mark: random
+    markrgb: [0.51973, 0.51973, 0.51973]
+    random: 0.3
+    width: 50
+    height: 50
+grayscale_antennaproboscis:
+  apply_to: ['*_pedicel', '*_funiculus', c_rostrum, c_haustellum]
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: flat
+    rgb1: [0.41902, 0.41902, 0.41902]
+    rgb2: [0.41902, 0.41902, 0.41902]
+    mark: random
+    markrgb: [0.0, 0.0, 0.0]
+    random: 0.1
+    width: 50
+    height: 50
+grayscale_abdomen12345:
+  apply_to: [c_abdomen12, c_abdomen3, c_abdomen4, c_abdomen5]
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: gradient
+    rgb1: [0.41902, 0.41902, 0.41902]
+    rgb2: [0.6920499999999999, 0.6920499999999999, 0.6920499999999999]
+    mark: random
+    markrgb: [0.51973, 0.51973, 0.51973]
+    random: 0.3
+    width: 50
+    height: 50
+grayscale_abdomen6:
+  apply_to: c_abdomen6
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: gradient
+    rgb1: [0.23401, 0.23401, 0.23401]
+    rgb2: [0.6920499999999999, 0.6920499999999999, 0.6920499999999999]
+    mark: random
+    markrgb: [0.51973, 0.51973, 0.51973]
+    random: 0.3
+    width: 50
+    height: 50
+grayscale_coxa:
+  apply_to: '*_coxa'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: flat
+    rgb1: [0.41902, 0.41902, 0.41902]
+    rgb2: [0.41902, 0.41902, 0.41902]
+    mark: random
+    markrgb: [0.0, 0.0, 0.0]
+    random: 0.05
+    width: 50
+    height: 50
+grayscale_trochanterfemur:
+  apply_to: '*_trochanterfemur'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: flat
+    rgb1: [0.45901999999999993, 0.45901999999999993, 0.45901999999999993]
+    rgb2: [0.45901999999999993, 0.45901999999999993, 0.45901999999999993]
+    mark: random
+    markrgb: [0.0, 0.0, 0.0]
+    random: 0.05
+    width: 50
+    height: 50
+grayscale_tibia:
+  apply_to: '*_tibia'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: flat
+    rgb1: [0.49901999999999996, 0.49901999999999996, 0.49901999999999996]
+    rgb2: [0.49901999999999996, 0.49901999999999996, 0.49901999999999996]
+    mark: random
+    markrgb: [0.0, 0.0, 0.0]
+    random: 0.05
+    width: 50
+    height: 50
+grayscale_tarsus:
+  apply_to: '*_tarsus*'
+  material:
+    specular: 0.2
+    shininess: 0.2
+    rgba: [0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1]
+  texture:
+    builtin: flat
+    rgb1: [0.53902, 0.53902, 0.53902]
+    rgb2: [0.53902, 0.53902, 0.53902]
+    mark: random
+    markrgb: [0.0, 0.0, 0.0]
+    random: 0.05
+    width: 50
+    height: 50

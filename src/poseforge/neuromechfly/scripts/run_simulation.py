@@ -59,7 +59,11 @@ from poseforge.util import get_hardware_availability
 
 # sets the rendering rules
 visual_paths = [
-       Path(__file__).parent.parent / "visuals/base.yaml",
+       #Path(__file__).parent.parent / "visuals/base.yaml",
+       Path(__file__).parent.parent / "visuals/per_link_color.yaml",
+       #Path(__file__).parent.parent / "visuals/per_leg_color.yaml",
+       #Path(__file__).parent.parent / "visuals/gray.yaml",
+       Path(__file__).parent.parent / "visuals/grayscale.yaml",
     ]
 
 def simulate_using_kinematic_prior(
@@ -137,9 +141,8 @@ def simulate_using_kinematic_prior(
     for segment_id in segment_ids:
         print(f"=== Simulating segment #{segment_id} ({num_segments} total) ===")
         segment = kinematic_recording_segments[segment_id]
-        print(segment[["Angle__LH_leg_ThC_yaw", "Angle__RH_leg_ThC_yaw", "Angle__LF_leg_ThC_yaw", "Angle__RF_leg_ThC_yaw"]])
         output_subdir = trial_output_dir / f"segment_{segment_id:03d}"
-        is_success = simulate_one_segment(  # TODO: revert
+        is_success, render_filenames = simulate_one_segment(  # TODO: revert
             kinematic_recording_segment=segment,
             output_dir=output_subdir,
             input_timestep=input_timestep,
@@ -148,21 +151,26 @@ def simulate_using_kinematic_prior(
             render_play_speed=render_play_speed,
             visual_paths=visual_paths,
             min_sim_duration_sec=0.2,
-
+            render_depth=True,
             max_sim_steps=max_sim_steps_per_segment,
         )
         is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
             postprocess_segment(
-                output_subdir, visualize=False, min_subsegment_duration_sec=0.1  # TODO: enable visualization
+                output_subdir, render_filenames, visualize=True, min_subsegment_duration_sec=0.1,
             )
     print(f"### Done processing trial: {trial_name} ###")
 
 
-def run_sequentially_for_testing():
+def run_sequentially_for_testing(
+        input_basedir: str,
+        output_basedir: Path = Path("bulk_data/nmf_rendering_new/"), 
+        max_segments_per_trial: int | None = None,
+        max_sim_steps_per_segment: int | None = None,
+):
     """Run everything sequentially (for debugging)"""
     # Configs
-    output_basedir = Path("bulk_data/nmf_rendering_new/")  # TODO: change back to *_test
+    #output_basedir = Path("bulk_data/nmf_rendering_new/")  # TODO: change back to *_test
     input_timestep = 0.01
     sim_timestep = 0.0001
     # trial_paths = [
@@ -170,14 +178,14 @@ def run_sequentially_for_testing():
     #     Path("bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl")
     # ]
     trial_paths = sorted(  # TODO: revert
-        Path("bulk_data/kinematic_prior/aymanns2022/trials/").glob("*.pkl")
+        Path(input_basedir).glob("*.pkl")
     )
 
     # Limit scope of simulation as this is only for testing
     # Don't make `max_sim_steps_per_segment` too small; otherwise no subsegment-level
     # postprocessing will be performed
-    max_segments_per_trial = None  # 2  # TODO: revert
-    max_sim_steps_per_segment = None  # 3000  # TODO: revert
+    # max_segments_per_trial = 2  # TODO: revert
+    #   = 3000  # TODO: revert
 
     # Process each trial
     for trial_path in trial_paths:
@@ -198,7 +206,7 @@ if __name__ == "__main__":
     #get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
-    tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
+    # tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
 
     # Run everything sequentially (for debugging)  # TODO: disable testing
-    # run_sequentially_for_testing()
+    tyro.cli(run_sequentially_for_testing)

@@ -20,87 +20,6 @@ from poseforge.util.plot import (
 configure_matplotlib_style()
 
 
-class SegmentLabelParser:
-    def __init__(self):
-        nmf_rendered_colors = {
-            "red": [255, 0, 0],
-            "green": [0, 255, 0],
-            "blue": [0, 0, 255],
-            "yellow": [255, 255, 0],
-            "magenta": [255, 0, 255],
-            "cyan": [0, 255, 255],
-            "black": [60, 60, 60],
-            "white": [255, 255, 255],
-            "gray": [150, 150, 150],
-        }
-        leg_segments = ["Coxa", "Femur", "Tibia", "Tarsus"]
-
-        self.label_keys = []
-        self.label_colors_6d = []
-
-        # Special case: Background
-        self.label_keys.append("Background")
-        color_6d = np.array(nmf_rendered_colors["black"] + nmf_rendered_colors["black"])
-        self.label_colors_6d.append(color_6d)
-
-        # Special case: OtherSegments
-        self.label_keys.append("OtherSegments")
-        color_6d = np.array(nmf_rendered_colors["gray"] + nmf_rendered_colors["black"])
-        self.label_colors_6d.append(color_6d)
-
-        # Special case: Thorax
-        self.label_keys.append("Thorax")
-        color_6d = np.array(nmf_rendered_colors["gray"] + nmf_rendered_colors["white"])
-        self.label_colors_6d.append(color_6d)
-
-        # Legs
-        for side in "LR":
-            for pos in "FMH":
-                for link in leg_segments:
-                    leg = f"{side}{pos}"
-                    color0 = nmf_rendered_colors[constants.color_by_link[link]]
-                    color1 = nmf_rendered_colors[
-                        constants.color_by_kinematic_chain[leg]
-                    ]
-                    color_6d = np.array(list(color0) + list(color1))
-                    label = f"{leg}{link}"
-                    self.label_keys.append(label)
-                    self.label_colors_6d.append(color_6d)
-
-        # Antennas
-        for side in "LR":
-            color0 = nmf_rendered_colors[constants.color_by_link["Antenna"]]
-            color1 = nmf_rendered_colors[constants.color_by_kinematic_chain[side]]
-            color_6d = np.array(list(color0) + list(color1))
-            label = f"{side}Antenna"
-            self.label_keys.append(label)
-            self.label_colors_6d.append(color_6d)
-
-        self.label_colors_6d = np.array(self.label_colors_6d)
-
-    def __call__(self, images_by_color_coding: list[np.ndarray]):
-        assert (
-            len(images_by_color_coding) == 2
-        ), "Expecting two images each with a different color coding."
-        assert (
-            images_by_color_coding[0].shape == images_by_color_coding[1].shape
-        ), "Color coding images must have the same shape."
-        if not isinstance(images_by_color_coding, list):
-            images_by_color_coding = [
-                images_by_color_coding[0, :, :, :],
-                images_by_color_coding[1, :, :, :],
-            ]
-
-        image_6d = np.concatenate(images_by_color_coding, axis=-1)
-        sq_distances = np.sum(
-            (image_6d[:, :, None, :] - self.label_colors_6d[None, None, :, :]) ** 2,
-            axis=-1,
-        )
-        label_indices = np.argmin(sq_distances, axis=-1)
-
-        return label_indices
-
-
 def load_video_frames(video_path: Path) -> list[np.ndarray]:
     """Load video frames from a video file."""
     if not video_path.is_file():
@@ -133,8 +52,13 @@ def get_rotation_angle_and_matrix(forward_vector: np.ndarray) -> np.ndarray:
     return -orientation, rotation_matrix
 
 
-def rotate_image(image: np.ndarray, rotation_angle) -> np.ndarray:
-    return ndimage.rotate(
+def rotate_image(image: np.ndarray, rotation_angle, preserve=False) -> np.ndarray:
+    if preserve:
+        return ndimage.rotate(
+            image, np.rad2deg(rotation_angle), reshape=False, order=0, mode="nearest"
+        )
+    else:
+        return ndimage.rotate(
         image, np.rad2deg(rotation_angle), reshape=False, order=1, mode="reflect"
     )
 
@@ -157,8 +81,7 @@ def extract_body_segment_positions(
     body_segments: list[str] | None,
 ):
     # Compile list of body segments
-    if body_segments is None:
-        body_segments = h5_file["body_segment_states"].attrs["keys"].tolist()
+    body_segments = h5_file["body_segment_states"].attrs["keys"].tolist()
 
     # Get positions of each keypoint
     pos_world = np.full((3, len(body_segments)), np.nan, dtype=np.float32)
@@ -204,29 +127,46 @@ def rotate_keypoint_positions_camera(
     image_shape: tuple[int, int],
     start_col: int,
     start_row: int,
+    camera_image_shape: tuple[int, int] | None = None,
 ):
     """
     Apply rotation and cropping transformations to camera/image coordinates.
-    Uses a simplified approach based on the working code snippet.
+    Uses the same rotation/cropping convention as processed images.
 
     Args:
         keypoints_pos_lookup: Dict mapping segment names to (x, y, depth) positions
         rotation_matrix: 3x3 rotation matrix used for coordinate transformation
         image_shape: (height, width) of the original image before rotation
         start_col, start_row: Cropping offsets after rotation
+        camera_image_shape: (height, width) in which projected camera coordinates
+            are expressed. If different from `image_shape`, a scale correction is
+            applied before rotation/cropping.
     """
     keypoints_pos_lookup_rotated = {}
     height, width = image_shape
+    center_col = (width - 1) / 2.0
+    center_row = (height - 1) / 2.0
+
+    if camera_image_shape is None:
+        camera_height, camera_width = height, width
+    else:
+        camera_height, camera_width = camera_image_shape
+
+    # Correct for potential mismatch between camera projection pixel space and
+    # rendered frame pixel space (e.g., if video was resized).
+    scale_x = width / camera_width
+    scale_y = height / camera_height
 
     for body_segment_name, pos_before_rotation in keypoints_pos_lookup.items():
         # Extract 2D position and depth
-        col_row_vec = pos_before_rotation[:2]
-        depth = pos_before_rotation[2]
+        col_row_vec = pos_before_rotation[:2].astype(np.float32)
+        depth = float(pos_before_rotation[2])
         col_row_vec /= depth  # Normalize by depth to get image coords
-        col_row_vec -= np.array([width / 2, height / 2])  # center the coordinates
+        col_row_vec *= np.array([scale_x, scale_y], dtype=np.float32)
+        col_row_vec -= np.array([center_col, center_row], dtype=np.float32)
         col_rot, row_rot = rotation_matrix[:2, :2] @ col_row_vec
-        col_rot = col_rot + (width / 2) - start_col
-        row_rot = row_rot + (height / 2) - start_row
+        col_rot = col_rot + center_col - start_col
+        row_rot = row_rot + center_row - start_row
 
         # Reconstruct position with original depth
         pos_after_rotation = np.array([col_rot, row_rot, depth], dtype=np.float32)
@@ -252,13 +192,14 @@ def process_single_frame(
     h5_file_path: Path,
     frame_idx: int,
     crop_size: int,
-    segment_label_parser: SegmentLabelParser,
+
 ):
     # Open the h5 file within the worker process
     with h5py.File(h5_file_path, "r") as h5_file:
         # Get rotation angle and rotation matrix
         forward_vector = h5_file["cardinal_vectors/forward"][frame_idx, :]
         rotation_angle, rotation_matrix = get_rotation_angle_and_matrix(forward_vector)
+        segmap = h5_file["segmentation_maps"][frame_idx, :, :]
 
         # Get image shape before rotation for keypoint processing
         if len(rendered_images) > 0:
@@ -276,6 +217,10 @@ def process_single_frame(
                 rotated_img, crop_size
             )
             rendered_images_transformed.append(img_transformed)
+        
+        # rotate and crop the segmentation map as well
+        rotated_segmap = rotate_image(segmap, -rotation_angle, preserve=True)
+        segmap_transformed, _, _ = center_square_crop_image(rotated_segmap, crop_size)
 
         # Add all derived variables to a single dict
         derived_variables = {}
@@ -295,6 +240,7 @@ def process_single_frame(
             image_shape=image_shape,
             start_col=start_col,
             start_row=start_row,
+            camera_image_shape=segmap.shape[:2],
         )
         for body_segment_name, rotated_pos in keypoints_pos_dict_world_rotated.items():
             derived_variables[f"keypoint_pos_world_{body_segment_name}"] = rotated_pos
@@ -302,7 +248,7 @@ def process_single_frame(
             derived_variables[f"keypoint_pos_camera_{body_segment_name}"] = rotated_pos
 
         # Save object segmentation masks
-        seg_labels = segment_label_parser(rendered_images_transformed)
+        seg_labels = segmap_transformed.astype(np.uint8)
 
         return rendered_images_transformed, derived_variables, seg_labels
 
@@ -313,8 +259,8 @@ def process_subsegment(
     frames_range: tuple[int, int],
     processed_subsegment_dir: Path,
     fps: int,
+    render_filenames: list[str],
     crop_size: int = 464,
-    num_color_codings: int = 2,
     n_jobs: int = -1,
 ) -> None:
     frame_idx_start, frame_idx_end = frames_range
@@ -327,16 +273,13 @@ def process_subsegment(
 
     processed_subsegment_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create segment label parser
-    segment_label_parser = SegmentLabelParser()
-
     # Process frames in parallel
     # Prepare arguments for each frame
     frame_args = []
     for i_frame_within_subsegment in range(num_frames):
         renderings_per_frame = [
             subsegment_frames_by_color_coding[i_color_code][i_frame_within_subsegment]
-            for i_color_code in range(num_color_codings)
+            for i_color_code in range(len(render_filenames))
         ]
         frame_args.append(
             (
@@ -344,7 +287,6 @@ def process_subsegment(
                 segment_h5_file_path,
                 frame_idx_start + i_frame_within_subsegment,
                 crop_size,
-                segment_label_parser,
             )
         )
     # Parallel execution with joblib
@@ -368,13 +310,13 @@ def process_subsegment(
         transformed_images_all.append(transformed_images)
         for key, value in derived_variables.items():
             derived_variables_by_key[key].append(value)
-        seg_labels_all.append(seg_labels)
-
+        seg_labels_all.append(seg_labels) # to grayscale
+    
     # Write processed images to disk as a video
-    for i_color_code in range(num_color_codings):
+    for i, render_filename in enumerate(render_filenames):
         output_video_path = (
             processed_subsegment_dir
-            / f"processed_nmf_sim_render_colorcode_{i_color_code}.mp4"
+            / f"processed_{render_filename}"
         )
         with imageio.get_writer(
             str(output_video_path),
@@ -391,7 +333,7 @@ def process_subsegment(
             for transformed_images in tqdm(
                 transformed_images_all, desc="Writing frames", disable=None
             ):
-                writer.append_data(transformed_images[i_color_code])
+                writer.append_data(transformed_images[i])
 
     out_h5_path = processed_subsegment_dir / "processed_simulation_data.h5"
     with h5py.File(segment_h5_file_path, "r") as source_h5_file:
@@ -479,7 +421,7 @@ def process_subsegment(
                 compression="lzf",  # lzf is faster than gzip - good for frequent access
                 shuffle=True,
             )
-            seg_labels_ds.attrs["keys"] = segment_label_parser.label_keys
+            seg_labels_ds.attrs["keys"] = source_h5_file["segmentation_maps"].attrs["keys"]
             seg_labels_ds.attrs["description"] = (
                 "Segmentation labels (i.e. body segment IDs) for each pixel in the "
                 "processed (i.e. centered, cropped, rotated) images. Shape is "
@@ -529,7 +471,7 @@ def _draw_pose_2d_and_3d(
             all_positions = []
             for kpt in constants.leg_keypoints_canonical:
                 segment_name = constants.keypoint_name_lookup_canonical_to_nmf[kpt]
-                keypoint_idx = keypoints.index(f"{leg}{segment_name}")
+                keypoint_idx = keypoints.index(f"{leg.lower()}_{segment_name}")
                 pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
                 all_positions.append(pos)
             all_positions = np.array(all_positions)
@@ -538,7 +480,7 @@ def _draw_pose_2d_and_3d(
             )
         # Antenna
         for side in "LR":
-            segment_name = f"{side}Pedicel"
+            segment_name = f"{side.lower()}_pedicel"
             keypoint_idx = keypoints.index(segment_name)
             pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
             color = constants.kchain_plotting_colors[f"{side}Antenna"]
@@ -552,7 +494,7 @@ def _draw_pose_2d_and_3d(
             all_positions = []
             for kpt in constants.leg_keypoints_canonical:
                 segment_name = constants.keypoint_name_lookup_canonical_to_nmf[kpt]
-                keypoint_idx = keypoints.index(f"{leg}{segment_name}")
+                keypoint_idx = keypoints.index(f"{leg.lower()}_{segment_name}")
                 pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
                 all_positions.append(pos)
             all_positions = np.array(all_positions)
@@ -566,7 +508,7 @@ def _draw_pose_2d_and_3d(
             )
         # Antenna
         for side in "LR":
-            segment_name = f"{side}Pedicel"
+            segment_name = f"{side.lower()}_pedicel"
             keypoint_idx = keypoints.index(segment_name)
             pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
             color = constants.kchain_plotting_colors[f"{side}Antenna"]
@@ -663,6 +605,7 @@ def visualize_single_frame(
 
 def visualize_subsegment(
     processed_subsegment_dir: Path,
+    renderer_filename: str,
     fps: int,
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
@@ -671,7 +614,7 @@ def visualize_subsegment(
 ) -> None:
     # Load video frames
     frames, fps = load_video_frames(
-        processed_subsegment_dir / "processed_nmf_sim_render_colorcode_0.mp4"
+        processed_subsegment_dir / renderer_filename
     )
 
     # Find processed simulation data
@@ -680,12 +623,13 @@ def visualize_subsegment(
         ds = h5_file["postprocessed/segmentation_labels"]
         seg_labels_all = ds[...]
         keys = ds.attrs["keys"].tolist()
+    
+    # background has label 255 set background to len(keys) as not included in keys
+    seg_labels_all[seg_labels_all == 255] = len(keys)
 
     # Define color palette for segmentation labels visualization
-    max_num_labels = len(keys)
-    assert keys[0] == "Background"
-    assert keys[1] == "OtherSegments"
-    assert keys[2] == "Thorax"
+    assert keys[0] == "c_thorax"
+    max_num_labels = len(keys) + 1 # background is 255
     color_palette = get_segmentation_color_palette(max_num_labels)
 
     # Make temp directory for visualizations
@@ -770,18 +714,18 @@ def select_subsegments(
 
 def postprocess_segment(
     recording_dir: Path,
+    render_filenames: list[str],
     start_frame: int = 0,
     end_frame: int = -1,
     max_tilt_angle_deg: float = 30.0,
     mask_morph_closing_size_sec: float = 0.03,
     min_subsegment_duration_sec: float = 0.1,
-    image_crop_size: int = 464,
+    image_crop_size: int = 900,
     visualize: bool = False,
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
     n_jobs: int = -1,
-    num_color_codings: int = 2,
 ):
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
@@ -790,7 +734,7 @@ def postprocess_segment(
 
     # Load video frames
     frames_by_color_coding, fps, num_frames = read_videos(
-        recording_dir, num_color_codings
+        recording_dir, render_filenames
     )
     for i, frames in enumerate(frames_by_color_coding):
         frames_by_color_coding[i] = frames[start_frame:end_frame]
@@ -829,14 +773,17 @@ def postprocess_segment(
                 (start, end),
                 output_dir,
                 fps,
+                render_filenames,
                 image_crop_size,
                 n_jobs=n_jobs,
             )
 
             # Visualize the subsegment if requested
             if visualize:
+                filename_to_visualize = f"processed_{render_filenames[0]}"  # just visualize the first color coding
                 visualize_subsegment(
                     processed_subsegment_dir=output_dir,
+                    renderer_filename=filename_to_visualize,
                     fps=fps,
                     camera_elevation=camera_elevation,
                     max_abs_azimuth=max_abs_azimuth,
@@ -845,13 +792,13 @@ def postprocess_segment(
                 )
 
 
-def read_videos(recording_dir, num_color_codings):
+def read_videos(recording_dir, render_filenames):
     frames_by_color_coding = []
     fps = None
     num_frames = None
 
-    for color_code_idx in range(num_color_codings):
-        video_path = recording_dir / f"nmf_sim_render_colorcode_{color_code_idx}.mp4"
+    for render_filename in render_filenames:
+        video_path = recording_dir / render_filename
         my_frames, my_fps = load_video_frames(video_path)
         frames_by_color_coding.append(my_frames)
 
