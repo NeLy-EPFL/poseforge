@@ -9,7 +9,7 @@ from pathlib import Path
 from pvio.io import read_frames_from_video, check_num_frames
 
 
-def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path) -> dict[Path, int]:
+def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path, video_filename:str) -> dict[Path, int]:
     print("Indexing frames from NeuroMechFly simulation videos:")
     num_frames_dict = {}
     for traj_dir in nmf_rendering_dir.iterdir():
@@ -23,7 +23,7 @@ def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path) -> dict[Path, i
                     "subsegment_"
                 ):
                     continue
-                video_file = subseg_dir / "processed_nmf_sim_render_colorcode_0.mp4"
+                video_file = subseg_dir / video_filename
                 if not video_file.is_file():
                     logging.warning(f"Expected video file {video_file} does not exist.")
                 num_frames = check_num_frames(video_file)
@@ -127,6 +127,8 @@ if __name__ == "__main__":
         "bulk_data/style_transfer/aymanns2022_pseudocolor_spotlight_dataset"
     )
 
+    video_filename = "nmf_sim_render_grayscale.mp4"
+
     # Fix random state for reproducibility
     random_seed = 42
     np.random.seed(random_seed)
@@ -139,7 +141,7 @@ if __name__ == "__main__":
 
     # Index number of frames in each trial/recording
     # NMF simulation
-    nmf_num_frames = list_nmf_simulations_and_num_frames(nmf_rendering_dir)
+    nmf_num_frames = list_nmf_simulations_and_num_frames(nmf_rendering_dir, video_filename)
     print("NMF Simulation Video Frames:")
     for video, num_frames in nmf_num_frames.items():
         print(f"  {video}: {num_frames} frames")
