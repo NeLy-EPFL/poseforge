@@ -33,6 +33,32 @@ def save_options(
         json.dump(options_dict, f, indent=2, sort_keys=True)
 
 
+def build_image_logging_schedule(
+    total_epochs: int, max_images: int = 50, dense_until: int = 20
+) -> set[int]:
+    """Build a set of epoch indices to log images for.
+
+    Keeps early training dense and then increases stride so total image logs stay bounded.
+    """
+    if total_epochs <= 0:
+        return set()
+
+    max_images = max(1, max_images)
+    if total_epochs <= max_images:
+        return set(range(1, total_epochs + 1))
+
+    dense_until = min(dense_until, total_epochs, max_images)
+    scheduled = set(range(1, dense_until + 1))
+
+    remaining = max_images - len(scheduled)
+    if remaining > 0 and dense_until < total_epochs:
+        tail = np.geomspace(dense_until + 1, total_epochs, num=remaining)
+        scheduled.update(int(round(x)) for x in tail)
+
+    scheduled.add(total_epochs)
+    return scheduled
+
+
 if __name__ == "__main__":
     # Set random seed for reproducibility
     set_random_seed(42)
@@ -45,6 +71,7 @@ if __name__ == "__main__":
 
     # Compute total number of epochs to train
     total_num_epochs = opt.n_epochs + opt.n_epochs_decay
+    image_log_epochs = build_image_logging_schedule(total_num_epochs, max_images=50)
 
     # Create a dataset given opt.dataset_mode and other options
     dataset = create_dataset(opt)
@@ -108,8 +135,10 @@ if __name__ == "__main__":
                 time.time() - optimize_start_time
             ) / batch_size * 0.005 + 0.995 * optimize_time
 
-            # Display images on tensorboard and save images
-            if total_iters % opt.display_freq == 0:
+            # Display images only on scheduled epochs to avoid keeping only the
+            # most recent dense image logs in TensorBoard.
+            should_log_epoch_image = epoch in image_log_epochs and i == 0
+            if should_log_epoch_image:
                 save_result = total_iters % opt.update_html_freq == 0
                 model.compute_visuals()
                 visuals = model.get_current_visuals()
