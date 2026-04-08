@@ -613,6 +613,7 @@ def process_all(
             max_n_frames=max_n_frames,
             n_workers=n_workers_per_dataset,
             debug_plots_dir=keypoints3d_output_file.parent / "ik_debug_plots/",
+            parallel_over_time=False,
         )
         _save_seqikpy_output(
             output_path, joint_angles, forward_kinematics, frame_ids=frame_ids
@@ -828,10 +829,10 @@ if __name__ == "__main__":
     #     --input-images-basedir bulk_data/behavior_images/spotlight_aligned_and_cropped/
 
     # * Processing from this script directly
-    epoch = 19  # these must be consistent with run_keypoints3d_inference.py
+    epoch = 15  # these must be consistent with run_inference_on_spotlight_data.py
     step = 9167  # same as above
     production_model_basedir = Path(
-        f"bulk_data/pose_estimation/keypoints3d/trial_20251118a/production/epoch{epoch}_step{step}/"
+        f"bulk_data/pose_estimation/keypoints3d/trial_20251127a/production/epoch{epoch}_step{step}/"
     )
     input_images_basedir = Path(
         "bulk_data/behavior_images/spotlight_aligned_and_cropped/"

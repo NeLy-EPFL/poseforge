@@ -88,35 +88,35 @@ class ResNetFeatureExtractor(nn.Module):
         x_normalized = (x - mean) / std
         return x_normalized
 
-    def forward(self, x, return_intermediates: bool = False):
-        """
+    def forward_with_intermediates(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run forward pass, returning intermediate feature maps as well as
+        the final features.
+
         Args:
             x (torch.Tensor): Input image tensor of shape (batch_size, 3,
                 height, width), with pixel values in [0, 1].
-            return_intermediates (bool): Whether to return intermediate
-                feature maps from various layers. Default False.
 
         Returns:
-            If return_intermediates is False:
-                features (torch.Tensor): Extracted features. The shape is
-                    (batch_size, out_channels, *output_feature_map_size)
-                    where output_feature_map_size depends on the input
-                    image size.
-            If return_intermediates is True:
-                A tuple of 5 torch.Tensors:
-                - Features after initial Conv-BN-ReLU but before maxpool:
-                      tensor of shape (batch_size, 64, 128, 128)
-                - Features after layer1:
-                      tensor of shape (batch_size, 64, 64, 64)
-                - Features after layer2:
-                      tensor of shape (batch_size, 128, 32, 32)
-                - Features after layer3:
-                      tensor of shape (batch_size, 256, 16, 16)
-                - Features after layer4:
-                      tensor of shape (batch_size, 512, 8, 8)
-                      This is the same as the single output returned if
-                      return_intermediates is False.
+            A tuple of 5 torch.Tensors:
+            - Features after initial Conv-BN-ReLU but before maxpool:
+                    tensor of shape (batch_size, 64, 128, 128)
+            - Features after layer1:
+                    tensor of shape (batch_size, 64, 64, 64)
+            - Features after layer2:
+                    tensor of shape (batch_size, 128, 32, 32)
+            - Features after layer3:
+                    tensor of shape (batch_size, 256, 16, 16)
+            - Features after layer4:
+                    tensor of shape (batch_size, 512, 8, 8)
         """
+        if x.shape[-2:] != self.input_size:
+            raise NotImplementedError(
+                f"Input image size {x.shape[-2:]} not supported; "
+                f"expected {self.input_size}"
+            )
+
         x_norm = self._apply_imagenet_normalization(x)
 
         # Remove the final classification head (avgpool + fc)
@@ -149,10 +149,28 @@ class ResNetFeatureExtractor(nn.Module):
             assert x4.shape == (batch_size, 512, 8, 8)
             self._first_time_forward = False
 
-        if return_intermediates:
-            return x0, x1, x2, x3, x4
-        else:
-            return x4
+        return x0, x1, x2, x3, x4
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run forward pass through the ResNet-18 backbone and return the
+        final extracted features.
+
+        See also `.forward_with_intermediates`, which returns intermediate
+        feature maps as well (useful for identity connections in U-Net-like
+        architectures).
+
+        Args:
+            x (torch.Tensor): Input image tensor of shape (batch_size, 3,
+                height, width), with pixel values in [0, 1].
+
+        Returns:
+            features (torch.Tensor): Extracted features. The shape is
+                (batch_size, out_channels, *output_feature_map_size)
+                where output_feature_map_size depends on the input
+                image size.
+        """
+        x0, x1, x2, x3, x4 = self.forward_with_intermediates(x)
+        return x4
 
 
 class DecoderBlock(nn.Module):

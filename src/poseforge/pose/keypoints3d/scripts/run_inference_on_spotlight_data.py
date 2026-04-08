@@ -200,8 +200,8 @@ def run_keypoints3d_inference(
 
 if __name__ == "__main__":
     input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251118a")
-    epoch = 19  # chosen based on validation performance and visual inspection
+    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251127a")
+    epoch = 15  # chosen based on validation performance and visual inspection
     step = 9167  # last step
 
     print(f"Running inference for epoch {epoch}")

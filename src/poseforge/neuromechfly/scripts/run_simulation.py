@@ -55,7 +55,7 @@ from pathlib import Path
 from poseforge.neuromechfly.data import load_kinematic_recording
 # from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
 from poseforge.neuromechfly.postprocessing import postprocess_segment
-from poseforge.util import get_hardware_availability
+from poseforge.util import get_hardware_availability, bulk_data_dir
 
 
 def simulate_using_kinematic_prior(
@@ -155,7 +155,7 @@ def simulate_using_kinematic_prior(
 def run_sequentially_for_testing():
     """Run everything sequentially (for debugging)"""
     # Configs
-    output_basedir = Path("bulk_data/nmf_rendering_new/")  # TODO: change back to *_test
+    output_basedir = bulk_data_dir / "nmf_rendering/"  # TODO: change back to *_test
     input_timestep = 0.01
     sim_timestep = 0.0001
     # trial_paths = [
@@ -163,7 +163,7 @@ def run_sequentially_for_testing():
     #     Path("bulk_data/kinematic_prior/aymanns2022/trials/BO_Gal4_fly1_trial001.pkl")
     # ]
     trial_paths = sorted(  # TODO: revert
-        Path("bulk_data/kinematic_prior/aymanns2022/trials/").glob("*.pkl")
+        (bulk_data_dir / "kinematic_prior/aymanns2022/trials/").glob("*.pkl")
     )
 
     # Limit scope of simulation as this is only for testing

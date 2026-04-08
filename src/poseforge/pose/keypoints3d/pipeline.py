@@ -76,7 +76,7 @@ class Pose2p5DPipeline:
         # Set up optimizer
         optimizer = self._create_optimizer(optimizer_config)
 
-        # Set up mixed-point training
+        # Set up mixed-precision training
         grad_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         self._check_amp_status_for_model_params(
             grad_scaler, subtitle="Model parameters before training"
@@ -232,6 +232,7 @@ class Pose2p5DPipeline:
         if max_batches <= 0:
             raise ValueError("max_batches must be positive or None")
         total_loss_dict = defaultdict(lambda: 0.0)
+        n_steps_iterated = 0
 
         if self.loss_func is None:
             raise ValueError("Loss function must be provided for validation")
@@ -263,10 +264,10 @@ class Pose2p5DPipeline:
                 # Accumulate losses
                 for key, loss in loss_dict.items():
                     total_loss_dict[key] += loss.item()
+                n_steps_iterated += 1
 
         clear_memory_cache()
         self.model.train()
-        n_steps_iterated = step_idx + 1
         return {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
 
     def inference(self, frames: torch.Tensor) -> dict[str, torch.Tensor]:

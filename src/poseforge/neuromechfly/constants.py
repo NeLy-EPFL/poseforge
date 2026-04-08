@@ -79,6 +79,26 @@ kchain_plotting_colors = {  # these are only for plotting aesthetics
     "RAntenna": np.array([50, 120, 32]) / 255,
 }
 
+segments_for_6dpose_per_leg = ["Coxa", "Femur", "Tibia", "Tarsus1"]
+segments_for_6dpose = [
+    f"{leg}{seg}" for leg in legs for seg in segments_for_6dpose_per_leg
+] + ["Thorax"]
+
+# fmt: off
+# all_body_segments = [
+#     "Thorax", "A1A2", "A3", "A4", "A5", "A6",
+#     "LHaltere", "LWing", "RHaltere", "RWing",
+#     "LFCoxa", "LFFemur", "LFTibia", "LFTarsus1", "LFTarsus2", "LFTarsus3", "LFTarsus4", "LFTarsus5",
+#     "LHCoxa", "LHFemur", "LHTibia", "LHTarsus1", "LHTarsus2", "LHTarsus3", "LHTarsus4", "LHTarsus5",
+#     "LMCoxa", "LMFemur", "LMTibia", "LMTarsus1", "LMTarsus2", "LMTarsus3", "LMTarsus4", "LMTarsus5",
+#     "RHCoxa", "RHFemur", "RHTibia", "RHTarsus1", "RHTarsus2", "RHTarsus3", "RHTarsus4", "RHTarsus5",
+#     "RMCoxa", "RMFemur", "RMTibia", "RMTarsus1", "RMTarsus2", "RMTarsus3", "RMTarsus4", "RMTarsus5",
+#     "RFCoxa", "RFFemur", "RFTibia", "RFTarsus1", "RFTarsus2", "RFTarsus3", "RFTarsus4", "RFTarsus5",
+#     "Head", "LEye", "REye", "Rostrum", "Haustellum",
+#     "LPedicel", "LFuniculus", "LArista", "RPedicel", "RFuniculus", "RArista",
+# ]
+# fmt: on
+
 
 ###########################################################################
 ##  COLORS FOR BODY SEGMENT RENDERING BELOW                              ##

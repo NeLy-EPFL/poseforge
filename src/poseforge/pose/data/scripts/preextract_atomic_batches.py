@@ -172,11 +172,11 @@ def extract_atomic_batches(
             AtomicBatchDataset.save_atomic_batch_frames(
                 atomic_batch_frames,
                 output_dir / f"{filename_stem}_frames.mp4",
-                fps=sampler.fps,
-                spacing=video_spacing,
+                sampler.fps,
+                video_spacing,
             )
             AtomicBatchDataset.save_atomic_batch_sim_data(
-                labels, output_dir / f"{filename_stem}_labels.h5"
+                output_dir / f"{filename_stem}_labels.h5", labels, sampler.label_keys
             )
         if batch_idx % logging_interval == 0:
             elapsed = time() - start_time
@@ -222,13 +222,14 @@ if __name__ == "__main__":
     #     --output-dir bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001
 
     # # Example usage not via CLI
+    # from poseforge.util import bulk_data_dir
     # extract_atomic_batches(
     #     atomic_batch_nframes=32,
     #     atomic_batch_nvariants_max=4,
     #     minimum_time_diff_frames=60,
-    #     input_basedir="bulk_data/style_transfer/production/translated_videos",
-    #     nmf_sim_rendering_basedir="bulk_data/nmf_rendering/",
-    #     output_dir="bulk_data/pose_estimation/atomic_batches_test",
+    #     input_basedir=bulk_data_dir / "style_transfer/production/translated_videos",
+    #     nmf_sim_rendering_basedir=bulk_data_dir / "nmf_rendering/",
+    #     output_dir=bulk_data_dir / "pose_estimation/atomic_batches_test",
     #     original_image_size=(464, 464),
     #     n_jobs=-1,
     #     logging_interval=100,

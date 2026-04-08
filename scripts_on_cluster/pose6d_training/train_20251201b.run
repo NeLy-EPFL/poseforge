@@ -1,15 +1,15 @@
 #!/bin/bash -l
 
-#SBATCH --job-name keypoints3d
+#SBATCH --job-name pose6d-training
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 16
-#SBATCH --mem 75GB
+#SBATCH --cpus-per-task 32
+#SBATCH --mem 92GB
 #SBATCH --time 72:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/keypoints3d_training/output_20251127a.log
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/pose6d_training/output_20251201b.log
 
 echo "Hello from $(hostname)"
 
@@ -18,8 +18,8 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
-training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_training.py"
-training_trial_name="trial_20251127a"
+training_cli_path="src/poseforge/pose/pose6d/scripts/run_training.py"
+training_trial_name="20251201b"
 contrastive_pretraining_trial_name="trial_20251125a_lowlr"
 contrastive_pretraining_epoch="epoch009"
 contrastive_pretraining_local_step="step003055"
@@ -27,9 +27,16 @@ contrastive_pretraining_local_step="step003055"
 echo "Training starting at $(date)"
 
 python -u $training_cli_path \
-    --n-epochs 30 \
+    --n_epochs 15 \
+    --seed 42 \
+    --model-architecture-config.n-segments 25 \
+    --model-architecture-config.n-attention-gated-feature-channels 128 \
+    --model-architecture-config.n-global-feature-channels 128 \
+    --model-architecture-config.camera-distance 100.0 \
     --model-weights-config.feature-extractor-weights \
         "bulk_data/pose_estimation/contrastive_pretraining/$contrastive_pretraining_trial_name/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
+    --loss-config.translation-weight 1.0 \
+    --loss-config.rotation-weight 10.0 \
     --training-data-config.train-data-dirs \
         "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial001" \
         "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial002" \
@@ -56,14 +63,19 @@ python -u $training_cli_path \
     --training-data-config.input-image-size 256 256 \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 4 \
-    --training-data-config.train-batch-size 320 \
-    --training-data-config.val-batch-size 64 \
-    --training-data-config.num-workers 16 \
+    --training-data-config.train-batch-size 128 \
+    --training-data-config.val-batch-size 512 \
+    --training-data-config.n-workers 8 \
+    --optimizer-config.learning_rate_encoder 0.00003 \
+    --optimizer-config.learning_rate_upsample 0.0003 \
+    --optimizer-config.learning_rate_attention 0.0003 \
+    --optimizer-config.learning_rate_pose6d_heads 0.0003 \
+    --optimizer-config.weight-decay 0.00001 \
     --training-artifacts-config.output-basedir \
-        "bulk_data/pose_estimation/keypoints3d/$training_trial_name/" \
+        "bulk_data/pose_estimation/pose6d/$training_trial_name/" \
     --training-artifacts-config.logging-interval 10 \
     --training-artifacts-config.checkpoint-interval 1000 \
-    --training-artifacts-config.validation-interval 1000 \
-    --training-artifacts-config.n-batches-per-validation 150
+    --training-artifacts-config.validation-interval 300 \
+    --training-artifacts-config.n-batches-per-validation 30
 
 echo "Training ends at $(date)"

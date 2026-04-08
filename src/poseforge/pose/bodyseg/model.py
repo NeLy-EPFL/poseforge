@@ -103,11 +103,12 @@ class BodySegmentationModel(nn.Module):
             and weights_config.model_weights is None
         ):
             logging.warning("weights_config contains nothing useful. No action taken.")
+            return
 
         # If full model weights are provided, load them directly
         if weights_config.model_weights is not None:
             checkpoint_path = Path(weights_config.model_weights)
-            if not checkpoint_path.is_file():
+            if not checkpoint_path.exists():
                 raise ValueError(f"Model weights path {checkpoint_path} is not a file")
             weights = torch.load(checkpoint_path, map_location="cpu")
             self.load_state_dict(weights)
@@ -157,9 +158,7 @@ class BodySegmentationModel(nn.Module):
                 └──(bottleneck/identity)──┘
         """
         # Run feature extractor
-        e0, e1, e2, e3, e4 = self.feature_extractor.forward(
-            x, return_intermediates=True
-        )
+        e0, e1, e2, e3, e4 = self.feature_extractor.forward_with_intermediates(x)
 
         d4 = e4  # this is just the bottleneck
 

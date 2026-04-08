@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import h5py
 import logging
+from typing import Callable
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from pvio.io import read_frames_from_video, write_frames_to_video
@@ -20,7 +21,11 @@ class AtomicBatchDataset(Dataset):
         load_dof_angles: bool = False,
         load_keypoint_positions: bool = False,
         load_body_segment_maps: bool = False,
+        load_mesh_pose6d: bool = False,
+        transform: Callable | None = None,
     ):
+        self.transform = transform
+
         # Find all .h5 and .mp4 files in the provided directories
         all_h5_files = set()
         all_mp4_files = set()
@@ -70,6 +75,9 @@ class AtomicBatchDataset(Dataset):
             self.label_keys.append("keypoint_pos")
         if load_body_segment_maps:
             self.label_keys.append("body_seg_maps")
+        if load_mesh_pose6d:
+            self.label_keys.append("mesh_pos")
+            self.label_keys.append("mesh_quat")
 
     def __len__(self):
         return len(self.atomic_batches)
@@ -90,6 +98,10 @@ class AtomicBatchDataset(Dataset):
 
         # Load labels data
         sim_data = self.load_atomic_batch_sim_data(h5_path, self.label_keys)
+
+        # Apply transform if provided
+        if self.transform is not None:
+            frames, sim_data = self.transform(frames, sim_data)
 
         return frames, sim_data
 
@@ -196,9 +208,9 @@ class AtomicBatchDataset(Dataset):
 
     @staticmethod
     def save_atomic_batch_sim_data(
-        sim_data: dict[str, np.ndarray],
         output_path: Path,
-        metadata: dict | None = None,
+        sim_data: dict[str, np.ndarray],
+        label_keys: dict[str, list[str]],
     ):
         """Save simulation data for an atomic batch to an HDF5 file.
 
@@ -214,11 +226,9 @@ class AtomicBatchDataset(Dataset):
                 # these files will be accessed very frequently during training, so we
                 # use lzf (faster than gzip) and no shuffling to optimize for speed
                 compression = "lzf" if key == "body_seg_maps" else None
-                f.create_dataset(key, data=value, compression=compression)
+                ds = f.create_dataset(key, data=value, compression=compression)
+                ds.attrs["keys"] = label_keys[key]
             f.attrs["n_frames"] = next(iter(sim_data.values())).shape[0]
-            if metadata is not None:
-                for key, value in metadata.items():
-                    f.attrs[key] = value
 
     @staticmethod
     def load_atomic_batch_sim_data(
@@ -358,12 +368,15 @@ def init_atomic_dataset_and_dataloader(
     load_dof_angles: bool = False,
     load_keypoint_positions: bool = False,
     load_body_segment_maps: bool = False,
+    load_mesh_pose6d: bool = False,
     shuffle: bool = False,
     n_workers: int | None = None,
     n_channels: int = 3,
     pin_memory: bool = True,
     drop_last: bool = True,
     prefetch_factor: int | None = None,
+    transform: Callable | None = None,
+    return_index: bool = False,
 ):
     """
     Initializes an AtomicBatchDataset and a corresponding DataLoader for
@@ -385,6 +398,8 @@ def init_atomic_dataset_and_dataloader(
             positions. Defaults to False.
         load_body_segment_maps (bool, optional): Whether to load body
             segment maps. Defaults to False.
+        load_mesh_pose6d (bool, optional): Whether to load mesh 6D pose.
+            Defaults to False.
         shuffle (bool, optional): Whether to shuffle the data. Defaults to
             False.
         n_workers (int | None, optional): Number of worker threads for
@@ -396,6 +411,8 @@ def init_atomic_dataset_and_dataloader(
             batch. Defaults to True.
         prefetch_factor (int | None, optional): Number of samples to load
             in advance by each worker. If None, uses PyTorch default.
+        transform (Callable | None, optional): Optional transform to apply
+            to each atomic batch when loading. Defaults to None.
 
     Returns:
         dataset (AtomicBatchDataset):
@@ -412,6 +429,8 @@ def init_atomic_dataset_and_dataloader(
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,
         load_body_segment_maps=load_body_segment_maps,
+        load_mesh_pose6d=load_mesh_pose6d,
+        transform=transform,
     )
 
     # Check if batch size is valid

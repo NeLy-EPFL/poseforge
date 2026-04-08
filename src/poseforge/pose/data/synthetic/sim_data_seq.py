@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Iterator
 from pvio.io import get_video_metadata, read_frames_from_video
 
+from poseforge.neuromechfly.constants import segments_for_6dpose
+
 
 class SimulatedDataSequence:
     def __init__(
@@ -54,13 +56,14 @@ class SimulatedDataSequence:
 
     def get_sim_data_metadata(self) -> dict:
         metadata = {}
-        with h5py.File(self.simulated_labels_path, "r") as ds:
-            postprocessed_ds = ds["postprocessed"]
-            metadata["dof_angles"] = dict(postprocessed_ds["dof_angles"].attrs)
-            metadata["keypoint_pos"] = dict(postprocessed_ds["keypoint_pos"].attrs)
-            metadata["segmentation_labels"] = dict(
-                postprocessed_ds["segmentation_labels"].attrs
-            )
+        with h5py.File(self.simulated_labels_path, "r") as f:
+            ds = f["postprocessed"]
+            metadata["dof_angles"] = dict(ds["dof_angles"].attrs)
+            metadata["keypoint_pos"] = dict(ds["keypoint_pos"].attrs)
+            metadata["segmentation_labels"] = dict(ds["segmentation_labels"].attrs)
+            metadata["mesh_pose6d"] = dict(ds["mesh_pose6d_rel_camera"].attrs)
+            for inner_dict in metadata.values():
+                inner_dict["keys"] = list(inner_dict["keys"])
         return metadata
 
     def __len__(self) -> int:
@@ -119,14 +122,14 @@ class SimulatedDataSequence:
         *,
         load_dof_angles: bool = True,
         load_keypoint_pos: bool = True,
-        load_mesh_states: bool = False,
+        load_mesh_states: bool = True,
         load_body_seg_maps: bool = True,
     ) -> dict[str, np.ndarray]:
         self._check_frame_indices_validity(frame_indices)
 
         labels = {}
-        with h5py.File(self.simulated_labels_path, "r") as ds:
-            ds = ds["postprocessed"]
+        with h5py.File(self.simulated_labels_path, "r") as f:
+            ds = f["postprocessed"]
 
             if load_dof_angles:
                 labels["dof_angles"] = ds["dof_angles"][frame_indices, :]
@@ -143,10 +146,16 @@ class SimulatedDataSequence:
                 labels["keypoint_pos"] = keypoint_pos
 
             if load_mesh_states:
-                raise NotImplementedError(
-                    "Mesh states tracking (xyz + quat for 3D rotation) has not been "
-                    "implemented yet"
+                pose6d_grp = ds["mesh_pose6d_rel_camera"]
+                all_avail_segments = pose6d_grp.attrs["keys"]
+                seg_mask = np.array(
+                    [name in segments_for_6dpose for name in all_avail_segments]
                 )
+                # h5py only supports fancy indexing along one axis
+                mesh_pos = pose6d_grp["pos_rel_cam"][frame_indices, :, :]
+                labels["mesh_pos"] = mesh_pos[:, seg_mask, :]
+                mesh_quat = pose6d_grp["quat_rel_cam"][frame_indices, :, :]
+                labels["mesh_quat"] = mesh_quat[:, seg_mask, :]
 
             if load_body_seg_maps:
                 seg_labels_ds = ds["segmentation_labels"]

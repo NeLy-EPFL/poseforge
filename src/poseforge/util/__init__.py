@@ -5,7 +5,7 @@ from .sys import (
     check_mixed_precision_status,
 )
 from .plot import configure_matplotlib_style
-from .data import SerializableDataClass, OutputBuffer
+from .data import SerializableDataClass, OutputBuffer, bulk_data_dir
 from .ml import count_optimizer_parameters, count_module_parameters
 
 
@@ -17,6 +17,7 @@ __all__ = [
     "configure_matplotlib_style",
     "SerializableDataClass",
     "OutputBuffer",
+    "bulk_data_dir",
     "count_optimizer_parameters",
     "count_module_parameters",
 ]
