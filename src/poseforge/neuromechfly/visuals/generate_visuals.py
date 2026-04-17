@@ -42,7 +42,7 @@ def generate_visual_config(body_segments, color_map, palette, prefix, default_co
         # This handles both leg prefixes (e.g., "LF") and link names (e.g., "Coxa")
         for segment in body_segments:
             if key in segment and segment not in assigned_segments:
-                apply_to_list.append(segment)
+                apply_to_list.append(f"{segment}*")
         
         if apply_to_list:
             # Use a sanitized key for the visual set name
@@ -62,7 +62,7 @@ def generate_visual_config(body_segments, color_map, palette, prefix, default_co
     unassigned_segments = [seg for seg in body_segments if seg not in assigned_segments]
     if unassigned_segments:
         visual_config[f"{prefix}_default"] = {
-            "apply_to": unassigned_segments,
+            "apply_to": [f"{seg}*" for seg in unassigned_segments],
             "material": {
                 "specular": 0.0,
                 "shininess": 0.0,

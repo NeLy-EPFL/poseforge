@@ -262,6 +262,7 @@ def process_subsegment(
     render_filenames: list[str],
     crop_size: int = 464,
     n_jobs: int = -1,
+    use_flybody: bool = False,
 ) -> None:
     frame_idx_start, frame_idx_end = frames_range
     num_frames = frame_idx_end - frame_idx_start
@@ -385,7 +386,8 @@ def process_subsegment(
                     (num_frames, len(constants.keypoint_segments_nmf), 3),
                     dtype="float32",
                 )
-                for seg_id, body_segment in enumerate(constants.keypoint_segments_nmf):
+                all_segments = constants.keypoint_segments_flybody if use_flybody else constants.keypoint_segments_nmf
+                for seg_id, body_segment in enumerate(all_segments):
                     key = f"keypoint_pos_{ref_frame}_{body_segment}"
                     values = np.array(derived_variables_by_key[key])
                     data_block[:, seg_id, :] = values
@@ -393,13 +395,13 @@ def process_subsegment(
                 pos_ds = keypoint_pos_group.create_dataset(
                     f"{ref_frame}_coords", data=data_block, dtype="float32"
                 )
-                pos_ds.attrs["keys"] = constants.keypoint_segments_nmf
+                pos_ds.attrs["keys"] = all_segments
                 pos_ds.attrs["description"] = (
                     f"Keypoint positions in {ref_frame} coordinates. Shape is "
                     "(num_frames, num_keypoints, 3). See the `.attrs['keys']` for the "
                     "order of keypoints."
                 )
-            keypoint_pos_group.attrs["keys"] = constants.keypoint_segments_nmf
+            keypoint_pos_group.attrs["keys"] = all_segments
             keypoint_pos_group.attrs["description"] = (
                 "This group contains positions of joint keypoints in the rotated image "
                 "centered around the fly, cropped, and rotated so that the fly faces "
@@ -451,6 +453,7 @@ def _draw_pose_2d_and_3d(
     camera_elevation: float,
     azimuth_rotation_period: float,
     max_abs_azimuth: float,
+    use_flybody: bool = False,
 ):
     # Calculate azimuth for this frame
     azimuth = (
@@ -480,7 +483,10 @@ def _draw_pose_2d_and_3d(
             )
         # Antenna
         for side in "LR":
-            segment_name = f"{side.lower()}_pedicel"
+            if use_flybody:
+                segment_name = f"{side.lower()}_antenna"
+            else:
+                segment_name = f"{side.lower()}_pedicel"
             keypoint_idx = keypoints.index(segment_name)
             pos = keypoint_pos_cam_ds[frame_index, keypoint_idx, :]
             color = constants.kchain_plotting_colors[f"{side}Antenna"]
@@ -508,7 +514,10 @@ def _draw_pose_2d_and_3d(
             )
         # Antenna
         for side in "LR":
-            segment_name = f"{side.lower()}_pedicel"
+            if use_flybody:
+                segment_name = f"{side.lower()}_antenna"
+            else:
+                segment_name = f"{side.lower()}_pedicel"
             keypoint_idx = keypoints.index(segment_name)
             pos = keypoint_pos_world_ds[frame_index, keypoint_idx, :]
             color = constants.kchain_plotting_colors[f"{side}Antenna"]
@@ -553,6 +562,7 @@ def visualize_single_frame(
     azimuth_rotation_period: float,
     max_abs_azimuth: float,
     seg_labels_color_palette: list[np.ndarray],
+    use_flybody: bool = False,
 ):
     """
     Worker function for parallel frame visualization.
@@ -590,6 +600,7 @@ def visualize_single_frame(
         camera_elevation=camera_elevation,
         azimuth_rotation_period=azimuth_rotation_period,
         max_abs_azimuth=max_abs_azimuth,
+        use_flybody=use_flybody,
     )
 
     # Draw segmentation labels map
@@ -611,6 +622,7 @@ def visualize_subsegment(
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
     n_jobs: int = -1,  # Default to all available cores
+    use_flybody: bool = False,
 ) -> None:
     # Load video frames
     frames, fps = load_video_frames(
@@ -628,7 +640,7 @@ def visualize_subsegment(
     seg_labels_all[seg_labels_all == 255] = len(keys)
 
     # Define color palette for segmentation labels visualization
-    assert keys[0] == "c_thorax"
+    assert "c_thorax" in keys[0], "Expected 'c_thorax' to be the first key in segmentation labels keys."
     max_num_labels = len(keys) + 1 # background is 255
     color_palette = get_segmentation_color_palette(max_num_labels)
 
@@ -656,6 +668,7 @@ def visualize_subsegment(
             azimuth_rotation_period,
             max_abs_azimuth,
             seg_labels_color_palette=color_palette,
+            use_flybody=use_flybody,
         )
         for i, frame in tqdm(
             enumerate(frames),
@@ -726,6 +739,7 @@ def postprocess_segment(
     max_abs_azimuth: float = 30.0,
     azimuth_rotation_period: float = 300.0,
     n_jobs: int = -1,
+    use_flybody: bool = False,
 ):
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
@@ -776,6 +790,8 @@ def postprocess_segment(
                 render_filenames,
                 image_crop_size,
                 n_jobs=n_jobs,
+                use_flybody=use_flybody,
+
             )
 
             # Visualize the subsegment if requested
@@ -789,6 +805,7 @@ def postprocess_segment(
                     max_abs_azimuth=max_abs_azimuth,
                     azimuth_rotation_period=azimuth_rotation_period,
                     n_jobs=n_jobs,
+                    use_flybody=use_flybody,
                 )
 
 

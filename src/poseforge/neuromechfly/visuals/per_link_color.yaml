@@ -1,42 +1,50 @@
 link_coxa:
-  apply_to: [lf_coxa, lm_coxa, lh_coxa, rf_coxa, rm_coxa, rh_coxa]
+  apply_to: [lf_coxa*, lm_coxa*, lh_coxa*, rf_coxa*, rm_coxa*, rh_coxa*]
   material:
     specular: 0.0
     shininess: 0.0
     rgba: [0, 1, 1, 1]
 link_trochanterfemur:
-  apply_to: [lf_trochanterfemur, lm_trochanterfemur, lh_trochanterfemur, rf_trochanterfemur,
-    rm_trochanterfemur, rh_trochanterfemur]
+  apply_to: [lf_trochanterfemur*, lm_trochanterfemur*, lh_trochanterfemur*, rf_trochanterfemur*,
+    rm_trochanterfemur*, rh_trochanterfemur*]
   material:
     specular: 0.0
     shininess: 0.0
     rgba: [1, 1, 0, 1]
 link_tibia:
-  apply_to: [lf_tibia, lm_tibia, lh_tibia, rf_tibia, rm_tibia, rh_tibia]
+  apply_to: [lf_tibia*, lm_tibia*, lh_tibia*, rf_tibia*, rm_tibia*, rh_tibia*]
   material:
     specular: 0.0
     shininess: 0.0
     rgba: [0, 0, 1, 1]
 link_tarsus:
-  apply_to: [lf_tarsus1, lf_tarsus2, lf_tarsus3, lf_tarsus4, lf_tarsus5, lm_tarsus1,
-    lm_tarsus2, lm_tarsus3, lm_tarsus4, lm_tarsus5, lh_tarsus1, lh_tarsus2, lh_tarsus3,
-    lh_tarsus4, lh_tarsus5, rf_tarsus1, rf_tarsus2, rf_tarsus3, rf_tarsus4, rf_tarsus5,
-    rm_tarsus1, rm_tarsus2, rm_tarsus3, rm_tarsus4, rm_tarsus5, rh_tarsus1, rh_tarsus2,
-    rh_tarsus3, rh_tarsus4, rh_tarsus5]
+  apply_to: [lf_tarsus1*, lf_tarsus2*, lf_tarsus3*, lf_tarsus4*, lf_tarsus5*, lm_tarsus1*,
+    lm_tarsus2*, lm_tarsus3*, lm_tarsus4*, lm_tarsus5*, lh_tarsus1*, lh_tarsus2*,
+    lh_tarsus3*, lh_tarsus4*, lh_tarsus5*, rf_tarsus1*, rf_tarsus2*, rf_tarsus3*,
+    rf_tarsus4*, rf_tarsus5*, rm_tarsus1*, rm_tarsus2*, rm_tarsus3*, rm_tarsus4*,
+    rm_tarsus5*, rh_tarsus1*, rh_tarsus2*, rh_tarsus3*, rh_tarsus4*, rh_tarsus5*]
   material:
     specular: 0.0
     shininess: 0.0
     rgba: [0, 1, 0, 1]
 link_thorax:
-  apply_to: [c_thorax]
+  apply_to: [c_thorax*]
   material:
     specular: 0.0
     shininess: 0.0
     rgba: [0.4, 0.4, 0.4, 1]
 link_default:
-  apply_to: [c_head, c_rostrum, c_haustellum, c_abdomen12, c_abdomen3, c_abdomen4,
-    c_abdomen5, c_abdomen6, l_eye, l_pedicel, l_funiculus, l_arista, l_haltere, l_wing,
-    r_eye, r_pedicel, r_funiculus, r_arista, r_haltere, r_wing]
+  apply_to: [c_thorax*, c_head*, c_rostrum*, c_haustellum*, c_abdomen12*, c_abdomen3*,
+    c_abdomen4*, c_abdomen5*, c_abdomen6*, l_eye*, l_pedicel*, l_funiculus*, l_arista*,
+    l_haltere*, l_wing*, r_eye*, r_pedicel*, r_funiculus*, r_arista*, r_haltere*,
+    r_wing*, lf_coxa*, lf_trochanterfemur*, lf_tibia*, lf_tarsus1*, lf_tarsus2*, lf_tarsus3*,
+    lf_tarsus4*, lf_tarsus5*, lm_coxa*, lm_trochanterfemur*, lm_tibia*, lm_tarsus1*,
+    lm_tarsus2*, lm_tarsus3*, lm_tarsus4*, lm_tarsus5*, lh_coxa*, lh_trochanterfemur*,
+    lh_tibia*, lh_tarsus1*, lh_tarsus2*, lh_tarsus3*, lh_tarsus4*, lh_tarsus5*, rf_coxa*,
+    rf_trochanterfemur*, rf_tibia*, rf_tarsus1*, rf_tarsus2*, rf_tarsus3*, rf_tarsus4*,
+    rf_tarsus5*, rm_coxa*, rm_trochanterfemur*, rm_tibia*, rm_tarsus1*, rm_tarsus2*,
+    rm_tarsus3*, rm_tarsus4*, rm_tarsus5*, rh_coxa*, rh_trochanterfemur*, rh_tibia*,
+    rh_tarsus1*, rh_tarsus2*, rh_tarsus3*, rh_tarsus4*, rh_tarsus5*]
   material:
     specular: 0.0
     shininess: 0.0

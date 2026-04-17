@@ -8,7 +8,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from flygym.compose import Fly, KinematicPose, ActuatorType
-from flygym.anatomy import Skeleton, AxisOrder, JointPreset, ActuatedDOFPreset
+from flygym.compose.fly import FlybodyFly
+from flygym.assets.model.flybody.anatomy_flybody import (
+    FlybodySkeleton,
+    FlybodyJointPreset,
+    FlybodyAxisOrder,
+    FlybodyActuatedDOFPreset,
+    FlybodyContactBodiesPreset,
+)
+from flygym.anatomy import Skeleton, AxisOrder, JointPreset, ActuatedDOFPreset, ContactBodiesPreset
 from flygym.compose import FlatGroundWorld
 from flygym.utils.math import Rotation3D
 from flygym import Simulation, Renderer
@@ -23,13 +31,7 @@ from poseforge.neuromechfly.constants import (
     parse_nmf_joint_seg,
 )
 
-axis_order = AxisOrder.YAW_PITCH_ROLL
-articulated_joints = JointPreset.LEGS_ONLY
-actuated_dofs = ActuatedDOFPreset.LEGS_ACTIVE_ONLY
-#neutral_pose = KinematicPosePreset.NEUTRAL
 actuator_type = ActuatorType.POSITION
-skeleton = Skeleton(axis_order=axis_order, joint_preset=articulated_joints)
-
 nofuse_global = Path(__file__).parent / "mujoco_globals_nofuse.yaml"
 
 class SpotlightArena(FlatGroundWorld):
@@ -147,8 +149,22 @@ class FlyForRendering(Fly):
             castshadow = "true",
         )
         return cam
-    
 
+class FlyBodyForRendering(FlybodyFly, FlyForRendering):
+    def __init__(self, *args, **kwargs):
+        self.all_material_names = []
+        super().__init__(*args, **kwargs)
+        self.sensorized_body_segments = []
+    
+    def add_joints(self, skeleton, neutral_pose):
+        super().add_joints(skeleton, neutral_pose)
+        
+        # make the tarsus and claw segments a bit stiffer
+        for jointdof, joint in self.jointdof_to_mjcfjoint.items():
+            if "tarsus" in jointdof.name:
+                joint.stiffness *= 5.0
+
+        
 class SingleFlySimulationForRendering(Simulation):
 
     def __init__(self, *args, **kwargs):
@@ -223,25 +239,64 @@ class SingleFlySimulationForRendering(Simulation):
     def colorize(self, fly_name:str, material_lookup:dict) -> None:
         if self._internal_matid_lookup is None:
             raise ValueError("Material lookup has not been set. Call _parse_visual_config() first to set the material lookup based on a visual config path.")
-        for body, mat_name in material_lookup.items():
-            body_name = body.name
-            self.mj_model.geom(f"{fly_name}/{body_name}").matid = self._internal_matid_lookup[fly_name][f"{fly_name}/{mat_name}"]
+        for target, mat_name in material_lookup.items():
+            # Standard Fly lookup uses body segments as keys.
+            if hasattr(target, "name"):
+                body_name = target.name
+                self.mj_model.geom(f"{fly_name}/{body_name}").matid = self._internal_matid_lookup[fly_name][f"{fly_name}/{mat_name}"]
+                continue
 
-def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose):
+            # Flybody lookup uses geom names as keys.
+            if isinstance(target, str):
+                self.mj_model.geom(f"{fly_name}/{target}").matid = self._internal_matid_lookup[fly_name][f"{fly_name}/{mat_name}"]
+                continue
+
+            raise TypeError(f"Unsupported material lookup key type: {type(target)}")
+
+def get_skeleton(use_flybody: bool):
+    if use_flybody:
+        axis_order = FlybodyAxisOrder.YAW_ROLL_PITCH
+        articulated_joints = FlybodyJointPreset.LEGS_ONLY
+        skeleton = FlybodySkeleton(axis_order=axis_order, joint_preset=articulated_joints)
+    else:
+        axis_order = AxisOrder.YAW_PITCH_ROLL
+        articulated_joints = JointPreset.LEGS_ONLY
+        skeleton = Skeleton(axis_order=axis_order, joint_preset=articulated_joints)
+    return skeleton
+
+def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose, use_flybody):
 
     # This controlls how strongly the actuators try to track the target joint angles
     actuator_gain = 150.0  # in uN*mm/rad (torque applied per angular discrepancy)
-    
-    fly = FlyForRendering(mujoco_globals_path=nofuse_global) # if bodies are fused, head disapears and we cannot add an xbody sensor to it
-    fly.add_joints(skeleton, neutral_pose=start_pose)
-    
-    actuated_dofs_list = fly.skeleton.get_actuated_dofs_from_preset(actuated_dofs)
-    fly.add_actuators(
-        actuated_dofs_list,
-        actuator_type=actuator_type,
-        kp=actuator_gain,
-        neutral_input=start_pose,
-    )
+
+    if use_flybody:
+        skeleton = get_skeleton(use_flybody=True)
+        fly = FlyBodyForRendering(mujoco_globals_path=nofuse_global)
+        fly.add_joints(skeleton, neutral_pose=start_pose)
+        actuated_dofs = FlybodyActuatedDOFPreset.LEGS_ACTIVE_ONLY
+        actuated_dofs_list = skeleton.get_actuated_dofs_from_preset(actuated_dofs)
+
+        fly.add_actuators(
+            actuated_dofs_list,
+            actuator_type=actuator_type
+            )
+        
+        spawn_pos = [0, 0, 2.0]  # higher release thorax origin is located in a different place
+
+    else:
+        skeleton = get_skeleton(use_flybody=False)
+        fly = FlyForRendering(mujoco_globals_path=nofuse_global) # if bodies are fused, head disapears and we cannot add an xbody sensor to it 
+        fly.add_joints(skeleton, neutral_pose=start_pose)
+        actuated_dofs = ActuatedDOFPreset.LEGS_ACTIVE_ONLY
+        actuated_dofs_list = skeleton.get_actuated_dofs_from_preset(actuated_dofs)
+        fly.add_actuators(
+            actuated_dofs_list,
+            actuator_type=actuator_type,
+            kp=actuator_gain,
+            neutral_input=start_pose,
+        )
+
+        spawn_pos = [0, 0, 0.7]  # center of thorax is at 0.7 mm above the ground
 
     fly.add_mesh_state_sensors()
     fly.add_cardinal_sensors()
@@ -264,11 +319,11 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
     tracking_cam = fly.add_tracking_camera(pos_offset=cam_offset, rotation=cam_rot, fovy=5)
     fly.add_leg_adhesion()
 
-    spawn_pos = [0, 0, 0.7]  # center of thorax is at 0.7 mm above the ground
     spawn_rot = Rotation3D(format="quat", values=[1, 0, 0, 0])  # no rotation
 
     world = SpotlightArena()
-    world.add_fly(fly, spawn_pos, spawn_rot)
+    world.add_fly(fly, spawn_pos, spawn_rot,
+                  bodysegs_with_ground_contact = FlybodyContactBodiesPreset.LEGS_THORAX_ABDOMEN_HEAD if use_flybody else ContactBodiesPreset.LEGS_THORAX_ABDOMEN_HEAD)
 
     sim = SingleFlySimulationForRendering(world)
 
@@ -317,12 +372,19 @@ def run_neuromechfly_simulation(
     visual_paths,
     max_sim_steps=None,
     render_depth=False,
-):
+    use_flybody=False,
+):  
+
+    if use_flybody:
+        axis_order = FlybodyAxisOrder.YAW_ROLL_PITCH
+    else:
+        axis_order = AxisOrder.YAW_PITCH_ROLL        
+    skeleton = get_skeleton(use_flybody=use_flybody)
     
     joint_angles_rad_dict = {}
     for joint, traj in zip(skeleton.get_actuated_dofs_from_preset(ActuatedDOFPreset.LEGS_ACTIVE_ONLY), trajectories_interp[0]):
         joint_angles_rad_dict[joint.name] = traj
-    
+
     start_pose = KinematicPose(
         joint_angles_rad_dict=joint_angles_rad_dict,
         axis_order=axis_order,
@@ -330,7 +392,7 @@ def run_neuromechfly_simulation(
     )
 
     sim, renderers, cam, materials_lookups = set_up_simulation(
-        render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose
+        render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose, use_flybody,
     )
 
     if render_depth:
@@ -378,6 +440,7 @@ def run_neuromechfly_simulation(
 
     sim.warmup()
     # Simulation loop
+    sim.set_leg_adhesion_states("nmf", 0.5*np.ones(6, dtype=bool))
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
         # Stop if we have reached the desired number of simulation steps (for testing)
         if max_sim_steps is not None and sim_frame_id >= max_sim_steps:
@@ -458,6 +521,8 @@ def run_neuromechfly_simulation(
                             for j in sim.world.fly_lookup["nmf"].get_actuated_jointdofs_order(actuator_type)]
 
     all_bodies = [b.name for b in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfbody]
+    segmentation_geoms = [geom.name for _, geoms in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfgeom.items() for geom in geoms ]
+
     hist_dict = {
         "values": {
             "timestamp": timestamps_hist,
@@ -472,7 +537,7 @@ def run_neuromechfly_simulation(
             "joint_angles": all_dofs,
             "sensorized_body_segments": sensorized_body_segments,
             "all_bodies": all_bodies,
-            "segmentation_bodies": all_bodies, # checked that the segmentation values corredspond to the body
+            "segmentation_labels": segmentation_geoms, # checked that the segmentation values corredspond to the body
             "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
         },
     }
@@ -528,9 +593,9 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
             "Segmentation maps rendered during the simulation. This dataset has shape "
             "(n_timesteps, height, width) and contains integer values corresponding to "
             "body ids in the simulation. The mapping from body ids to body names is given "
-            "in the 'keys' attribute under 'segmentation_bodies'."
+            "in the 'keys' attribute under 'segmentation_labels'."
         )
-        h5_file["segmentation_maps"].attrs["keys"] = hist_dict["keys"]["segmentation_bodies"]
+        h5_file["segmentation_maps"].attrs["keys"] = hist_dict["keys"]["segmentation_labels"]
 
         # Body segment states
         body_seg_group = h5_file.create_group("body_segment_states")
@@ -660,6 +725,7 @@ def simulate_one_segment(
     min_sim_duration_sec: float = 0.2,
     max_sim_steps: int | None = None,
     render_depth: bool = False,
+    use_flybody: bool = False,
 ) -> tuple[bool, list[str]]:
     """Simulate a single segment of kinematic recording in FlyGym. Note
     that no result will be saved if simulation fails before
@@ -713,10 +779,21 @@ def simulate_one_segment(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if use_flybody:
+        axis_order = FlybodyAxisOrder.YAW_ROLL_PITCH
+        articulated_joints = FlybodyJointPreset.LEGS_ONLY
+        actuated_dofs = FlybodyActuatedDOFPreset.LEGS_ACTIVE_ONLY
+        skeleton = FlybodySkeleton(axis_order=axis_order, joint_preset=articulated_joints)
+    else:
+        axis_order = AxisOrder.YAW_PITCH_ROLL
+        articulated_joints = JointPreset.LEGS_ONLY
+        actuated_dofs = ActuatedDOFPreset.LEGS_ACTIVE_ONLY
+        skeleton = Skeleton(axis_order=axis_order, joint_preset=articulated_joints)
+
     # Interpolate the trajectories to match the simulation timestep
     actuated_joints_list = skeleton.get_actuated_dofs_from_preset(actuated_dofs)
     trajectories_interp, interp_factor = interpolate_trajectories(
-        kinematic_recording_segment, input_timestep, sim_timestep, actuated_joints_list
+        kinematic_recording_segment, input_timestep, sim_timestep, actuated_joints_list, use_flybody
     )
     print(f"Simulating segment with {len(kinematic_recording_segment)} frames.")
     print(f"Interpolation factor: {interp_factor}")
@@ -733,6 +810,7 @@ def simulate_one_segment(
         visual_paths,
         max_sim_steps=max_sim_steps,
         render_depth=render_depth,
+        use_flybody=use_flybody,
     )
 
     # Do nothing if simulation failed before the minimum required duration is reached

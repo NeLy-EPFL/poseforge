@@ -28,7 +28,9 @@ keypoint_segments_nmf = [
     f"{leg.lower()}{link}" for leg in legs for link in leg_keypoints_nmf
 ] + ["LPedicel", "RPedicel"]
 
-keypoint_segments_nmf = [f"{leg.lower()}_{kp}" for leg in legs for kp in leg_keypoints_nmf] + ["l_pedicel", "r_pedicel"] 
+keypoint_segments_nmf = [f"{leg.lower()}_{kp}" for leg in legs for kp in leg_keypoints_nmf] + ["l_pedicel", "r_pedicel"]
+
+keypoint_segments_flybody = [f"{leg.lower()}_{kp}" for leg in legs for kp in leg_keypoints_nmf] + ["l_antenna", "r_antenna"]
 
 # all_segment_names_per_leg = [
 #     "Coxa",

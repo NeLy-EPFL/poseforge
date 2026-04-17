@@ -6,7 +6,7 @@ from poseforge.neuromechfly.constants import parse_nmf_joint #, all_leg_dofs
 from flygym.anatomy import JointDOF
 
 def extract_joint_angles_trajectory(
-    kinematic_recording_segment: pd.DataFrame, interp_factor: int, actuated_joints_list: list[JointDOF]
+    kinematic_recording_segment: pd.DataFrame, interp_factor: int, actuated_joints_list: list[JointDOF], use_flybody: bool = False
 ) -> np.ndarray:
     """Extract joint angles trajectory from a kinematic recording segment,
     interpolating the angles to match the simulation timestep."""
@@ -17,12 +17,13 @@ def extract_joint_angles_trajectory(
         leg, aymans_dof = parse_nmf_joint(joint)
         column_name = f"Angle__{leg}_leg_{aymans_dof}"
         time_series = kinematic_recording_segment[column_name].values 
-        if leg.startswith("R"):
-            if "roll" in aymans_dof:
-                time_series = -time_series  # Negate roll angles for right legs to match NMF convention
-            if "yaw" in aymans_dof:
-                time_series = -time_series  # Negate angles for right legs to match NMF convention
-        
+        if not use_flybody:
+            if leg.startswith("R"):
+                if "roll" in aymans_dof:
+                    time_series = -time_series  # Negate roll angles for right legs to match NMF convention
+                if "yaw" in aymans_dof:
+                    time_series = -time_series  # Negate angles for right legs to match NMF convention
+            
         original_trajectories_list.append(time_series)
         n_joints += 1
         
@@ -101,7 +102,8 @@ def interpolate_trajectories(
     kinematic_recording_segment: pd.DataFrame,
     input_timestep: float,
     sim_timestep: float,
-    actuated_joints_list: list[JointDOF]
+    actuated_joints_list: list[JointDOF],
+    use_flybody: bool = False,
 ):
     interp_factor = input_timestep / sim_timestep
     if int(interp_factor) != interp_factor:
@@ -111,6 +113,6 @@ def interpolate_trajectories(
         )
     interp_factor = int(interp_factor)
     trajectories_interp = extract_joint_angles_trajectory(
-        kinematic_recording_segment, interp_factor, actuated_joints_list
+        kinematic_recording_segment, interp_factor, actuated_joints_list, use_flybody
     )
     return trajectories_interp, interp_factor

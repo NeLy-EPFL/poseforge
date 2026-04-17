@@ -1,0 +1,50 @@
+grayscale_body:
+  apply_to: '*_body'
+  material:
+    shininess: '0.6'
+    rgba: ['0.423278', '0.423278', '0.423278', '1.0']
+grayscale_red:
+  apply_to: '*_red'
+  material:
+    shininess: '0.692'
+    rgba: ['0.25575286', '0.25575286', '0.25575286', '1.0']
+grayscale_ocelli:
+  apply_to: '*_ocelli'
+  material:
+    shininess: '1'
+    rgba: ['0.06867319999999999', '0.06867319999999999', '0.06867319999999999', '1.0']
+grayscale_black:
+  apply_to: '*_black'
+  material:
+    shininess: '0.727'
+    rgba: ['0.0', '0.0', '0.0', '1.0']
+grayscale_bristle-brown:
+  apply_to: '*_bristle-brown'
+  material:
+    shininess: '0.907'
+    rgba: ['0.0', '0.0', '0.0', '1.0']
+grayscale_lower:
+  apply_to: '*_lower'
+  material:
+    shininess: '0.6'
+    rgba: ['0.640975', '0.640975', '0.640975', '1.0']
+grayscale_brown:
+  apply_to: '*_brown'
+  material:
+    shininess: '0.6'
+    rgba: ['0.1092882', '0.1092882', '0.1092882', '1.0']
+grayscale_membrane:
+  apply_to: '*_membrane'
+  material:
+    specular: '0.62'
+    shininess: '0.907'
+    rgba: ['0.655043', '0.655043', '0.655043', '0.4']
+grayscale_blue:
+  apply_to: '*_blue'
+  material:
+    shininess: '0.6'
+    rgba: ['0.3499', '0.3499', '0.3499', '1.0']
+grayscale_pink:
+  apply_to: '*_pink'
+  material:
+    rgba: ['0.4694999999999999', '0.4694999999999999', '0.4694999999999999', '1.0']

@@ -60,10 +60,12 @@ from poseforge.util import get_hardware_availability
 # sets the rendering rules
 visual_paths = [
        #Path(__file__).parent.parent / "visuals/base.yaml",
-       Path(__file__).parent.parent / "visuals/per_link_color.yaml",
+    #    Path(__file__).parent.parent / "visuals/per_link_color.yaml",
        #Path(__file__).parent.parent / "visuals/per_leg_color.yaml",
-       #Path(__file__).parent.parent / "visuals/gray.yaml",
-       Path(__file__).parent.parent / "visuals/grayscale.yaml",
+    #    Path(__file__).parent.parent / "visuals/gray.yaml",
+    #    Path(__file__).parent.parent / "visuals/grayscale.yaml",
+        Path(__file__).parent.parent / "visuals/flybody_base.yaml",
+        # Path(__file__).parent.parent / "visuals/flybody_grayscale.yaml",
     ]
 
 def simulate_using_kinematic_prior(
@@ -76,6 +78,7 @@ def simulate_using_kinematic_prior(
     render_play_speed: float = 0.1,
     max_segments_per_trial: int | None = None,
     max_sim_steps_per_segment: int | None = None,
+    use_flybody: bool = False,
 ) -> None:
     """CLI to run replay kinematic motion priors from Aymanns et al. 2022
     in NeuroMechFly.
@@ -104,6 +107,7 @@ def simulate_using_kinematic_prior(
         max_sim_steps_per_segment (int | None): If not None, for each
             segment to simulate, limit the number of simulation steps to
             this number. This is mainly for testing.
+        use_flybody (bool): Whether to use the flybody model to simulate the kinematics
     """
     recorded_trial_path = Path(recorded_trial_path)
     trial_output_dir = Path(trial_output_dir)
@@ -150,14 +154,15 @@ def simulate_using_kinematic_prior(
             output_data_freq=output_data_freq,
             render_play_speed=render_play_speed,
             visual_paths=visual_paths,
-            min_sim_duration_sec=0.2,
+            min_sim_duration_sec=0.01,
             render_depth=True,
             max_sim_steps=max_sim_steps_per_segment,
+            use_flybody=use_flybody,
         )
         is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
             postprocess_segment(
-                output_subdir, render_filenames, visualize=True, min_subsegment_duration_sec=0.1,
+                output_subdir, render_filenames, visualize=True, min_subsegment_duration_sec=0.1, use_flybody=use_flybody
             )
     print(f"### Done processing trial: {trial_name} ###")
 
@@ -167,6 +172,7 @@ def run_sequentially_for_testing(
         output_basedir: Path = Path("bulk_data/nmf_rendering_new/"), 
         max_segments_per_trial: int | None = None,
         max_sim_steps_per_segment: int | None = None,
+        use_flybody: bool = False,
 ):
     """Run everything sequentially (for debugging)"""
     # Configs
@@ -197,6 +203,7 @@ def run_sequentially_for_testing(
             sim_timestep=sim_timestep,
             max_segments_per_trial=max_segments_per_trial,
             max_sim_steps_per_segment=max_sim_steps_per_segment,
+            use_flybody=use_flybody,
         )
 
 
