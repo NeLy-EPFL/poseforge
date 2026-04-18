@@ -1,6 +1,6 @@
 import yaml
 from pathlib import Path
-from flygym.compose.fly import DEFAULT_RIGGING_CONFIG_PATH
+from flygym.compose.fly import DEFAULT_RIGGING_CONFIG_PATH, FLYBODY_RIGGING_CONFIG_PATH
 from poseforge.neuromechfly.constants import (
     color_by_kinematic_chain,
     color_by_link,
@@ -14,10 +14,17 @@ yaml.add_representer(list, represent_list)
 yaml.add_representer(tuple, represent_list)
 
 def get_all_body_segments():
-    """Load all body segment names from the default fly rigging configuration."""
+    """Load all body segment names from both NMF and Flybody rigging configs."""
     with open(DEFAULT_RIGGING_CONFIG_PATH, "r") as f:
-        rigging_config = yaml.safe_load(f)
-    return list(rigging_config.keys())
+        nmf_rigging_config = yaml.safe_load(f)
+    with open(FLYBODY_RIGGING_CONFIG_PATH, "r") as f:
+        flybody_rigging_config = yaml.safe_load(f)
+
+    # Keep insertion order while de-duplicating overlapping names.
+    return list(dict.fromkeys([
+        *nmf_rigging_config.keys(),
+        *flybody_rigging_config.keys(),
+    ])) + ["c_abdomen8_body"]
 
 def generate_visual_config(body_segments, color_map, palette, prefix, default_color_name="gray"):
     """
@@ -43,6 +50,7 @@ def generate_visual_config(body_segments, color_map, palette, prefix, default_co
         for segment in body_segments:
             if key in segment and segment not in assigned_segments:
                 apply_to_list.append(f"{segment}*")
+                assigned_segments.add(segment)
         
         if apply_to_list:
             # Use a sanitized key for the visual set name
@@ -56,8 +64,6 @@ def generate_visual_config(body_segments, color_map, palette, prefix, default_co
                     "rgba": list(palette[color_name]),
                 },
             }
-            assigned_segments.update(apply_to_list)
-
     # Assign default color to remaining segments
     unassigned_segments = [seg for seg in body_segments if seg not in assigned_segments]
     if unassigned_segments:
