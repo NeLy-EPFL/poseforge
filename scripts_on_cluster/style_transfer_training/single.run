@@ -27,7 +27,7 @@ conda activate poseforge
 # -----------------------------------------------------------------------------
 PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
-DATASET_PATH="/home/stimpfli/aymanns2022_pseudocolor_spotlight_dataset"
+DATASET_PATH="/home/stimpfli/aymanns2022_pseudocolor_spotlight_dataset_flybody_link"
 
 # Base output directories
 CAMPAIGN_TAG="20260327_cropped"
@@ -40,22 +40,24 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
-RUN_NAME="cntrl_lr"
+RUN_NAME="10_lr_curriculum_flybody_link"
 
 # Architecture / loss
 NGF=32
 NETG="stylegan2"
 LAMBDA_GAN=0.1
 PREPROCESS="resize_and_center_patch"
-LOAD_SIZE=286
+CENTER_OFFSET=0
+LOAD_SIZE=256
 LR_POLICY="linear"
 
 # Optimization / schedule
 BATCH_SIZE=4
-LR=0.0001
+LR=0.001
 START_EPOCH="latest"
-N_EPOCHS=500
-N_EPOCHS_DECAY=0
+N_EPOCHS=100
+N_EPOCHS_DECAY=400
+FINETUNE_LOAD_SIZE=900
 
 # Runtime / logging
 CUT_MODE="CUT"
@@ -107,7 +109,9 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --preprocess "$PREPROCESS" \
     --crop_size 256 \
     --load_size "$LOAD_SIZE" \
+    --finetune_load_size "$FINETUNE_LOAD_SIZE" \
     --lr_policy "$LR_POLICY" \
+    --center_patch_offset "$CENTER_OFFSET" \
     #--wandb_project "$WANDB_PROJECT" \
 
 echo "Training ends at $(date)"
