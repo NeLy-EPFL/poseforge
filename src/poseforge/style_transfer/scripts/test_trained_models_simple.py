@@ -3,14 +3,14 @@ from pathlib import Path
 import json
 import torch
 
-def easy_test_checkpoint(checkpoint_path: str, simulation_root: str):
+def easy_test_checkpoint(checkpoint_path: str, simulation_root: str, save_input_video: bool = False):
     
-    campaign_name = "test"
+    campaign_name = "validation"
     checkpoint_path = Path(checkpoint_path)
-    run_name = "test"
+    run_name = "validation"
     trial_name = None #checkpoint_path.parent.name
     epoch = int(checkpoint_path.stem.split("_")[0])
-    output_basedir = checkpoint_path.parent.parent.parent.parent
+    output_basedir = checkpoint_path.parent.parent
     # simulation_data_dirs = [Path(simulation_data_dirs).expanduser().resolve()]
 
     video_filename, is_flybody = parse_video_filename_from_checkpoint_path(checkpoint_path)
@@ -21,8 +21,11 @@ def easy_test_checkpoint(checkpoint_path: str, simulation_root: str):
     simulation_data_dirs = [
         simulation_root / "BO_Gal4_fly5_trial005/segment_001/subsegment_000",
         simulation_root / "BO_Gal4_fly3_trial005/segment_001/subsegment_000",
-        simulation_root / "BO_Gal4_fly1_trial001/segment_001/subsegment_000",
     ]
+
+    # if (output_basedir / run_name).exists():
+    #     print(f"Output directory for run {run_name} already exists at {output_basedir / run_name}, skipping test.")
+    #     return
 
     print("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -36,6 +39,8 @@ def easy_test_checkpoint(checkpoint_path: str, simulation_root: str):
         output_basedir=output_basedir,
         video_filename=video_filename,
         device="cuda" if torch.cuda.is_available() else "cpu",
+        save_input_video = save_input_video,
+        
     )
 
 def parse_video_filename_from_checkpoint_path(checkpoint_path: Path) -> str:
@@ -49,11 +54,11 @@ def parse_video_filename_from_checkpoint_path(checkpoint_path: Path) -> str:
             elif "base" in dataroot:
                 return "processed_nmf_sim_render_flybody_base.mp4", True
             elif "link" in dataroot:
-                return "processed_nmf_sim_render_flybody_link.mp4", True
-            elif "segment_id" in dataroot:
+                return "processed_nmf_sim_render_per_link_color.mp4", True
+            elif "segment_id" in dataroot or "segmentid" in dataroot:
                 return "processed_nmf_sim_segment_id.mp4", True
             elif "depth" in dataroot:
-                return "processed_nmf_sim_render_depth.mp4", True
+                return "processed_nmf_sim_depth.mp4", True
             else:
                 raise ValueError(f"Could not parse video filename from dataroot: {dataroot}")
         else:
@@ -62,13 +67,13 @@ def parse_video_filename_from_checkpoint_path(checkpoint_path: Path) -> str:
             elif "base" in dataroot:
                 return "processed_nmf_sim_render_base.mp4", False
             elif "link" in dataroot:
-                return "processed_nmf_sim_render_link.mp4", False
-            elif "segment_id" in dataroot:
-                return "processed_nmf_sim_render_segment_id.mp4", False
+                return "processed_nmf_sim_render_per_link_color.mp4", False
+            elif "segment_id" in dataroot or "segmentid" in dataroot:
+                return "processed_nmf_sim_segment_id.mp4", False
             elif "depth" in dataroot:
-                return "processed_nmf_sim_render_depth.mp4", False
+                return "processed_nmf_sim_depth.mp4", False
             elif dataroot.endswith("aymanns2022_pseudocolor_spotlight_dataset"):
-                return "processed_nmf_sim_render_link.mp4", False
+                return "processed_nmf_sim_render_per_link_color.mp4", False
             else:
                 raise ValueError(f"Could not parse video filename from dataroot: {dataroot}")
 
@@ -78,7 +83,26 @@ def parse_video_filename_from_checkpoint_path(checkpoint_path: Path) -> str:
         )
 
     
+def test_all_checkpoints_in_directory(checkpoints_dir: str, simulation_root: str):
+    checkpoints_dir = Path(checkpoints_dir)
+    checkpoint_dirs = checkpoints_dir.glob("*")
+    checkpoint_paths = []
+    for ch_d in checkpoint_dirs:
+        ch_d_paths = sorted(ch_d.rglob("[0-9]*G.pth"), key=lambda p: int(p.stem.split("_")[0]))
+        if len(ch_d_paths) == 0:
+            print(f"No checkpoint files found in directory {ch_d}, skipping.")
+            continue
+        selected_paths = ch_d_paths[-4:] if len(ch_d_paths) >= 4 else ch_d_paths
+        for i in range(len(selected_paths)):
+            if i == 0:
+                checkpoint_paths.append((selected_paths[i], True))
+            else:
+                checkpoint_paths.append((selected_paths[i], False))
+    # checkpoint_paths = sorted(checkpoints_dir.rglob("[0-9]*G.pth"), key=lambda p: int(p.stem.split("_")[0]))
+    for checkpoint_path, save_input_video in checkpoint_paths:
+        print(f"Testing checkpoint: {checkpoint_path}")
+        easy_test_checkpoint(checkpoint_path, simulation_root, save_input_video=save_input_video)
 
 if __name__ == "__main__":
     import tyro
-    tyro.cli(easy_test_checkpoint)
+    tyro.cli(test_all_checkpoints_in_directory)

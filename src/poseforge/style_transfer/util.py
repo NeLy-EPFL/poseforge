@@ -39,6 +39,7 @@ def parse_hyperparameters_from_checkpoint_path(checkpoint_path: Path) -> dict:
             load_size = full_train_option["values"]["load_size"]
             if full_train_option["values"]["n_epochs_decay"] > 0 and "finetune_load_size" in full_train_option["values"]:
                 load_size = full_train_option["values"]["finetune_load_size"]
+            train_option["preprocess_opt"]["load_size"] = load_size
 
         return train_option
             

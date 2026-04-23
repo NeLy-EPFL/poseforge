@@ -50,6 +50,20 @@ class _CUTOptions:
         self.netF = "mlp_sample"  # don't-care
         self.netF_nc = None
 
+class CUTPreprocessOptions:
+    def __init__(
+        self,
+        preprocess: str,
+        load_size: int,
+        crop_size: int,
+    ):
+        self.preprocess = preprocess
+        self.load_size = load_size
+        self.crop_size = crop_size
+        self.dataroot = ""  # don't-care
+        self.no_flip = True  # don't-care
+        self.center_patch_offset = 0  # don't-care
+
 
 class InferencePipeline:
     def __init__(
@@ -80,11 +94,14 @@ class InferencePipeline:
         normalize_std = (0.5,) * input_nc
 
         if preprocess_opt is None:
-            preprocess_opt = {
-                "preprocess" : "resize_and_crop",
-                "load_size" : image_side_length,
-                "crop_size" : image_side_length,
-            }
+            preprocess_opt = CUTPreprocessOptions(
+                preprocess="resize_and_crop",
+                load_size=image_side_length,
+                crop_size=image_side_length,
+
+            )
+        else:
+            preprocess_opt = CUTPreprocessOptions(**preprocess_opt)
         self._input_transforms=get_transform(preprocess_opt)
 
         self._denormalize_transform = torchvision.transforms.Normalize(
@@ -213,6 +230,7 @@ def process_simulation(
     batch_size: int | None = None,
     progress_bar: bool = True,
     clear_memory_cache_after: bool = True,
+    save_input_video: bool = False,
 ) -> None:
     """Run style transfer on a NeuroMechFly-rendered behavior clip using a
     trained style transfer model.
@@ -234,6 +252,9 @@ def process_simulation(
             collection and clear CUDA memory cache after processing the
             simulation. This can help reduce memory usage when processing
             multiple simulations in a row. Defaults to True.
+        save_input_video (bool, optional): Whether to save the input video as
+            "input_reference.mp4" in the same directory as output_video_path.
+            Useful for saving the reference once per checkpoint. Defaults to False.
     """
     # Load input video
     input_frames, fps = read_frames_from_video(input_video_path)
@@ -246,10 +267,29 @@ def process_simulation(
 
     # Create video writer
     output_frames = []
+    preprocessed_frames = []
     for i in trange(0, len(input_frames), batch_size, disable=not progress_bar):
         # Get batch of frames (each frame is HWC format, uint8, 0-255)
         input_batch_frames = np.array(input_frames[i : i + batch_size])
         input_batch_pil = [to_pil_image(frame) for frame in input_batch_frames]
+
+        # Save the model-preprocessed version of the input video.
+        # This matches what the generator actually sees: resize/crop, tensor
+        # conversion, and normalization.
+        if save_input_video:
+            input_batch_preprocessed = torch.stack(
+                [inference_pipeline._input_transforms(img) for img in input_batch_pil]
+            )
+            input_batch_preprocessed = inference_pipeline._denormalize_transform(
+                input_batch_preprocessed
+            )
+            input_batch_preprocessed = input_batch_preprocessed.permute(0, 2, 3, 1)
+            input_batch_preprocessed = input_batch_preprocessed.detach().cpu().numpy()
+            input_batch_preprocessed = (
+                input_batch_preprocessed * 255
+            ).clip(0, 255).astype(np.uint8)
+            preprocessed_frames.extend(list(input_batch_preprocessed))
+
         output_batch = inference_pipeline.infer(input_batch_pil)
         for j in range(output_batch.shape[0]):
             frame = output_batch[j]
@@ -261,6 +301,11 @@ def process_simulation(
     # Write output video
     output_video_path.parent.mkdir(parents=True, exist_ok=True)
     write_frames_to_video(output_video_path, output_frames, fps=fps)
+
+    # Optionally save input video as reference (once per checkpoint folder)
+    if save_input_video:
+        input_reference_path = output_video_path.parent / f"input_reference_{output_video_path.stem.split('_')[-1]}.mp4"
+        write_frames_to_video(input_reference_path, preprocessed_frames, fps=fps)
 
     # Clean up video frames after processing
     del input_frames, output_frames

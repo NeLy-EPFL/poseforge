@@ -26,7 +26,8 @@ def test_checkpoint(
     batch_size: int | None = None,
     device: str | torch.device = "cuda",
     progress_bar: bool = False,
-    video_filename: str = ""
+    video_filename: str = "",
+    save_input_video: bool = False,
 ) -> None:
     """Visualize the performance of a model checkpoint by running inference
     on a set of NeuroMechFly-rendered behavior clips.
@@ -82,7 +83,7 @@ def test_checkpoint(
         input_path = sim_dir / video_filename
         output_path = output_dir / f"epoch{epoch:03d}_examplesim{i:02d}.mp4"
         process_simulation(
-            inference_pipeline, input_path, output_path, batch_size, progress_bar
+            inference_pipeline, input_path, output_path, batch_size, progress_bar, save_input_video=save_input_video,
         )
 
 def find_runs_within_trial_dir(trial_dir: Path) -> dict[str, Path]:
