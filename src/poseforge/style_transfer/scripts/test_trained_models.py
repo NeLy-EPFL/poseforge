@@ -10,21 +10,23 @@ from poseforge.style_transfer import (
     get_inference_pipeline,
     process_simulation,
     parse_hyperparameters_from_trial_name,
+    parse_hyperparameters_from_checkpoint_path,
 )
 
 
 def test_checkpoint(
     campaign_name: str,
-    trial_name: str,
     run_name: str,
     epoch: int,
     checkpoint_path: Path,
     simulation_data_dirs: list[Path],
     output_basedir: Path,
+    trial_name: str | None = None,
     image_side_length: int = 256,
     batch_size: int | None = None,
     device: str | torch.device = "cuda",
     progress_bar: bool = False,
+    video_filename: str = ""
 ) -> None:
     """Visualize the performance of a model checkpoint by running inference
     on a set of NeuroMechFly-rendered behavior clips.
@@ -32,7 +34,7 @@ def test_checkpoint(
     Args:
         campaign_name: Name of the training campaign
             (e.g. "20250903_parameter_sweep")
-        trial_name: Name of the training trial
+        trial_name: Name of the training trial or None 
             (e.g. "ngf32_netGstylegan2_batsize4_lambGAN0.5")
         run_name: Name of the training run
             (e.g. "ngf32_netGstylegan2_batsize4_lambGAN0.5-cont1")
@@ -56,8 +58,11 @@ def test_checkpoint(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse and save hyperparameters
-    model_hparams = parse_hyperparameters_from_trial_name(trial_name)
-    model_hparams["image_side_length"] = image_side_length
+    if trial_name is None:
+        model_hparams = parse_hyperparameters_from_checkpoint_path(checkpoint_path)
+    else:    
+        model_hparams = parse_hyperparameters_from_trial_name(trial_name)
+        model_hparams["image_side_length"] = image_side_length
     with open(output_dir / "metadata.json", "w") as f:
         metadata = {
             "hyperparameters": model_hparams,
@@ -74,12 +79,11 @@ def test_checkpoint(
 
     # Run inference for each simulation run
     for i, sim_dir in enumerate(simulation_data_dirs):
-        input_path = sim_dir / "processed_nmf_sim_render_colorcode_0.mp4"
+        input_path = sim_dir / video_filename
         output_path = output_dir / f"epoch{epoch:03d}_examplesim{i:02d}.mp4"
         process_simulation(
             inference_pipeline, input_path, output_path, batch_size, progress_bar
         )
-
 
 def find_runs_within_trial_dir(trial_dir: Path) -> dict[str, Path]:
     """Given a trial directory, find all the runs that it might contain and

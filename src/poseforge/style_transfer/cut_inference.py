@@ -12,6 +12,8 @@ from cut.models.cut_model import CUTModel
 from cut.options.option_stats import OptionsWrapper
 from poseforge.util.sys import clear_memory_cache
 
+from cut.data.base_dataset import get_transform
+
 
 class _CUTOptions:
     def __init__(
@@ -62,6 +64,7 @@ class InferencePipeline:
         nce_layers: list[int],
         device: str | torch.device = "cuda",
         print_architecture: bool = False,
+        preprocess_opt: dict | None = None,
     ):
         _opt = _CUTOptions(
             input_nc, output_nc, ngf, netG, image_side_length, nce_layers
@@ -75,13 +78,15 @@ class InferencePipeline:
         self.device = device
         normalize_mean = (0.5,) * input_nc
         normalize_std = (0.5,) * input_nc
-        self._input_transforms = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.Resize((image_side_length, image_side_length)),
-                torchvision.transforms.Normalize(normalize_mean, normalize_std),
-            ]
-        )
+
+        if preprocess_opt is None:
+            preprocess_opt = {
+                "preprocess" : "resize_and_crop",
+                "load_size" : image_side_length,
+                "crop_size" : image_side_length,
+            }
+        self._input_transforms=get_transform(preprocess_opt)
+
         self._denormalize_transform = torchvision.transforms.Normalize(
             tuple(-m / s for m, s in zip(normalize_mean, normalize_std)),
             tuple(1 / s for s in normalize_std),
@@ -305,5 +310,6 @@ def get_inference_pipeline(
         image_side_length=image_side_length,
         nce_layers=nce_layers,
         device=device,
+        preprocess_opt=params.get("preprocess_opt", None),
     )
     return inference_pipeline
