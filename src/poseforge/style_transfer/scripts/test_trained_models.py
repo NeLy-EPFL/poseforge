@@ -82,6 +82,9 @@ def test_checkpoint(
     for i, sim_dir in enumerate(simulation_data_dirs):
         input_path = sim_dir / video_filename
         output_path = output_dir / f"epoch{epoch:03d}_examplesim{i:02d}.mp4"
+        if output_path.exists():
+            print(f"Output video already exists at {output_path}, skipping inference for this simulation.")
+            continue
         process_simulation(
             inference_pipeline, input_path, output_path, batch_size, progress_bar, save_input_video=save_input_video,
         )

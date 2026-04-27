@@ -22,11 +22,7 @@ def easy_test_checkpoint(checkpoint_path: str, simulation_root: str, save_input_
         simulation_root / "BO_Gal4_fly5_trial005/segment_001/subsegment_000",
         simulation_root / "BO_Gal4_fly3_trial005/segment_001/subsegment_000",
     ]
-
-    # if (output_basedir / run_name).exists():
-    #     print(f"Output directory for run {run_name} already exists at {output_basedir / run_name}, skipping test.")
-    #     return
-
+    
     print("cuda" if torch.cuda.is_available() else "cpu")
 
     test_checkpoint(
@@ -83,7 +79,7 @@ def parse_video_filename_from_checkpoint_path(checkpoint_path: Path) -> str:
         )
 
     
-def test_all_checkpoints_in_directory(checkpoints_dir: str, simulation_root: str):
+def test_all_checkpoints_in_directory(checkpoints_dir: str, simulation_root: str, checkpoints_per_run: int = 4):
     checkpoints_dir = Path(checkpoints_dir)
     checkpoint_dirs = checkpoints_dir.glob("*")
     checkpoint_paths = []
@@ -92,7 +88,7 @@ def test_all_checkpoints_in_directory(checkpoints_dir: str, simulation_root: str
         if len(ch_d_paths) == 0:
             print(f"No checkpoint files found in directory {ch_d}, skipping.")
             continue
-        selected_paths = ch_d_paths[-4:] if len(ch_d_paths) >= 4 else ch_d_paths
+        selected_paths = ch_d_paths[-checkpoints_per_run:] if len(ch_d_paths) >= checkpoints_per_run else ch_d_paths
         for i in range(len(selected_paths)):
             if i == 0:
                 checkpoint_paths.append((selected_paths[i], True))
