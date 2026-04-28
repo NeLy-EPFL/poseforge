@@ -84,6 +84,8 @@ class InferencePipeline:
             input_nc, output_nc, ngf, netG, image_side_length, nce_layers
         )
         self.opt = OptionsWrapper(_opt)
+        if device == "cpu":
+            self.opt.gpu_ids = []
         self.model = CUTModel(self.opt)
         self.input_nc = input_nc
         self.image_side_length = image_side_length

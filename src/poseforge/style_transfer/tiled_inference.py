@@ -11,6 +11,65 @@ from poseforge.style_transfer.cut_inference import InferencePipeline
 from poseforge.util.sys import clear_memory_cache
 
 
+def _normalize_weight_type(weight_type: str) -> str:
+    normalized_weight_type = weight_type.strip().lower()
+    if normalized_weight_type == "guassian":
+        normalized_weight_type = "gaussian"
+
+    if normalized_weight_type not in {"uniform", "cosine", "gaussian", "pyramid"}:
+        raise ValueError(
+            "weight_type must be one of 'uniform', 'cosine', 'gaussian', or 'pyramid', "
+            f"got {weight_type!r}"
+        )
+
+    return normalized_weight_type
+
+
+def _make_tile_weight_map(patch_h: int, patch_w: int, weight_type: str) -> np.ndarray:
+    """Create a per-patch blending weight map with positive support everywhere."""
+    if patch_h <= 0:
+        raise ValueError(f"patch_h must be positive, got {patch_h}")
+    if patch_w <= 0:
+        raise ValueError(f"patch_w must be positive, got {patch_w}")
+
+    weight_type = _normalize_weight_type(weight_type)
+
+    if weight_type == "uniform":
+        weight_map = np.ones((patch_h, patch_w), dtype=np.float32)
+    else:
+        if patch_h == 1:
+            y_coords = np.zeros(1, dtype=np.float32)
+        else:
+            y_coords = np.linspace(0.0, 1.0, patch_h, dtype=np.float32)
+
+        if patch_w == 1:
+            x_coords = np.zeros(1, dtype=np.float32)
+        else:
+            x_coords = np.linspace(0.0, 1.0, patch_w, dtype=np.float32)
+
+        if weight_type == "cosine":
+            y_weights = 0.5 - 0.5 * np.cos(2.0 * np.pi * y_coords)
+            x_weights = 0.5 - 0.5 * np.cos(2.0 * np.pi * x_coords)
+            weight_map = np.outer(y_weights, x_weights)
+        elif weight_type == "gaussian":
+            y_centered = np.linspace(-1.0, 1.0, patch_h, dtype=np.float32)
+            x_centered = np.linspace(-1.0, 1.0, patch_w, dtype=np.float32)
+            sigma = 0.35
+            y_weights = np.exp(-0.5 * (y_centered / sigma) ** 2)
+            x_weights = np.exp(-0.5 * (x_centered / sigma) ** 2)
+            weight_map = np.outer(y_weights, x_weights)
+        elif weight_type == "pyramid":
+            y_weights = 1.0 - np.abs(2.0 * y_coords - 1.0)
+            x_weights = 1.0 - np.abs(2.0 * x_coords - 1.0)
+            weight_map = np.outer(y_weights, x_weights)
+        else:
+            raise AssertionError(f"Unhandled weight_type: {weight_type}")
+
+    weight_map = np.clip(weight_map, 1e-6, None)
+    weight_map /= float(weight_map.max())
+    return weight_map.astype(np.float32)[..., None]
+
+
 def _compute_even_tile_starts(full_size: int, tile_size: int) -> list[int]:
     """Compute tile start indices with minimal tile count and even spacing.
 
@@ -60,6 +119,7 @@ def stylize_frame_tiled(
     inference_pipeline: InferencePipeline,
     frame: np.ndarray,
     patch_batch_size: int,
+    weight_type: str = "uniform",
 ) -> np.ndarray:
     """Run style transfer on a full frame by tiled patch inference.
 
@@ -73,6 +133,7 @@ def stylize_frame_tiled(
 
     height, width, _ = frame.shape
     tile_size = inference_pipeline.image_side_length
+    weight_type = _normalize_weight_type(weight_type)
     specs = _tile_specs(height, width, tile_size)
 
     # Build PIL patch list once
@@ -95,12 +156,15 @@ def stylize_frame_tiled(
 
         for j, (y, x, patch_h, patch_w) in enumerate(batch_specs):
             out_patch = batch_out[j].astype(np.float32)
-            out_sum[y : y + patch_h, x : x + patch_w] += out_patch[:patch_h, :patch_w]
-            out_count[y : y + patch_h, x : x + patch_w] += 1.0
+            weight_map = _make_tile_weight_map(patch_h, patch_w, weight_type)
+            out_sum[y : y + patch_h, x : x + patch_w] += out_patch[:patch_h, :patch_w] * weight_map
+            out_count[y : y + patch_h, x : x + patch_w] += weight_map
 
     assert out_sum is not None
-    out_count = np.maximum(out_count, 1.0)
-    output = (out_sum / out_count).clip(0, 255).astype(np.uint8)
+    output = np.zeros_like(out_sum, dtype=np.float32)
+    valid_locations = out_count > 0
+    np.divide(out_sum, out_count, out=output, where=valid_locations)
+    output = output.clip(0, 255).astype(np.uint8)
     return output
 
 
@@ -108,6 +172,7 @@ def process_simulation_tiled(
     inference_pipeline: InferencePipeline,
     input_video_path: Path,
     output_video_path: Path,
+    weight_type: str,
     patch_batch_size: int | None = None,
     progress_bar: bool = True,
     clear_memory_cache_after: bool = True,
@@ -133,6 +198,7 @@ def process_simulation_tiled(
             inference_pipeline,
             input_frames[i],
             patch_batch_size=patch_batch_size,
+            weight_type=weight_type,
         )
         output_frames.append(frame_out)
 
