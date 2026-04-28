@@ -71,6 +71,7 @@ def run_tiled_inference_for_checkpoint(
     output_basedir: str | None = None,
     video_filename: str | None = None,
     patch_batch_size: int | None = None,
+    weight_type: str = "uniform",
     device: str = "cuda",
     progress_bar: bool = True,
     checkpoint_folder_keyword: str = "patch",
@@ -89,7 +90,7 @@ def run_tiled_inference_for_checkpoint(
 
     if output_basedir is None:
         base_root = checkpoint_path if checkpoint_path.is_dir() else checkpoint_path.parent.parent
-        output_basedir = str((base_root / "tiled_inference").resolve())
+        output_basedir = str((base_root / f"tiled_inference_w{weight_type}").resolve())
     output_basedir = Path(output_basedir)
 
     if checkpoint_path.is_dir():
@@ -149,6 +150,7 @@ def run_tiled_inference_for_checkpoint(
                 input_video_path=input_video_path,
                 output_video_path=output_video_path,
                 patch_batch_size=patch_batch_size,
+                weight_type=weight_type,
                 progress_bar=progress_bar,
             )
 
