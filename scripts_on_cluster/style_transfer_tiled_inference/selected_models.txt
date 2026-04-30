@@ -1,0 +1,27 @@
+# Flybody
+20260425_082514_lamG01_bs4_ngf48_flybody_gray:
+334
+788
+20260425_082346_lamG1_bs4_ngf32_flybody_gray
+609
+991
+20260425_082309_lamG02_bs4_ngf16_flybody_gray
+961
+831
+20260425_082136_lamG01_bs4_ngf322_flybody_gray
+665
+750
+
+# NMF
+20260425_082449_lamG01_bs4_ngf48_gray:
+368
+20260425_082410_lamG1_bs4_ngf32_gray:
+706
+798
+986
+20260425_082246_lamG02_bs4_ngf16_gray:
+786
+816
+20260425_082208_lamG01_bs4_ngf32_gray:
+976
+740

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from poseforge.style_transfer import get_inference_pipeline, parse_hyperparameters_from_checkpoint_path
@@ -46,13 +47,25 @@ def parse_video_filename_from_checkpoint_path(checkpoint_path: Path) -> str:
     raise ValueError(f"Could not parse video filename from dataroot: {dataroot}")
 
 
-def _find_checkpoint_paths(checkpoint_root: Path, keyword: str = "patch") -> list[Path]:
+def _find_checkpoint_paths(checkpoint_root: Path, keyword: str = "patch", num_last_checkpoints: int | None = None) -> list[Path]:
     """Find all generator checkpoints under a root, keeping only patch runs."""
     keyword = keyword.lower()
     checkpoint_paths = []
+    parent_dirs = []
     for path in checkpoint_root.rglob("[0-9]*_net_G.pth"):
         if any(keyword in part.lower() for part in path.parts):
-            checkpoint_paths.append(path)
+            # parse checkpoint paths for every checkpoint folder
+            parent_dir = path.parent
+            if parent_dir not in parent_dirs:
+                parent_dirs.append(parent_dir)
+                checkpoint_paths.append([path])
+            else:
+                parent_dir_index = parent_dirs.index(parent_dir)
+                checkpoint_paths[parent_dir_index].append(path)
+    if num_last_checkpoints is not None:
+        checkpoint_paths = [sorted(paths, key=lambda p: int(p.stem.split("_")[0]))[-num_last_checkpoints:] for paths in checkpoint_paths]
+    checkpoint_paths = [path for sublist in checkpoint_paths for path in sublist]
+
     return sorted(checkpoint_paths, key=lambda path: (str(path.parent), int(path.stem.split("_")[0])))
 
 
@@ -72,17 +85,25 @@ def run_tiled_inference_for_checkpoint(
     video_filename: str | None = None,
     patch_batch_size: int | None = None,
     weight_type: str = "uniform",
+    debug_mode: bool = False,
+    randomize_seams: bool = True,
+    seed: int | None = 42,
+    num_last_checkpoints: int | None = None,
     device: str = "cuda",
     progress_bar: bool = True,
     checkpoint_folder_keyword: str = "patch",
 ) -> None:
-    """Run tiled style-transfer inference for one checkpoint.
+    """Run tiled style-transfer inference for one or more checkpoints.
 
     The full frame is split into minimally many, evenly distributed tiles of
-    model input size. In overlapping regions, pixel values are merged with a
-    simple arithmetic mean.
+    model input size. In overlapping regions, pixel values are merged with
+    weighted averaging. If randomize_seams is True, seam locations vary
+    per frame using random phases (deterministic if seed is provided).
+    
+    If num_last_checkpoints is specified, only the last N checkpoints from
+    each folder will be processed; otherwise all matching checkpoints are used.
     """
-    checkpoint_path = Path(checkpoint_path).expanduser().resolve() 
+    checkpoint_path = Path(checkpoint_path).expanduser().resolve()
 
     if device == "cuda" and not torch.cuda.is_available():
         print("CUDA requested but not available, falling back to CPU.")
@@ -90,11 +111,16 @@ def run_tiled_inference_for_checkpoint(
 
     if output_basedir is None:
         base_root = checkpoint_path if checkpoint_path.is_dir() else checkpoint_path.parent.parent
-        output_basedir = str((base_root / f"tiled_inference_w{weight_type}").resolve())
+        suffix = f"tiled_inference_w{weight_type}"
+        if debug_mode:
+            suffix += "_debug"
+        if randomize_seams:
+            suffix += "_random_seams"
+        output_basedir = str((base_root / suffix).resolve())
     output_basedir = Path(output_basedir)
 
     if checkpoint_path.is_dir():
-        checkpoint_paths = _find_checkpoint_paths(checkpoint_path, keyword=checkpoint_folder_keyword)
+        checkpoint_paths = _find_checkpoint_paths(checkpoint_path, keyword=checkpoint_folder_keyword, num_last_checkpoints=num_last_checkpoints)
         checkpoint_root = checkpoint_path
     else:
         checkpoint_paths = [checkpoint_path]
@@ -107,6 +133,12 @@ def run_tiled_inference_for_checkpoint(
         return
 
     print(f"Found {len(checkpoint_paths)} checkpoint(s) to process.")
+    
+    # Create root RNG for deterministic but varying seams
+    if randomize_seams and seed is not None:
+        root_rng = np.random.RandomState(seed)
+    else:
+        root_rng = None
     
     simulation_root = Path(simulation_root)
 
@@ -142,15 +174,26 @@ def run_tiled_inference_for_checkpoint(
                 raise FileNotFoundError(f"Input video does not exist: {input_video_path}")
 
             epoch_tag = f"epoch{epoch:03d}" if epoch >= 0 else "epochXXX"
-            output_video_path = output_dir / f"{epoch_tag}_examplesim{i:02d}_tiled.mp4"
+            output_name = f"{epoch_tag}_examplesim{i:02d}_tiled"
+            if debug_mode:
+                output_name += "_debug"
+            output_video_path = output_dir / f"{output_name}.mp4"
             print(f"Processing {input_video_path} -> {output_video_path}")
+
+            # Derive a unique seed for this video from the root RNG
+            video_seed = None
+            if root_rng is not None:
+                video_seed = root_rng.randint(0, 2**31 - 1)
 
             process_simulation_tiled(
                 inference_pipeline=inference_pipeline,
                 input_video_path=input_video_path,
                 output_video_path=output_video_path,
+                randomize_seams=randomize_seams,
+                seed=video_seed,
                 patch_batch_size=patch_batch_size,
                 weight_type=weight_type,
+                debug_mode=debug_mode,
                 progress_bar=progress_bar,
             )
 

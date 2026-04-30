@@ -1,0 +1,45 @@
+#!/bin/bash -l
+
+#SBATCH --job-name cut_<<<NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 8
+#SBATCH --mem 32GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=l40s
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output <<<STDOUT_STDERR_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# Define paths
+project_root="/home/$USER/poseforge"
+inference_script_path="scripts_on_cluster/style_transfer_tiled_inference/run_tiled_inference_all_simulations.py"
+simulations_basedir="<<<SIMULATIONS_BASEDIR>>>"
+output_basedir="<<<OUTPUT_BASEDIR>>>"
+input_video_filename="<<<INPUT_VIDEO_FILENAME>>>"
+
+# Setup
+cd $project_root
+
+# Tiled Inference
+echo "Start running tiled inference at $(date)"
+
+python -u $inference_script_path \
+    --checkpoint-path <<<CHECKPOINT_PATH>>> \
+    --simulations-basedir $simulations_basedir \
+    --output-basedir $output_basedir \
+    --input-video-filename $input_video_filename \
+    --weight-type cosine \
+    --randomize-seams \
+    --device "cuda" \
+    --memory-cleanup-interval 10 \
+    --verbose
+
+echo "Tiled inference ends at $(date)"
