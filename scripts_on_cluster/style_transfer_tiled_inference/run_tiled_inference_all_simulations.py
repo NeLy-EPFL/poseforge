@@ -176,7 +176,7 @@ def run_tiled_inference_all_simulations(
         # Periodic memory cleanup every once in a while
         if (i + 1) % memory_cleanup_interval == 0:
             logging.info(f"Processed {i + 1} simulations. Running memory cleanup...")
-            clear_memory_cache(logging_level=logging.INFO)
+            clear_memory_cache()
 
     print(f"Finished processing {len(all_simulation_paths)} simulations.")
 
