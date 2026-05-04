@@ -4,7 +4,9 @@ import h5py
 import logging
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from pvio.io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video, _default_ffmpeg_params_for_video_writing
+level_idx = _default_ffmpeg_params_for_video_writing.index("-level")
+_default_ffmpeg_params_for_video_writing[level_idx + 1] = "5.0"  # allow higher resolution videos for 900x900
 
 from poseforge.util.sys import get_hardware_availability
 
@@ -140,7 +142,7 @@ class AtomicBatchDataset(Dataset):
                 selection = (selection * 255).astype(np.uint8)
                 image[:n_rows, start_col:end_col, :] = selection
             output_frames.append(image.squeeze())
-        write_frames_to_video(output_path, output_frames, fps=fps)
+        write_frames_to_video(output_path, output_frames, fps=fps, ffmpeg_params=_default_ffmpeg_params_for_video_writing)
 
     @staticmethod
     def load_atomic_batch_frames(
