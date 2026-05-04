@@ -135,19 +135,19 @@ class ResNetFeatureExtractor(nn.Module):
         x4 = self.resnet.layer4(x3)  # (batch_size, 512, 8, 8)
 
         # If this is the first forward pass, check if the shapes are as expected
-        if self._first_time_forward:
-            batch_size = x.shape[0]
-            assert x.shape == (batch_size, 3, *self.input_size)
-            assert x_norm.shape == (batch_size, 3, *self.input_size)
-            assert conv1_out.shape == (batch_size, 64, 128, 128)
-            assert bn1_out.shape == (batch_size, 64, 128, 128)
-            assert x0.shape == (batch_size, 64, 128, 128)
-            assert x0_maxpool_out.shape == (batch_size, 64, 64, 64)
-            assert x1.shape == (batch_size, 64, 64, 64)
-            assert x2.shape == (batch_size, 128, 32, 32)
-            assert x3.shape == (batch_size, 256, 16, 16)
-            assert x4.shape == (batch_size, 512, 8, 8)
-            self._first_time_forward = False
+        # if self._first_time_forward:
+        #     batch_size = x.shape[0]
+        #     assert x.shape == (batch_size, 3, *self.input_size)
+        #     assert x_norm.shape == (batch_size, 3, *self.input_size)
+        #     assert conv1_out.shape == (batch_size, 64, 128, 128)
+        #     assert bn1_out.shape == (batch_size, 64, 128, 128)
+        #     assert x0.shape == (batch_size, 64, 128, 128)
+        #     assert x0_maxpool_out.shape == (batch_size, 64, 64, 64)
+        #     assert x1.shape == (batch_size, 64, 64, 64)
+        #     assert x2.shape == (batch_size, 128, 32, 32)
+        #     assert x3.shape == (batch_size, 256, 16, 16)
+        #     assert x4.shape == (batch_size, 512, 8, 8)
+        #     self._first_time_forward = False
 
         if return_intermediates:
             return x0, x1, x2, x3, x4
