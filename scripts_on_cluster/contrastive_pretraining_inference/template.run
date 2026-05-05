@@ -48,7 +48,7 @@ python -u src/poseforge/pose/contrast/scripts/run_feature_extractor_inference.py
     --pretraining_model_dir \
         "$contrastive_pretraining_root/$contrastive_pretraining_trial/checkpoints" \
     --synthetic_videos_basedir "$style_transfer_root" \
-    --synthetic--subdirs \
+    --synthetic-videos-subdirs \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial001" \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial002" \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial003" \
