@@ -32,8 +32,8 @@ cd $project_root
 echo "Start running inference at $(date)"
 
 python -u src/poseforge/pose/contrast/scripts/run_feature_extractor_inference.py \
-    --sampling.batch-size 4096 \
-    --model.training-stages \
+    --batch-size 512 \
+    --training-stages \
         "epoch000_step000000" \
         "epoch000_step003000" \
         "epoch001_step003000" \
@@ -45,19 +45,16 @@ python -u src/poseforge/pose/contrast/scripts/run_feature_extractor_inference.py
         "epoch007_step003000" \
         "epoch008_step003000" \
         "epoch009_step003000" \
-    --model.checkpoint-dir \
+    --pretraining_model_dir \
         "$contrastive_pretraining_root/$contrastive_pretraining_trial/checkpoints" \
-    --model.projection_head_hidden_dim 512 \
-    --model.projection_head_output_dim 256 \
-    --data.synthetic-videos-basedir \
-        "$style_transfer_root" \
-    --data.synthetic-videos-subdirs \
+    --synthetic_videos_basedir "$style_transfer_root" \
+    --synthetic--subdirs \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial001" \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial002" \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial003" \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial004" \
         "$style_transfer_root/BO_Gal4_fly<<<FLY>>>_trial005" \
-    --data.style-transfer-models \
+    --style-transfer-models \
         "20260425_082136_lamG01_bs4_ngf322_flybody_gray_epoch665" \
         "20260425_082136_lamG01_bs4_ngf322_flybody_gray_epoch750" \
         "20260425_082309_lamG02_bs4_ngf16_flybody_gray_epoch831" \
@@ -66,9 +63,5 @@ python -u src/poseforge/pose/contrast/scripts/run_feature_extractor_inference.py
         "20260425_082346_lamG1_bs4_ngf32_flybody_gray_epoch991" \
         "20260425_082514_lamG01_bs4_ngf48_flybody_gray_epoch334" \
         "20260425_082514_lamG01_bs4_ngf48_flybody_gray_epoch788" \
-    --data.image-size 900 900 \
-    --data.num-channels 3 \
-    --output.inference-output-dir \
-        "$contrastive_pretraining_root/$contrastive_pretraining_trial/inference"
 
 echo "Inference ends at $(date)"
