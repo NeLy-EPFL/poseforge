@@ -20,7 +20,7 @@ conda activate poseforge
 cd $HOME/poseforge
 echo "Training starting at $(date)"
 
-trial_name="trial_20260504_tiledlowlr_b32"
+trial_name="trial_20260504_tiledlowlr"
 atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
@@ -53,8 +53,8 @@ python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
         "${atomic_batch_dir}BO_Gal4_fly1_trial002" \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 4 \
-    --training-data-config.train-batch-size 96 \
-    --training-data-config.val-batch-size 96 \
+    --training-data-config.train-batch-size 64 \
+    --training-data-config.val-batch-size 32 \
     --training-data-config.image-size 900 900 \
     --training-data-config.n-workers 4 \
     --optimizer-config.adam-lr 3e-5 \
