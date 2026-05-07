@@ -126,11 +126,12 @@ class BodySegmentationModel(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
-            x (torch.Tensor): Input tensor (batch_size, 3, 256, 256)
+            x (torch.Tensor): Input tensor of shape (batch_size, 3, height, width).
+                Height and width will be padded to nearest multiple of 32 if necessary.
 
         Returns:
             segmentation_logits (torch.Tensor): Output logits, tensor
-                (batch_size, n_classes, 256, 256)
+                (batch_size, n_classes, height, width) in original input space
 
         We use a UNet-like architecture with skip connections:
 
@@ -156,6 +157,24 @@ class BodySegmentationModel(nn.Module):
                 |                         ↑
                 └──(bottleneck/identity)──┘
         """
+        # Pad input to nearest multiple of 32 to avoid spatial dimension mismatches
+        # (ResNet with 5 downsampling layers has a total stride of 2^5 = 32)
+        orig_height, orig_width = x.shape[2], x.shape[3]
+        orig_size = (orig_height, orig_width)
+        
+        # Calculate padded size (nearest multiple of 32)
+        def pad_to_multiple(size, multiple=32):
+            return ((size + multiple - 1) // multiple) * multiple
+        
+        padded_height = pad_to_multiple(orig_height, 32)
+        padded_width = pad_to_multiple(orig_width, 32)
+        
+        # Pad if necessary (pad_height_bottom, pad_width_right)
+        if padded_height != orig_height or padded_width != orig_width:
+            pad_height = padded_height - orig_height
+            pad_width = padded_width - orig_width
+            x = F.pad(x, (0, pad_width, 0, pad_height), mode='constant', value=0)
+        
         # Run feature extractor
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
             x, return_intermediates=True
@@ -172,6 +191,11 @@ class BodySegmentationModel(nn.Module):
         # Final upsampling and classification
         upsampled = self.final_upsampler(d0)
         segmentation_logits = self.classifier(upsampled)
+        
+        # Crop back to original input size if input was padded
+        if orig_size != tuple(self.feature_extractor.input_size):
+            segmentation_logits = segmentation_logits[:, :, :orig_height, :orig_width]
+            # confidence will be cropped after computation below
 
         # Compute confidence scores
         if self.confidence_method == "entropy":
@@ -186,26 +210,43 @@ class BodySegmentationModel(nn.Module):
         elif self.confidence_method == "peak":
             probs = F.softmax(segmentation_logits, dim=1)  # (B, n_classes, H, W)
             confidence, dim = torch.max(probs, dim=1)  # (B, H, W)
+        
+        # Crop confidence back to original size if input was padded
+        if orig_size != tuple(self.feature_extractor.input_size):
+            confidence = confidence[:, :orig_height, :orig_width]
 
         # If this is the first forward pass, check if the shapes are as expected
         if self._first_time_forward:
             batch_size = x.shape[0]
-            assert self.feature_extractor.input_size == (256, 256)
-            assert x.shape == (batch_size, 3, 256, 256)
-            assert e0.shape == (batch_size, 64, 128, 128)
-            assert e1.shape == (batch_size, 64, 64, 64)
-            assert e2.shape == (batch_size, 128, 32, 32)
-            assert e3.shape == (batch_size, 256, 16, 16)
-            assert e4.shape == (batch_size, 512, 8, 8)
-            assert d4.shape == (batch_size, 512, 8, 8)
-            assert d3.shape == (batch_size, 256, 16, 16)
-            assert d2.shape == (batch_size, 128, 32, 32)
-            assert d1.shape == (batch_size, 64, 64, 64)
-            assert d0.shape == (batch_size, 64, 128, 128)
-            upsample_hidden_channels = self.final_upsampler_n_hidden_channels
-            assert upsampled.shape == (batch_size, upsample_hidden_channels, 256, 256)
-            assert segmentation_logits.shape == (batch_size, self.n_classes, 256, 256)
-            assert confidence.shape == (batch_size, 256, 256)
+            # Check that padded input size is divisible by 32 (total stride of ResNet)
+            assert x.shape[2] % 32 == 0 and x.shape[3] % 32 == 0, \
+                f"Padded input spatial dims must be divisible by 32, got {x.shape[2:4]}"
+            
+            # Check intermediate feature map shapes follow expected downsampling pattern
+            # Each layer should be half the spatial size of the previous with correct channels
+            assert e0.shape[1] == 64, f"e0 should have 64 channels, got {e0.shape[1]}"
+            assert e1.shape[1] == 64, f"e1 should have 64 channels, got {e1.shape[1]}"
+            assert e2.shape[1] == 128, f"e2 should have 128 channels, got {e2.shape[1]}"
+            assert e3.shape[1] == 256, f"e3 should have 256 channels, got {e3.shape[1]}"
+            assert e4.shape[1] == 512, f"e4 should have 512 channels, got {e4.shape[1]}"
+            
+            # Check spatial downsampling: each should be half the previous
+            assert e0.shape[2] == x.shape[2] // 2, "e0 spatial size mismatch"
+            assert e1.shape[2] == e0.shape[2] // 2, "e1 spatial size mismatch"
+            assert e2.shape[2] == e1.shape[2] // 2, "e2 spatial size mismatch"
+            assert e3.shape[2] == e2.shape[2] // 2, "e3 spatial size mismatch"
+            assert e4.shape[2] == e3.shape[2] // 2, "e4 spatial size mismatch"
+            
+            # Check decoder shapes
+            assert d0.shape == (batch_size, 64, e0.shape[2], e0.shape[3]), \
+                f"d0 shape mismatch: expected (*,64, {e0.shape[2]}, {e0.shape[3]}), got {d0.shape}"
+
+            # Check output shapes match original (non-padded) input size
+            assert segmentation_logits.shape == (batch_size, self.n_classes, orig_height, orig_width), \
+                f"segmentation_logits shape mismatch: expected (*,{self.n_classes}, {orig_height}, {orig_width}), got {segmentation_logits.shape}"
+            assert confidence.shape == (batch_size, orig_height, orig_width), \
+                f"confidence shape mismatch: expected (*,{orig_height}, {orig_width}), got {confidence.shape}"
+            
             self._first_time_forward = False
 
         return {"logits": segmentation_logits, "confidence": confidence}

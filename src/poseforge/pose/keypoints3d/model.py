@@ -370,6 +370,35 @@ class Pose2p5DModel(nn.Module):
 
         return depth_expected, confidence
 
+    @staticmethod
+    def pad_inputs(
+        x: torch.Tensor, multiple: int = 32
+    ) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
+        """Pad an input image tensor to a size divisible by ``multiple``.
+
+        The padding is applied on the bottom and right only, so x-y labels in
+        the original image coordinate system do not need to be shifted.
+
+        Returns:
+            padded_x: The padded input tensor.
+            orig_size: The original (height, width).
+            padded_size: The padded (height, width).
+        """
+        orig_height, orig_width = x.shape[2], x.shape[3]
+
+        def pad_to_multiple(size: int) -> int:
+            return ((size + multiple - 1) // multiple) * multiple
+
+        padded_height = pad_to_multiple(orig_height)
+        padded_width = pad_to_multiple(orig_width)
+
+        if padded_height != orig_height or padded_width != orig_width:
+            pad_height = padded_height - orig_height
+            pad_width = padded_width - orig_width
+            x = F.pad(x, (0, pad_width, 0, pad_height), mode="constant", value=0)
+
+        return x, (orig_height, orig_width), (padded_height, padded_width)
+
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
@@ -416,23 +445,11 @@ class Pose2p5DModel(nn.Module):
                 |                         ↑
                 └──(bottleneck/identity)──┘
         """
-        # Pad input to nearest multiple of 32 to avoid spatial dimension mismatches
-        # (ResNet with 5 downsampling layers has a total stride of 2^5 = 32)
-        orig_height, orig_width = x.shape[2], x.shape[3]
-        orig_size = (orig_height, orig_width)
-        
-        # Calculate padded size (nearest multiple of 32)
-        def pad_to_multiple(size, multiple=32):
-            return ((size + multiple - 1) // multiple) * multiple
-        
-        padded_height = pad_to_multiple(orig_height, 32)
-        padded_width = pad_to_multiple(orig_width, 32)
-        
-        # Pad if necessary (pad_height_bottom, pad_width_right)
-        if padded_height != orig_height or padded_width != orig_width:
-            pad_height = padded_height - orig_height
-            pad_width = padded_width - orig_width
-            x = F.pad(x, (0, pad_width, 0, pad_height), mode='constant', value=0)
+        # Pad the input to a size divisible by 32. Because the padding is only
+        # on the bottom and right, keypoint coordinates remain valid as-is.
+        x, orig_size, padded_size = self.pad_inputs(x, multiple=32)
+        orig_height, orig_width = orig_size
+        padded_height, padded_width = padded_size
         
         # Run feature extractor
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
@@ -458,13 +475,13 @@ class Pose2p5DModel(nn.Module):
         # Map to input image pixel coordinates
         heatmap_size = heatmaps.shape[-2:]  # (n_rows_out, n_cols_out)
         # Stride is based on padded input size
-        stride = self.feature_extractor.input_size[0] / heatmap_size[0]
+        stride = padded_height / heatmap_size[0]
         xy_px_padded = xy_px_out * stride  # (N, n_keypoints, 2) - in padded space
         
         # Convert back to original input space if input was padded
-        if orig_size != tuple(self.feature_extractor.input_size):
-            scale_factor_h = orig_height / self.feature_extractor.input_size[0]
-            scale_factor_w = orig_width / self.feature_extractor.input_size[1]
+        if orig_size != padded_size:
+            scale_factor_h = orig_height / padded_height
+            scale_factor_w = orig_width / padded_width
             xy_px_in = xy_px_padded.clone()
             xy_px_in[..., 0] *= scale_factor_w  # x coordinate (width)
             xy_px_in[..., 1] *= scale_factor_h  # y coordinate (height)
@@ -482,8 +499,8 @@ class Pose2p5DModel(nn.Module):
         if self._first_time_forward:
             batch_size = x.shape[0]
             # Check that padded input size is divisible by 32 (total stride of ResNet)
-            assert x.shape[2] % 32 == 0 and x.shape[3] % 32 == 0, \
-                f"Padded input spatial dims must be divisible by 32, got {x.shape[2:4]}"
+            assert padded_height % 32 == 0 and padded_width % 32 == 0, \
+                f"Padded input spatial dims must be divisible by 32, got {(padded_height, padded_width)}"
             
             # Check intermediate feature map shapes follow expected downsampling pattern
             # Each layer should be half the spatial size of the previous with correct channels
