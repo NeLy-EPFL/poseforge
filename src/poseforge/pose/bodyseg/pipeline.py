@@ -138,25 +138,6 @@ class BodySegmentationPipeline:
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames)
 
-                    # Safeguard: inspect segmentation target values before loss/kernel
-                    n_classes = int(pred_dict["logits"].shape[1])
-                    try:
-                        target_cpu = target_indices.detach().cpu()
-                        uniques = torch.unique(target_cpu)
-                        minv = int(uniques.min().item())
-                        maxv = int(uniques.max().item())
-                    except Exception:
-                        logging.exception("Failed to compute unique label values for target_indices")
-                        raise
-
-                    if minv < 0 or maxv >= n_classes:
-                        logging.error(
-                            f"Out-of-range segmentation labels detected: unique={uniques.tolist()}, min={minv}, max={maxv}, n_classes={n_classes}"
-                        )
-                        raise ValueError(
-                            "Out-of-range segmentation labels found; aborting. See logs for unique values."
-                        )
-
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                     # Check if float16 is used
@@ -288,27 +269,7 @@ class BodySegmentationPipeline:
 
                 # Run model
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred_dict = self.model(frames)
-
-                    # Safeguard for validation: inspect segmentation target values
-                    n_classes = int(pred_dict["logits"].shape[1])
-                    try:
-                        target_cpu = target_indices.detach().cpu()
-                        uniques = torch.unique(target_cpu)
-                        minv = int(uniques.min().item())
-                        maxv = int(uniques.max().item())
-                    except Exception:
-                        logging.exception("Failed to compute unique label values for target_indices (validation)")
-                        raise
-
-                    if minv < 0 or maxv >= n_classes:
-                        logging.error(
-                            f"Out-of-range segmentation labels detected (validation): unique={uniques.tolist()}, min={minv}, max={maxv}, n_classes={n_classes}"
-                        )
-                        raise ValueError(
-                            "Out-of-range segmentation labels found during validation; aborting. See logs for unique values."
-                        )
-
+                    pred_dict = self.model(frames):wq
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                 # Accumulate losses
