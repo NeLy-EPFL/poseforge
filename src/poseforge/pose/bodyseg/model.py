@@ -263,13 +263,16 @@ class BodySegmentationModel(nn.Module):
 
 
 class DiceLoss(nn.Module):
-    def __init__(self, smooth: float = 1.0):
+    def __init__(self, smooth: float = 1.0, ignore_index: int | None = None):
         """
         Args:
             smooth (float): Smoothing factor to avoid division by zero.
+            ignore_index (int | None): Class index to ignore in loss computation.
+                Pixels with this label will be excluded. Defaults to None (no ignore).
         """
         super(DiceLoss, self).__init__()
         self.smooth = smooth
+        self.ignore_index = ignore_index
 
     def forward(self, pred_logits, target_indices):
         """
@@ -293,6 +296,12 @@ class DiceLoss(nn.Module):
         targets_1hot = F.one_hot(target_indices, num_classes=n_classes)
         targets_1hot = targets_1hot.permute(0, 3, 1, 2).float()
 
+        # If ignore_index is set, mask out those pixels from both predictions and targets
+        if self.ignore_index is not None:
+            mask = (target_indices == self.ignore_index).unsqueeze(1)  # (B, 1, H, W)
+            probs = probs * (~mask).float()
+            targets_1hot = targets_1hot * (~mask).float()
+
         # Compute Dice loss
         spatial_dims = (2, 3)  # height and width
         intersection = (probs * targets_1hot).sum(dim=spatial_dims)
@@ -308,19 +317,24 @@ class CombinedDiceCELoss(nn.Module):
         weight_dice: float = 0.5,
         weight_ce: float = 0.5,
         ce_class_weights: torch.Tensor = None,
+        ignore_index: int | None = 255,
     ):
         """
         Args:
             weight_dice (float): Weight for Dice loss component.
             weight_ce (float): Weight for Cross-Entropy loss component.
+            ce_class_weights (torch.Tensor | None): Optional class weights for CE loss.
+            ignore_index (int | None): Class index to ignore in loss computation.
+                Defaults to 255 (common sentinel for background/ignore pixels).
         """
         super(CombinedDiceCELoss, self).__init__()
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
         self.ce_class_weights = ce_class_weights
+        self.ignore_index = ignore_index
 
-        self.dice_loss = DiceLoss()
-        self.ce_loss = nn.CrossEntropyLoss(weight=ce_class_weights)
+        self.dice_loss = DiceLoss(ignore_index=ignore_index)
+        self.ce_loss = nn.CrossEntropyLoss(weight=ce_class_weights, ignore_index=ignore_index)
 
     @classmethod
     def create_from_config(
@@ -332,10 +346,12 @@ class CombinedDiceCELoss(nn.Module):
             logging.info(f"Loaded model loss config from {loss_config}")
 
         # Initialize loss from config
+        # Note: ignore_index is always 255 for handling sentinel background values
         obj = cls(
             weight_dice=loss_config.weight_dice,
             weight_ce=loss_config.weight_ce,
             ce_class_weights=loss_config.ce_class_weights,
+            ignore_index=255,
         )
 
         logging.info("Created CombinedDiceCELoss from loss config")
