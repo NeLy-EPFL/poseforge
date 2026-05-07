@@ -269,7 +269,7 @@ class BodySegmentationPipeline:
 
                 # Run model
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred_dict = self.model(frames):wq
+                    pred_dict = self.model(frames)
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                 # Accumulate losses
