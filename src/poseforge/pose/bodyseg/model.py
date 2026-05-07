@@ -64,6 +64,29 @@ class BodySegmentationModel(nn.Module):
 
         self._first_time_forward = True
 
+    @staticmethod
+    def pad_inputs(
+        x: torch.Tensor, multiple: int = 32
+    ) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
+        """Pad an input image tensor on the bottom and right only.
+
+        Returns the padded tensor, the original size, and the padded size.
+        """
+        orig_height, orig_width = x.shape[2], x.shape[3]
+
+        def pad_to_multiple(size: int) -> int:
+            return ((size + multiple - 1) // multiple) * multiple
+
+        padded_height = pad_to_multiple(orig_height)
+        padded_width = pad_to_multiple(orig_width)
+
+        if padded_height != orig_height or padded_width != orig_width:
+            pad_height = padded_height - orig_height
+            pad_width = padded_width - orig_width
+            x = F.pad(x, (0, pad_width, 0, pad_height), mode="constant", value=0)
+
+        return x, (orig_height, orig_width), (padded_height, padded_width)
+
     @classmethod
     def create_architecture_from_config(
         cls, architecture_config: config.ModelArchitectureConfig | Path | str
@@ -157,23 +180,10 @@ class BodySegmentationModel(nn.Module):
                 |                         ↑
                 └──(bottleneck/identity)──┘
         """
-        # Pad input to nearest multiple of 32 to avoid spatial dimension mismatches
-        # (ResNet with 5 downsampling layers has a total stride of 2^5 = 32)
-        orig_height, orig_width = x.shape[2], x.shape[3]
-        orig_size = (orig_height, orig_width)
-        
-        # Calculate padded size (nearest multiple of 32)
-        def pad_to_multiple(size, multiple=32):
-            return ((size + multiple - 1) // multiple) * multiple
-        
-        padded_height = pad_to_multiple(orig_height, 32)
-        padded_width = pad_to_multiple(orig_width, 32)
-        
-        # Pad if necessary (pad_height_bottom, pad_width_right)
-        if padded_height != orig_height or padded_width != orig_width:
-            pad_height = padded_height - orig_height
-            pad_width = padded_width - orig_width
-            x = F.pad(x, (0, pad_width, 0, pad_height), mode='constant', value=0)
+        # Pad the input only on the bottom/right so the target mask stays aligned.
+        x, orig_size, padded_size = self.pad_inputs(x, multiple=32)
+        orig_height, orig_width = orig_size
+        padded_height, padded_width = padded_size
         
         # Run feature extractor
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
@@ -193,7 +203,7 @@ class BodySegmentationModel(nn.Module):
         segmentation_logits = self.classifier(upsampled)
         
         # Crop back to original input size if input was padded
-        if orig_size != tuple(self.feature_extractor.input_size):
+        if orig_size != padded_size:
             segmentation_logits = segmentation_logits[:, :, :orig_height, :orig_width]
             # confidence will be cropped after computation below
 
@@ -212,15 +222,15 @@ class BodySegmentationModel(nn.Module):
             confidence, dim = torch.max(probs, dim=1)  # (B, H, W)
         
         # Crop confidence back to original size if input was padded
-        if orig_size != tuple(self.feature_extractor.input_size):
+        if orig_size != padded_size:
             confidence = confidence[:, :orig_height, :orig_width]
 
         # If this is the first forward pass, check if the shapes are as expected
         if self._first_time_forward:
             batch_size = x.shape[0]
             # Check that padded input size is divisible by 32 (total stride of ResNet)
-            assert x.shape[2] % 32 == 0 and x.shape[3] % 32 == 0, \
-                f"Padded input spatial dims must be divisible by 32, got {x.shape[2:4]}"
+            assert padded_height % 32 == 0 and padded_width % 32 == 0, \
+                f"Padded input spatial dims must be divisible by 32, got {(padded_height, padded_width)}"
             
             # Check intermediate feature map shapes follow expected downsampling pattern
             # Each layer should be half the spatial size of the previous with correct channels
