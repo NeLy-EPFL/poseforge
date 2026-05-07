@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251125a_lowlr.log
+#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251125a_lowlr.log
 
 echo "Hello from $(hostname)"
 
@@ -21,6 +21,8 @@ cd $HOME/poseforge
 echo "Training starting at $(date)"
 
 trial_name="trial_20251125a_lowlr"
+atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/"
+out_dir="bulk_data/pose_estimation/contrastive_pretraining/$trial_name"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
