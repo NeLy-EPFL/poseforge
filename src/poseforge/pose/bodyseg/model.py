@@ -290,17 +290,30 @@ class DiceLoss(nn.Module):
         # Get class probabilities
         probs = F.softmax(pred_logits, dim=1)  # (batch_size, n_classes, H, W)
 
+        # If ignore_index is set, sanitize target indices so F.one_hot is safe
+        if self.ignore_index is not None:
+            # Create a mask of ignored pixels
+            ignore_mask = (target_indices == self.ignore_index)  # (B, H, W)
+            # Replace ignored indices with a valid class (0) for one-hot encoding
+            safe_targets = target_indices.clone()
+            if ignore_mask.any():
+                safe_targets = safe_targets.clone()
+                safe_targets[ignore_mask] = 0
+        else:
+            ignore_mask = None
+            safe_targets = target_indices
+
         # Get ground truth in one-hot format
         # F.one_hot gives n_classes at the end (batch_size, H, W, n_classes)
         # We need to permute it to (batch_size, n_classes, H, W)
-        targets_1hot = F.one_hot(target_indices, num_classes=n_classes)
+        targets_1hot = F.one_hot(safe_targets, num_classes=n_classes)
         targets_1hot = targets_1hot.permute(0, 3, 1, 2).float()
 
-        # If ignore_index is set, mask out those pixels from both predictions and targets
-        if self.ignore_index is not None:
-            mask = (target_indices == self.ignore_index).unsqueeze(1)  # (B, 1, H, W)
-            probs = probs * (~mask).float()
-            targets_1hot = targets_1hot * (~mask).float()
+        # If ignore_index is set, zero out ignored pixels in both probs and targets
+        if ignore_mask is not None:
+            mask = (~ignore_mask).unsqueeze(1).float()  # (B, 1, H, W) True -> keep
+            probs = probs * mask
+            targets_1hot = targets_1hot * mask
 
         # Compute Dice loss
         spatial_dims = (2, 3)  # height and width
