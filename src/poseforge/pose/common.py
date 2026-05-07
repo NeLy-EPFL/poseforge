@@ -47,7 +47,8 @@ class ResNetFeatureExtractor(nn.Module):
         self.resnet = models.resnet18(weights=backbone_weights)
 
         # Find out the output size of the ResNet feature extractor
-        self.input_size = (256, 256)  # input image size (height, width), fixed
+        # input_size will be detected dynamically on first forward pass
+        self.input_size = None  # will be set during first forward pass
         self.output_channels = 512  # ResNet-18 layer4 output channels
 
         # Load weights for this very nn.Module if provided
@@ -117,6 +118,10 @@ class ResNetFeatureExtractor(nn.Module):
                       This is the same as the single output returned if
                       return_intermediates is False.
         """
+        # Detect and store actual input size on first forward pass
+        if self.input_size is None:
+            self.input_size = (x.shape[2], x.shape[3])  # (height, width)
+        
         x_norm = self._apply_imagenet_normalization(x)
 
         # Remove the final classification head (avgpool + fc)

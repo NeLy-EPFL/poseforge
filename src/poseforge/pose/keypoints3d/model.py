@@ -373,7 +373,8 @@ class Pose2p5DModel(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
-            x (torch.Tensor): Input tensor (batch_size, 3, 256, 256).
+            x (torch.Tensor): Input tensor of shape (batch_size, 3, height, width).
+                Height and width will be padded to nearest multiple of 32 if necessary.
 
         Returns:
             dict with keys:
@@ -415,6 +416,24 @@ class Pose2p5DModel(nn.Module):
                 |                         ↑
                 └──(bottleneck/identity)──┘
         """
+        # Pad input to nearest multiple of 32 to avoid spatial dimension mismatches
+        # (ResNet with 5 downsampling layers has a total stride of 2^5 = 32)
+        orig_height, orig_width = x.shape[2], x.shape[3]
+        orig_size = (orig_height, orig_width)
+        
+        # Calculate padded size (nearest multiple of 32)
+        def pad_to_multiple(size, multiple=32):
+            return ((size + multiple - 1) // multiple) * multiple
+        
+        padded_height = pad_to_multiple(orig_height, 32)
+        padded_width = pad_to_multiple(orig_width, 32)
+        
+        # Pad if necessary (pad_height_bottom, pad_width_right)
+        if padded_height != orig_height or padded_width != orig_width:
+            pad_height = padded_height - orig_height
+            pad_width = padded_width - orig_width
+            x = F.pad(x, (0, pad_width, 0, pad_height), mode='constant', value=0)
+        
         # Run feature extractor
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
             x, return_intermediates=True
@@ -436,12 +455,21 @@ class Pose2p5DModel(nn.Module):
         # xy_conf: shape (N, n_keypoints)
         xy_px_out, xy_conf = self._soft_argmax_2d(heatmaps)
 
-        # Map to input image pixel coordinates (input images are 256x256, but heatmaps
-        # are predicted at 128x128, so there is a stride of 2)
+        # Map to input image pixel coordinates
         heatmap_size = heatmaps.shape[-2:]  # (n_rows_out, n_cols_out)
+        # Stride is based on padded input size
         stride = self.feature_extractor.input_size[0] / heatmap_size[0]
-        assert stride == 2, "Expected input size=256x256, output heatmap size=128x128"
-        xy_px_in = xy_px_out * stride  # (N, n_keypoints, 2)
+        xy_px_padded = xy_px_out * stride  # (N, n_keypoints, 2) - in padded space
+        
+        # Convert back to original input space if input was padded
+        if orig_size != tuple(self.feature_extractor.input_size):
+            scale_factor_h = orig_height / self.feature_extractor.input_size[0]
+            scale_factor_w = orig_width / self.feature_extractor.input_size[1]
+            xy_px_in = xy_px_padded.clone()
+            xy_px_in[..., 0] *= scale_factor_w  # x coordinate (width)
+            xy_px_in[..., 1] *= scale_factor_h  # y coordinate (height)
+        else:
+            xy_px_in = xy_px_padded
 
         # Compute depth distributions
         # Compute logits using depth head
@@ -453,30 +481,47 @@ class Pose2p5DModel(nn.Module):
         # If this is the first forward pass, check if the shapes are as expected
         if self._first_time_forward:
             batch_size = x.shape[0]
-            assert self.feature_extractor.input_size == (256, 256)
-            assert x.shape == (batch_size, 3, 256, 256)
-            assert e0.shape == (batch_size, 64, 128, 128)
-            assert e1.shape == (batch_size, 64, 64, 64)
-            assert e2.shape == (batch_size, 128, 32, 32)
-            assert e3.shape == (batch_size, 256, 16, 16)
-            assert e4.shape == (batch_size, 512, 8, 8)
-            assert d4.shape == (batch_size, 512, 8, 8)
-            assert d3.shape == (batch_size, 256, 16, 16)
-            assert d2.shape == (batch_size, 128, 32, 32)
-            assert d1.shape == (batch_size, 64, 64, 64)
-            assert d0.shape == (batch_size, self.upsample_core_out_channels, 128, 128)
+            # Check that padded input size is divisible by 32 (total stride of ResNet)
+            assert x.shape[2] % 32 == 0 and x.shape[3] % 32 == 0, \
+                f"Padded input spatial dims must be divisible by 32, got {x.shape[2:4]}"
+            
+            # Check intermediate feature map shapes follow expected downsampling pattern
+            # Each layer should be half the spatial size of the previous with correct channels
+            assert e0.shape[1] == 64, f"e0 should have 64 channels, got {e0.shape[1]}"
+            assert e1.shape[1] == 64, f"e1 should have 64 channels, got {e1.shape[1]}"
+            assert e2.shape[1] == 128, f"e2 should have 128 channels, got {e2.shape[1]}"
+            assert e3.shape[1] == 256, f"e3 should have 256 channels, got {e3.shape[1]}"
+            assert e4.shape[1] == 512, f"e4 should have 512 channels, got {e4.shape[1]}"
+            
+            # Check spatial downsampling: each should be half the previous
+            assert e0.shape[2] == x.shape[2] // 2, "e0 spatial size mismatch"
+            assert e1.shape[2] == e0.shape[2] // 2, "e1 spatial size mismatch"
+            assert e2.shape[2] == e1.shape[2] // 2, "e2 spatial size mismatch"
+            assert e3.shape[2] == e2.shape[2] // 2, "e3 spatial size mismatch"
+            assert e4.shape[2] == e3.shape[2] // 2, "e4 spatial size mismatch"
+            
+            # Check decoder shapes
+            assert d0.shape == (batch_size, self.upsample_core_out_channels, e0.shape[2], e0.shape[3]), \
+                f"d0 shape mismatch: expected (*,{self.upsample_core_out_channels}, {e0.shape[2]}, {e0.shape[3]}), got {d0.shape}"
 
-            assert heatmaps.shape == (batch_size, self.n_keypoints, *heatmap_size)
-            assert xy_px_in.shape == (batch_size, self.n_keypoints, 2)
-            assert xy_conf.shape == (batch_size, self.n_keypoints)
-            assert xy_px_out.shape == (batch_size, self.n_keypoints, 2)
-            assert stride == self.feature_extractor.input_size[0] / heatmap_size[0]
-            assert stride == self.feature_extractor.input_size[1] / heatmap_size[1]
+            # Check output shapes
+            assert heatmaps.shape == (batch_size, self.n_keypoints, *heatmap_size), \
+                f"heatmaps shape mismatch"
+            assert xy_px_in.shape == (batch_size, self.n_keypoints, 2), \
+                f"xy_px_in shape mismatch"
+            assert xy_conf.shape == (batch_size, self.n_keypoints), \
+                f"xy_conf shape mismatch"
+
+            # Check stride is positive
+            assert stride > 0, f"stride should be positive, got {stride}"
 
             depth_n_bins = self.depth_n_bins
-            assert depth_logits.shape == (batch_size, self.n_keypoints, depth_n_bins)
-            assert depth_pos.shape == (batch_size, self.n_keypoints)
-            assert depth_conf.shape == (batch_size, self.n_keypoints)
+            assert depth_logits.shape == (batch_size, self.n_keypoints, depth_n_bins), \
+                f"depth_logits shape mismatch"
+            assert depth_pos.shape == (batch_size, self.n_keypoints), \
+                f"depth_pos shape mismatch"
+            assert depth_conf.shape == (batch_size, self.n_keypoints), \
+                f"depth_conf shape mismatch"
 
             self._first_time_forward = False
 
