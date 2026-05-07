@@ -5,11 +5,11 @@
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
 #SBATCH --mem 64GB
-#SBATCH --time 24:00:00
+#SBATCH --time 72:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /scratch/%u/style_transfer/20260327_cropped/outputs/single_%j.out
+#SBATCH --output /scratch/%u/style_transfer/20260425_random_center_patches_10lr/outputs/single_%j.out
 
 set -euo pipefail
 
@@ -27,10 +27,10 @@ conda activate poseforge
 # -----------------------------------------------------------------------------
 PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
-DATASET_PATH="/home/stimpfli/datasets/classical/aymanns2022_pseudocolor_spotlight_dataset_flybody_link"
+DATASET_PATH="/home/stimpfli/datasets/classical/aymanns2022_pseudocolor_spotlight_dataset_flybody_grayscale"
 
 # Base output directories
-CAMPAIGN_TAG="20260327_cropped"
+CAMPAIGN_TAG="20260425_random_center_patches_10lr"
 OUTPUT_BASE="/scratch/$USER/style_transfer/${CAMPAIGN_TAG}"
 CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
 LOG_BASEDIR="${OUTPUT_BASE}/logs"
@@ -40,23 +40,23 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
-RUN_NAME="10_lr_curriculum_flybody_link"
+RUN_NAME="lamG01_bs4_ngf48_flybody_gray"
 
 # Architecture / loss
-NGF=32
+NGF=48
 NETG="stylegan2"
 LAMBDA_GAN=0.1
-PREPROCESS="resize_and_center_patch"
-CENTER_OFFSET=0
-LOAD_SIZE=256
+PREPROCESS="random_center_patch"
+CENTER_OFFSET=200
+LOAD_SIZE=900
 LR_POLICY="linear"
 
 # Optimization / schedule
 BATCH_SIZE=4
 LR=0.001
 START_EPOCH="latest"
-N_EPOCHS=100
-N_EPOCHS_DECAY=400
+N_EPOCHS=500
+N_EPOCHS_DECAY=500
 FINETUNE_LOAD_SIZE=900
 
 # Runtime / logging

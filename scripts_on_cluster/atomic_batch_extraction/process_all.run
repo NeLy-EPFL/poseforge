@@ -8,7 +8,7 @@
 #SBATCH --time 24:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/atomic_batch_extraction/process_all.log
+#SBATCH --output /home/stimpfli/poseforge/scripts_on_cluster/atomic_batch_extraction/process_all.log
 
 echo "Hello from $(hostname)"
 
@@ -20,7 +20,7 @@ conda activate poseforge
 # Define paths
 project_root="/home/$USER/poseforge"
 extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
-all_trials_basedir="/home/sibwang/poseforge/bulk_data/style_transfer/production/translated_videos/"
+all_trials_basedir="/work/upramdya/alfie/style_transfer/production/tiled_translated_videos/flybody_gray"
 
 # Setup
 cd $project_root
@@ -34,10 +34,11 @@ for trial_name in $(ls $all_trials_basedir); do
         --atomic-batch-nframes 32 \
         --atomic-batch-nvariants-max 4 \
         --minimum-time-diff-frames 60 \
-        --original-image-size 464 464 \
+        --original-image-size 900 900 \
         --input-basedir $all_trials_basedir/$trial_name \
-        --nmf-sim-rendering-basedir bulk_data/nmf_rendering \
-        --output-dir /home/sibwang/poseforge/bulk_data/pose_estimation/atomic_batches/$trial_name
+        --nmf-sim-rendering-basedir /work/upramdya/alfie/bulk_data_flybody \
+        --output-dir /work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/$trial_name \
+        --n_jobs 16 
 done
 
 echo "Extraction ends at $(date)"

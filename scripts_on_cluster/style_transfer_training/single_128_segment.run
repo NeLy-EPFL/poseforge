@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /scratch/%u/style_transfer/20260327_cropped/outputs/single_128_segment_%j.out
+#SBATCH --output /scratch/%u/style_transfer/20260421_singleseg/outputs/single_128_segment_%j.out
 
 set -euo pipefail
 
@@ -27,10 +27,10 @@ conda activate poseforge
 # -----------------------------------------------------------------------------
 PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
-DATASET_PATH="/home/stimpfli/datasets/bodypart_dataset/aymanns2022_pseudocolor_spotlight_dataset_flybody_link"
+DATASET_PATH="/home/stimpfli/datasets/bodypart_dataset/"
 
 # Base output directories
-CAMPAIGN_TAG="20260327_cropped"
+CAMPAIGN_TAG="20260421_singleseg"
 OUTPUT_BASE="/scratch/$USER/style_transfer/${CAMPAIGN_TAG}"
 CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
 LOG_BASEDIR="${OUTPUT_BASE}/logs"
@@ -40,17 +40,16 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
-RUN_NAME="single_128_segment_lf_femur"
+RUN_NAME="single_128_segment_rf_tibia"
 
 # Architecture / loss
 NGF=32
 NETG="stylegan2"
 LAMBDA_GAN=0.1
 PREPROCESS=""
-CENTER_PATCH_SEGMENT="lf_femur"
+FOCUS_SEGMENT="rf_tibia"
 CENTER_OFFSET=0
 LOAD_SIZE=128
-CROP_SIZE=128
 LR_POLICY="linear"
 
 # Optimization / schedule
@@ -59,7 +58,6 @@ LR=0.001
 START_EPOCH="latest"
 N_EPOCHS=300
 N_EPOCHS_DECAY=300
-FINETUNE_LOAD_SIZE=128
 
 # Runtime / logging
 CUT_MODE="CUT"
@@ -109,11 +107,10 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --save_epoch_freq "$SAVE_EPOCH_FREQ" \
     --num_threads "$NUM_THREADS" \
     --preprocess "$PREPROCESS" \
-    --center_patch_segment "$CENTER_PATCH_SEGMENT" \
+    --dataset_mode "bodypart_unaligned" \
+    --body_part "$FOCUS_SEGMENT" \
     --load_size "$LOAD_SIZE" \
-    --finetune_load_size "$FINETUNE_LOAD_SIZE" \
     --lr_policy "$LR_POLICY" \
-    --center_patch_offset "$CENTER_OFFSET" \
     --no_flip \
     # --wandb_project "$WANDB_PROJECT" \
 
