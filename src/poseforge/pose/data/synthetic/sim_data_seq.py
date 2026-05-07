@@ -150,15 +150,22 @@ class SimulatedDataSequence:
 
             if load_body_seg_maps:
                 seg_labels_ds = ds["segmentation_labels"]
-                # Resize to shape of synthetic frames via nearest neighbor resampling
+                # Resize to the same target size as the returned synthetic frames.
+                # When original_image_size is provided, the frame videos may be
+                # padded for encoding, but the training crop uses the original size.
+                target_frame_size = (
+                    self.original_image_size
+                    if self.original_image_size is not None
+                    else self.frame_size
+                )
                 resized_body_seg_maps = np.empty(
-                    (len(frame_indices), *self.frame_size), dtype=np.uint8
+                    (len(frame_indices), *target_frame_size), dtype=np.uint8
                 )
                 for i, frame_idx in enumerate(frame_indices):
                     input_map = seg_labels_ds[frame_idx, :, :]
                     resized_body_seg_maps[i, :, :] = cv2.resize(
                         input_map,
-                        (self.frame_size[1], self.frame_size[0]),
+                        (target_frame_size[1], target_frame_size[0]),
                         interpolation=cv2.INTER_NEAREST,
                     )
                 labels["body_seg_maps"] = resized_body_seg_maps
