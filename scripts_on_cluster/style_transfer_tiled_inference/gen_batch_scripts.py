@@ -9,6 +9,8 @@ scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
 data_base_dir = scratch_user_dir / "bulk_data"
 data_base_dir_flybody = scratch_user_dir / "bulk_data_flybody"
 
+checkpoints_basedir = Path("/mnt/upramdya_data/VAS/poseforge_checkpoints")
+
 def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, str, str]:
     """Infer simulations_basedir, output_basedir, and input_video_filename from checkpoint.
     
@@ -133,9 +135,7 @@ def make_run_script(model_name: str, epoch: int) -> None:
 if __name__ == "__main__":
     # Define which model checkpoints to process.
     # Data configuration (simulations_basedir, output_basedir, input_video_filename) is auto-detected from checkpoint.
-    # Format: (checkpoint_path, model_name_for_job)
-
-    checkpoints_basedir = Path("/scratch/stimpfli/style_transfer/20260425_random_center_patches_10lr/checkpoints/")
+    # Format: (checkpoint_path, model_name_for_job)    
     
     jobs = [
         ("20260425_082514_lamG01_bs4_ngf48_flybody_gray", 334),

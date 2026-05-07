@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/stimpfli/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20260504_tiledlowlr.log
+#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251125a_lowlr.log
 
 echo "Hello from $(hostname)"
 
@@ -22,6 +22,7 @@ echo "Training starting at $(date)"
 
 trial_name="trial_20260504_tiledlowlr"
 atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/"
+out_dir="/scratch/stimpfli/style_transfer/contrastive_pretraining/$trial_name"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
@@ -60,7 +61,7 @@ python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --optimizer-config.adam-lr 3e-5 \
     --optimizer-config.adam-weight-decay 1e-4 \
     --training-artifacts-config.output-basedir \
-        "/scratch/stimpfli/style_transfer/contrastive_pretraining/$trial_name" \
+        "$out_dir" \
     --training-artifacts-config.logging-interval 10 \
     --training-artifacts-config.checkpoint-interval 500 \
     --training-artifacts-config.validation-interval 200 \
