@@ -66,6 +66,7 @@ def train_bodyseg_model(
     training_data_config: config.TrainingDataConfig,
     optimizer_config: config.OptimizerConfig,
     training_artifacts_config: config.TrainingArtifactsConfig,
+    selected_original_class_indices: list[int],
     seed: int = 42,
     half_batch_size_for_debugging: bool = False,
 ) -> None:
@@ -90,12 +91,28 @@ def train_bodyseg_model(
     model = setup_model(model_architecture_config, model_weights_config)
     criterion = setup_loss_func(loss_config)
 
+    if len(selected_original_class_indices) + 1 != model_architecture_config.n_classes:
+        raise ValueError(
+            "selected_original_class_indices must contain exactly n_classes - 1 ids "
+            f"(got {len(selected_original_class_indices)} ids for n_classes="
+            f"{model_architecture_config.n_classes})"
+        )
+
     # Print model summary
     print_model_summary(training_data_config, model)
 
     # Initialize learning pipeline
+    target_label_mapper = BodySegmentationPipeline.create_target_label_mapper(
+        selected_original_class_indices=selected_original_class_indices,
+        n_output_classes=model_architecture_config.n_classes,
+    )
+
     pipeline = BodySegmentationPipeline(
-        model=model, loss_func=criterion, device="cuda", use_float16=True
+        model=model,
+        loss_func=criterion,
+        device="cuda",
+        use_float16=True,
+        target_label_mapper=target_label_mapper,
     )
 
     # Train the model

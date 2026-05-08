@@ -263,16 +263,13 @@ class BodySegmentationModel(nn.Module):
 
 
 class DiceLoss(nn.Module):
-    def __init__(self, smooth: float = 1.0, ignore_index: int | None = None):
+    def __init__(self, smooth: float = 1.0):
         """
         Args:
             smooth (float): Smoothing factor to avoid division by zero.
-            ignore_index (int | None): Class index to ignore in loss computation.
-                Pixels with this label will be excluded. Defaults to None (no ignore).
         """
         super(DiceLoss, self).__init__()
         self.smooth = smooth
-        self.ignore_index = ignore_index
 
     def forward(self, pred_logits, target_indices):
         """
@@ -290,18 +287,8 @@ class DiceLoss(nn.Module):
         # Get class probabilities
         probs = F.softmax(pred_logits, dim=1)  # (batch_size, n_classes, H, W)
 
-        # If ignore_index is set, sanitize target indices so F.one_hot is safe
-        if self.ignore_index is not None:
-            # Create a mask of ignored pixels
-            ignore_mask = (target_indices == self.ignore_index)  # (B, H, W)
-            # Replace ignored indices with a valid class (0) for one-hot encoding
-            safe_targets = target_indices.clone()
-            if ignore_mask.any():
-                safe_targets = safe_targets.clone()
-                safe_targets[ignore_mask] = 0
-        else:
-            ignore_mask = None
-            safe_targets = target_indices
+        # No ignore_index support: targets must be in 0..n_classes-1
+        safe_targets = target_indices
 
         # Get ground truth in one-hot format
         # F.one_hot gives n_classes at the end (batch_size, H, W, n_classes)
@@ -309,11 +296,7 @@ class DiceLoss(nn.Module):
         targets_1hot = F.one_hot(safe_targets, num_classes=n_classes)
         targets_1hot = targets_1hot.permute(0, 3, 1, 2).float()
 
-        # If ignore_index is set, zero out ignored pixels in both probs and targets
-        if ignore_mask is not None:
-            mask = (~ignore_mask).unsqueeze(1).float()  # (B, 1, H, W) True -> keep
-            probs = probs * mask
-            targets_1hot = targets_1hot * mask
+        # No ignore_index masking: assume targets are valid class indices
 
         # Compute Dice loss
         spatial_dims = (2, 3)  # height and width
@@ -330,24 +313,20 @@ class CombinedDiceCELoss(nn.Module):
         weight_dice: float = 0.5,
         weight_ce: float = 0.5,
         ce_class_weights: torch.Tensor = None,
-        ignore_index: int | None = 255,
     ):
         """
         Args:
             weight_dice (float): Weight for Dice loss component.
             weight_ce (float): Weight for Cross-Entropy loss component.
             ce_class_weights (torch.Tensor | None): Optional class weights for CE loss.
-            ignore_index (int | None): Class index to ignore in loss computation.
-                Defaults to 255 (common sentinel for background/ignore pixels).
         """
         super(CombinedDiceCELoss, self).__init__()
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
         self.ce_class_weights = ce_class_weights
-        self.ignore_index = ignore_index
 
-        self.dice_loss = DiceLoss(ignore_index=ignore_index)
-        self.ce_loss = nn.CrossEntropyLoss(weight=ce_class_weights, ignore_index=ignore_index)
+        self.dice_loss = DiceLoss()
+        self.ce_loss = nn.CrossEntropyLoss(weight=ce_class_weights)
 
     @classmethod
     def create_from_config(
@@ -358,13 +337,12 @@ class CombinedDiceCELoss(nn.Module):
             loss_config = config.LossConfig.load(loss_config)
             logging.info(f"Loaded model loss config from {loss_config}")
 
+
         # Initialize loss from config
-        # Note: ignore_index is always 255 for handling sentinel background values
         obj = cls(
             weight_dice=loss_config.weight_dice,
             weight_ce=loss_config.weight_ce,
             ce_class_weights=loss_config.ce_class_weights,
-            ignore_index=255,
         )
 
         logging.info("Created CombinedDiceCELoss from loss config")
