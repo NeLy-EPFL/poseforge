@@ -18,8 +18,8 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
-atomic_variants_base_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
-out_dir= "/scratch/stimpfli/pose_estimation/bodyseg/output_20260507_tiled.log"
+atomic_batch_base_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
+out_dir="/scratch/stimpfli/pose_estimation/bodyseg/output_20260507_tiled"
 
 feature_extractor_basedir="/scratch/stimpfli/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
 training_cli_path="src/poseforge/pose/bodyseg/scripts/run_bodyseg_training.py"
@@ -31,9 +31,16 @@ echo "Training starting at $(date)"
 python -u $training_cli_path \
     --n_epochs 50 \
     --seed 42 \
-    --model-architecture-config.n-classes 29 \
+    --model-architecture-config.n-classes 17 \
     --model-architecture-config.final-upsampler-n-hidden-channels 32 \
     --model-architecture-config.confidence-method entropy \
+    --selected-original-class-indices \
+        37 38 39 \
+        45 46 47 \
+        55 56 57 \
+        61 62 63 \
+        69 70 71 \
+        77 78 79 \
     --model-weights-config.feature-extractor-weights \
         "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
     --loss-config.weight-dice 1.0 \
@@ -61,7 +68,7 @@ python -u $training_cli_path \
         "$atomic_batch_base_dir/BO_Gal4_fly4_trial005" \
     --training-data-config.val-data-dirs \
         "$atomic_batch_base_dir/BO_Gal4_fly1_trial001" \
-    --training-data-config.input-image-size 900 9000 \
+    --training-data-config.input-image-size 900 900 \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 4 \
     --training-data-config.train-batch-size 64 \
