@@ -137,7 +137,6 @@ class BodySegmentationPipeline:
                 # Forward pass with mixed precision
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames)
-
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                     # Check if float16 is used

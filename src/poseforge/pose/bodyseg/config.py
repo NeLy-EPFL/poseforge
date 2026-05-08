@@ -8,7 +8,7 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Number of segmentation classes (including background)
     # Default 29: {coxa, femur, tibia, tarsus} x 6 legs + antenna * 2 + thorax
     # + any-other-body-part + background
-    n_classes: int = 29
+    n_classes: int = 86
     # Number of hidden channels in the final upsampling layer before classification
     final_upsampler_n_hidden_channels: int = 32
     # Method to compute confidence scores, "entropy" or "peak"
