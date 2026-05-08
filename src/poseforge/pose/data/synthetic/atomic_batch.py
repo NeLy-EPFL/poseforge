@@ -11,6 +11,10 @@ _default_ffmpeg_params_for_video_writing[level_idx + 1] = "5.0"  # allow higher 
 
 from poseforge.util.sys import get_hardware_availability
 
+# Emit the BODY SEGMENTATION RESIZE WARNING only once per process to avoid
+# flooding the logs when many atomic batches need on-the-fly mask resizing.
+_BODY_SEGMENTATION_RESIZE_WARNING_EMITTED = False
+
 
 class AtomicBatchDataset(Dataset):
     def __init__(
@@ -98,8 +102,10 @@ class AtomicBatchDataset(Dataset):
             body_seg_maps = sim_data["body_seg_maps"]
             frame_height, frame_width = frames.shape[-2], frames.shape[-1]
             if body_seg_maps.shape[-2:] != (frame_height, frame_width):
-                logging.info(
-                    """
+                global _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED
+                if not _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED:
+                    logging.info(
+                        """
 ================================ BODY SEGMENTATION RESIZE WARNING ================================
 The stored body_seg_maps do not match the loaded atomic-batch frame size.
 Resizing masks to match the frames now so training can continue, but this is not ideal.
@@ -107,7 +113,8 @@ You should regenerate the atomic batches so the images and body_seg_maps are wri
 with the same target size from the start.
 ===============================================================================================
 """.strip()
-                )
+                    )
+                    _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED = True
                 if body_seg_maps.ndim != 3:
                     raise ValueError(
                         f"Expected body_seg_maps to have shape (n_frames, H, W), got {body_seg_maps.shape}"
