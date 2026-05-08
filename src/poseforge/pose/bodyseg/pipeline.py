@@ -53,63 +53,7 @@ class BodySegmentationPipeline:
         else:
             self.device_type = "cpu"
         self.use_float16 = use_float16
-            self.target_label_mapper = target_label_mapper
-
-        @staticmethod
-        def create_target_label_mapper(
-            selected_original_class_indices: list[int],
-            n_output_classes: int,
-            original_n_classes: int = 87,
-        ) -> Callable[[torch.Tensor], torch.Tensor]:
-            """Create a mapper from original labels to reduced labels.
-
-            Mapping rules:
-            - selected original class ids -> 1..N (in provided order)
-            - all remaining ids -> 0 (background)
-            - 255 sentinel -> 0 (background)
-            """
-            if len(selected_original_class_indices) + 1 != n_output_classes:
-                raise ValueError(
-                    "n_output_classes must be len(selected_original_class_indices) + 1 "
-                    f"(got n_output_classes={n_output_classes}, "
-                    f"len(selected_original_class_indices)={len(selected_original_class_indices)})"
-                )
-
-            if len(set(selected_original_class_indices)) != len(selected_original_class_indices):
-                raise ValueError("selected_original_class_indices contains duplicates")
-
-            mapping_cpu = torch.zeros(original_n_classes, dtype=torch.long)
-            for new_idx, old_idx in enumerate(selected_original_class_indices, start=1):
-                if not (0 <= old_idx < original_n_classes):
-                    raise ValueError(
-                        f"Class id {old_idx} is out of range [0, {original_n_classes - 1}]"
-                    )
-                mapping_cpu[old_idx] = new_idx
-
-            def mapper(target_indices: torch.Tensor) -> torch.Tensor:
-                if target_indices.dtype not in (torch.int64, torch.int32, torch.int16, torch.uint8):
-                    raise ValueError(
-                        f"Expected integer dtype for target_indices, got {target_indices.dtype}"
-                    )
-
-                max_valid = original_n_classes - 1
-                invalid_mask = (target_indices != 255) & (
-                    (target_indices < 0) | (target_indices > max_valid)
-                )
-                if invalid_mask.any():
-                    invalid_values = torch.unique(target_indices[invalid_mask]).tolist()
-                    raise ValueError(
-                        f"Found invalid segmentation labels outside [0, {max_valid}] and !=255: "
-                        f"{invalid_values}"
-                    )
-
-                safe_targets = target_indices.long().clone()
-                safe_targets[safe_targets == 255] = 0
-
-                mapping = mapping_cpu.to(device=safe_targets.device)
-                return mapping[safe_targets]
-
-            return mapper
+        self.target_label_mapper = target_label_mapper
 
     def _get_half_batch(self, frames_batch, sim_data_batch):
         """Return half of the batch to save memory (for debugging only)."""
@@ -119,6 +63,62 @@ class BodySegmentationPipeline:
             k: v[:half_batch_size, ...] for k, v in sim_data_batch.items()
         }
         return frames_batch, sim_data_batch
+
+    @staticmethod
+    def create_target_label_mapper(
+        selected_original_class_indices: list[int],
+        n_output_classes: int,
+        original_n_classes: int = 87,
+    ) -> Callable[[torch.Tensor], torch.Tensor]:
+        """Create a mapper from original labels to reduced labels.
+
+        Mapping rules:
+        - selected original class ids -> 1..N (in provided order)
+        - all remaining ids -> 0 (background)
+        - 255 sentinel -> 0 (background)
+        """
+        if len(selected_original_class_indices) + 1 != n_output_classes:
+            raise ValueError(
+                "n_output_classes must be len(selected_original_class_indices) + 1 "
+                f"(got n_output_classes={n_output_classes}, "
+                f"len(selected_original_class_indices)={len(selected_original_class_indices)})"
+            )
+
+        if len(set(selected_original_class_indices)) != len(selected_original_class_indices):
+            raise ValueError("selected_original_class_indices contains duplicates")
+
+        mapping_cpu = torch.zeros(original_n_classes, dtype=torch.long)
+        for new_idx, old_idx in enumerate(selected_original_class_indices, start=1):
+            if not (0 <= old_idx < original_n_classes):
+                raise ValueError(
+                    f"Class id {old_idx} is out of range [0, {original_n_classes - 1}]"
+                )
+            mapping_cpu[old_idx] = new_idx
+
+        def mapper(target_indices: torch.Tensor) -> torch.Tensor:
+            if target_indices.dtype not in (torch.int64, torch.int32, torch.int16, torch.uint8):
+                raise ValueError(
+                    f"Expected integer dtype for target_indices, got {target_indices.dtype}"
+                )
+
+            max_valid = original_n_classes - 1
+            invalid_mask = (target_indices != 255) & (
+                (target_indices < 0) | (target_indices > max_valid)
+            )
+            if invalid_mask.any():
+                invalid_values = torch.unique(target_indices[invalid_mask]).tolist()
+                raise ValueError(
+                    f"Found invalid segmentation labels outside [0, {max_valid}] and !=255: "
+                    f"{invalid_values}"
+                )
+
+            safe_targets = target_indices.long().clone()
+            safe_targets[safe_targets == 255] = 0
+
+            mapping = mapping_cpu.to(device=safe_targets.device)
+            return mapping[safe_targets]
+
+        return mapper
 
     def train(
         self,
@@ -198,6 +198,7 @@ class BodySegmentationPipeline:
                 # Forward pass with mixed precision
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames)
+
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                     # Check if float16 is used
