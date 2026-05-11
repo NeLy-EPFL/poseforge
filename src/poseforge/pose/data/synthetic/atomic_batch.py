@@ -2,11 +2,18 @@ import torch
 import numpy as np
 import h5py
 import logging
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from pvio.io import read_frames_from_video, write_frames_to_video
+from pvio.io import read_frames_from_video, write_frames_to_video, _default_ffmpeg_params_for_video_writing
+level_idx = _default_ffmpeg_params_for_video_writing.index("-level")
+_default_ffmpeg_params_for_video_writing[level_idx + 1] = "5.0"  # allow higher resolution videos for 900x900
 
 from poseforge.util.sys import get_hardware_availability
+
+# Emit the BODY SEGMENTATION RESIZE WARNING only once per process to avoid
+# flooding the logs when many atomic batches need on-the-fly mask resizing.
+_BODY_SEGMENTATION_RESIZE_WARNING_EMITTED = False
 
 
 class AtomicBatchDataset(Dataset):
@@ -91,6 +98,35 @@ class AtomicBatchDataset(Dataset):
         # Load labels data
         sim_data = self.load_atomic_batch_sim_data(h5_path, self.label_keys)
 
+        if "body_seg_maps" in sim_data:
+            body_seg_maps = sim_data["body_seg_maps"]
+            frame_height, frame_width = frames.shape[-2], frames.shape[-1]
+            if body_seg_maps.shape[-2:] != (frame_height, frame_width):
+                global _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED
+                if not _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED:
+                    logging.info(
+                        """
+================================ BODY SEGMENTATION RESIZE WARNING ================================
+The stored body_seg_maps do not match the loaded atomic-batch frame size.
+Resizing masks to match the frames now so training can continue, but this is not ideal.
+You should regenerate the atomic batches so the images and body_seg_maps are written
+with the same target size from the start.
+===============================================================================================
+""".strip()
+                    )
+                    _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED = True
+                if body_seg_maps.ndim != 3:
+                    raise ValueError(
+                        f"Expected body_seg_maps to have shape (n_frames, H, W), got {body_seg_maps.shape}"
+                    )
+                body_seg_maps = F.interpolate(
+                    body_seg_maps.unsqueeze(1),
+                    size=(frame_height, frame_width),
+                    mode="nearest",
+                ).squeeze(1)
+                sim_data = dict(sim_data)
+                sim_data["body_seg_maps"] = body_seg_maps
+
         return frames, sim_data
 
     @staticmethod
@@ -140,7 +176,7 @@ class AtomicBatchDataset(Dataset):
                 selection = (selection * 255).astype(np.uint8)
                 image[:n_rows, start_col:end_col, :] = selection
             output_frames.append(image.squeeze())
-        write_frames_to_video(output_path, output_frames, fps=fps)
+        write_frames_to_video(output_path, output_frames, fps=fps, ffmpeg_params=_default_ffmpeg_params_for_video_writing)
 
     @staticmethod
     def load_atomic_batch_frames(

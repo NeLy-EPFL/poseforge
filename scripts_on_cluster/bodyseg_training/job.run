@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/bodyseg_training/output_20251127a.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/bodyseg_training/output_20260507_tiled.log
 
 echo "Hello from $(hostname)"
 
@@ -18,59 +18,66 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
+atomic_batch_base_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
+out_dir="/scratch/stimpfli/pose_estimation/bodyseg/output_20260507_tiled"
+
+feature_extractor_basedir="/scratch/stimpfli/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
 training_cli_path="src/poseforge/pose/bodyseg/scripts/run_bodyseg_training.py"
-training_trial_name="trial_20251127a"
-contrastive_pretraining_trial_name="trial_20251125a_lowlr"
-contrastive_pretraining_epoch="epoch009"
-contrastive_pretraining_local_step="step003055"
+contrastive_pretraining_epoch="epoch007"
+contrastive_pretraining_local_step="step000500"
 
 echo "Training starting at $(date)"
 
 python -u $training_cli_path \
     --n_epochs 50 \
     --seed 42 \
-    --model-architecture-config.n-classes 29 \
+    --model-architecture-config.n-classes 17 \
     --model-architecture-config.final-upsampler-n-hidden-channels 32 \
     --model-architecture-config.confidence-method entropy \
+    --selected-original-class-indices \
+        37 38 39 \
+        45 46 47 \
+        55 56 57 \
+        61 62 63 \
+        69 70 71 \
+        77 78 79 \
     --model-weights-config.feature-extractor-weights \
-        "bulk_data/pose_estimation/contrastive_pretraining/$contrastive_pretraining_trial_name/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
+        "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
     --loss-config.weight-dice 1.0 \
     --loss-config.weight-ce 1.0 \
     --training-data-config.train-data-dirs \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial001" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial002" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial003" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial004" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial005" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly2_trial001" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly2_trial002" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly2_trial003" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly2_trial004" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly2_trial005" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly3_trial001" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly3_trial002" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly3_trial003" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly3_trial004" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly3_trial005" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly4_trial001" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly4_trial002" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly4_trial003" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly4_trial004" \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly4_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial005" \
     --training-data-config.val-data-dirs \
-        "bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial001" \
-    --training-data-config.input-image-size 256 256 \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial002" \
+    --training-data-config.input-image-size 900 900 \
     --training-data-config.atomic-batch-n-samples 32 \
-    --training-data-config.atomic-batch-n-variants 4 \
-    --training-data-config.train-batch-size 160 \
-    --training-data-config.val-batch-size 256 \
+    --training-data-config.atomic-batch-n-variants 1 \
+    --training-data-config.train-batch-size 32 \
+    --training-data-config.val-batch-size 32\
     --training-data-config.n-workers 8 \
     --optimizer-config.learning-rate-encoder 3e-5 \
     --optimizer-config.learning-rate-deconv 3e-4 \
     --optimizer-config.learning-rate-segmentation-head 3e-4 \
     --optimizer-config.weight-decay 1e-5 \
     --training-artifacts-config.output-basedir \
-        "bulk_data/pose_estimation/bodyseg/$training_trial_name/" \
+        "$out_dir" \
     --training-artifacts-config.logging-interval 10 \
     --training-artifacts-config.checkpoint-interval 1000 \
     --training-artifacts-config.validation-interval 1000 \

@@ -5,10 +5,10 @@ from poseforge.util import SerializableDataClass
 
 @dataclass(frozen=True)
 class ModelArchitectureConfig(SerializableDataClass):
-    # Number of segmentation classes (including background)
-    # Default 29: {coxa, femur, tibia, tarsus} x 6 legs + antenna * 2 + thorax
-    # + any-other-body-part + background
-    n_classes: int = 29
+    # Number of segmentation classes (including background).
+    # Reduced default set to a smaller subset (includes background).
+    # Requested subset: ranges 37-39,45-47,55,61-63,69-71,77-79 plus background -> 17 classes
+    n_classes: int = 17
     # Number of hidden channels in the final upsampling layer before classification
     final_upsampler_n_hidden_channels: int = 32
     # Method to compute confidence scores, "entropy" or "peak"

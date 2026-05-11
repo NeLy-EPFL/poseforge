@@ -207,37 +207,37 @@ def run_feature_extractor_inference(
 if __name__ == "__main__":
     import tyro
 
-    # tyro.cli(
-    #     run_feature_extractor_inference,
-    #     prog=f"python {Path(__file__).name}",
-    #     description="Run inference using a contrastively pretrained feature extractor.",
-    # )
+    tyro.cli(
+        run_feature_extractor_inference,
+        prog=f"python {Path(__file__).name}",
+        description="Run inference using a contrastively pretrained feature extractor.",
+    )
 
-    # Example call using function directly (no CLI)
-    training_stages = ["untrained", "epoch009_step003055"]
-    style_transfer_models = [
-        "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
-        "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200",
-        "ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1_epoch161",
-        "ngf32_netGstylegan2_batsize4_lambGAN0.1_epoch161",
-        "ngf32_netGstylegan2_batsize4_lambGAN0.5_epoch141",
-        "ngf32_netGstylegan2_batsize4_lambGAN1.0_epoch161",
-        "ngf48_netGstylegan2_batsize2_lambGAN0.1_epoch141",
-        "ngf48_netGstylegan2_batsize4_lambGAN0.1_epoch141",
-    ]
-    synthetic_videos_basedir = "bulk_data/style_transfer/production/translated_videos/"
-    synthetic_videos_subdirs = [
-        "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005/segment_003"
-    ]
-    pretraining_model_dir = (
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251117a/"
-    )
-    batch_size = 1024
-    run_feature_extractor_inference(
-        synthetic_videos_basedir=synthetic_videos_basedir,
-        pretraining_model_dir=pretraining_model_dir,
-        training_stages=training_stages,
-        style_transfer_models=style_transfer_models,
-        batch_size=batch_size,
-        synthetic_videos_subdirs=synthetic_videos_subdirs,
-    )
+    # # Example call using function directly (no CLI)
+    # training_stages = ["untrained", "epoch009_step003055"]
+    # style_transfer_models = [
+    #     "ngf16_netGsmallstylegan2_batsize2_lambGAN0.2_epoch121",
+    #     "ngf16_netGstylegan2_batsize4_lambGAN0.2_epoch200",
+    #     "ngf32_netGstylegan2_batsize2_lambGAN0.5-cont1_epoch161",
+    #     "ngf32_netGstylegan2_batsize4_lambGAN0.1_epoch161",
+    #     "ngf32_netGstylegan2_batsize4_lambGAN0.5_epoch141",
+    #     "ngf32_netGstylegan2_batsize4_lambGAN1.0_epoch161",
+    #     "ngf48_netGstylegan2_batsize2_lambGAN0.1_epoch141",
+    #     "ngf48_netGstylegan2_batsize4_lambGAN0.1_epoch141",
+    # ]
+    # synthetic_videos_basedir = "bulk_data/style_transfer/production/translated_videos/"
+    # synthetic_videos_subdirs = [
+    #     "bulk_data/style_transfer/production/translated_videos/BO_Gal4_fly5_trial005/segment_003"
+    # ]
+    # pretraining_model_dir = (
+    #     "bulk_data/pose_estimation/contrastive_pretraining/trial_20251117a/"
+    # )
+    # batch_size = 1024
+    # run_feature_extractor_inference(
+    #     synthetic_videos_basedir=synthetic_videos_basedir,
+    #     pretraining_model_dir=pretraining_model_dir,
+    #     training_stages=training_stages,
+    #     style_transfer_models=style_transfer_models,
+    #     batch_size=batch_size,
+    #     synthetic_videos_subdirs=synthetic_videos_subdirs,
+    # )

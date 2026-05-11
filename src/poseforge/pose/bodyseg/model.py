@@ -64,6 +64,29 @@ class BodySegmentationModel(nn.Module):
 
         self._first_time_forward = True
 
+    @staticmethod
+    def pad_inputs(
+        x: torch.Tensor, multiple: int = 32
+    ) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
+        """Pad an input image tensor on the bottom and right only.
+
+        Returns the padded tensor, the original size, and the padded size.
+        """
+        orig_height, orig_width = x.shape[2], x.shape[3]
+
+        def pad_to_multiple(size: int) -> int:
+            return ((size + multiple - 1) // multiple) * multiple
+
+        padded_height = pad_to_multiple(orig_height)
+        padded_width = pad_to_multiple(orig_width)
+
+        if padded_height != orig_height or padded_width != orig_width:
+            pad_height = padded_height - orig_height
+            pad_width = padded_width - orig_width
+            x = F.pad(x, (0, pad_width, 0, pad_height), mode="constant", value=0)
+
+        return x, (orig_height, orig_width), (padded_height, padded_width)
+
     @classmethod
     def create_architecture_from_config(
         cls, architecture_config: config.ModelArchitectureConfig | Path | str
@@ -126,11 +149,12 @@ class BodySegmentationModel(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Args:
-            x (torch.Tensor): Input tensor (batch_size, 3, 256, 256)
+            x (torch.Tensor): Input tensor of shape (batch_size, 3, height, width).
+                Height and width will be padded to nearest multiple of 32 if necessary.
 
         Returns:
             segmentation_logits (torch.Tensor): Output logits, tensor
-                (batch_size, n_classes, 256, 256)
+                (batch_size, n_classes, height, width) in original input space
 
         We use a UNet-like architecture with skip connections:
 
@@ -156,6 +180,11 @@ class BodySegmentationModel(nn.Module):
                 |                         ↑
                 └──(bottleneck/identity)──┘
         """
+        # Pad the input only on the bottom/right so the target mask stays aligned.
+        x, orig_size, padded_size = self.pad_inputs(x, multiple=32)
+        orig_height, orig_width = orig_size
+        padded_height, padded_width = padded_size
+        
         # Run feature extractor
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
             x, return_intermediates=True
@@ -172,6 +201,11 @@ class BodySegmentationModel(nn.Module):
         # Final upsampling and classification
         upsampled = self.final_upsampler(d0)
         segmentation_logits = self.classifier(upsampled)
+        
+        # Crop back to original input size if input was padded
+        if orig_size != padded_size:
+            segmentation_logits = segmentation_logits[:, :, :orig_height, :orig_width]
+            # confidence will be cropped after computation below
 
         # Compute confidence scores
         if self.confidence_method == "entropy":
@@ -186,26 +220,43 @@ class BodySegmentationModel(nn.Module):
         elif self.confidence_method == "peak":
             probs = F.softmax(segmentation_logits, dim=1)  # (B, n_classes, H, W)
             confidence, dim = torch.max(probs, dim=1)  # (B, H, W)
+        
+        # Crop confidence back to original size if input was padded
+        if orig_size != padded_size:
+            confidence = confidence[:, :orig_height, :orig_width]
 
         # If this is the first forward pass, check if the shapes are as expected
         if self._first_time_forward:
             batch_size = x.shape[0]
-            assert self.feature_extractor.input_size == (256, 256)
-            assert x.shape == (batch_size, 3, 256, 256)
-            assert e0.shape == (batch_size, 64, 128, 128)
-            assert e1.shape == (batch_size, 64, 64, 64)
-            assert e2.shape == (batch_size, 128, 32, 32)
-            assert e3.shape == (batch_size, 256, 16, 16)
-            assert e4.shape == (batch_size, 512, 8, 8)
-            assert d4.shape == (batch_size, 512, 8, 8)
-            assert d3.shape == (batch_size, 256, 16, 16)
-            assert d2.shape == (batch_size, 128, 32, 32)
-            assert d1.shape == (batch_size, 64, 64, 64)
-            assert d0.shape == (batch_size, 64, 128, 128)
-            upsample_hidden_channels = self.final_upsampler_n_hidden_channels
-            assert upsampled.shape == (batch_size, upsample_hidden_channels, 256, 256)
-            assert segmentation_logits.shape == (batch_size, self.n_classes, 256, 256)
-            assert confidence.shape == (batch_size, 256, 256)
+            # Check that padded input size is divisible by 32 (total stride of ResNet)
+            assert padded_height % 32 == 0 and padded_width % 32 == 0, \
+                f"Padded input spatial dims must be divisible by 32, got {(padded_height, padded_width)}"
+            
+            # Check intermediate feature map shapes follow expected downsampling pattern
+            # Each layer should be half the spatial size of the previous with correct channels
+            assert e0.shape[1] == 64, f"e0 should have 64 channels, got {e0.shape[1]}"
+            assert e1.shape[1] == 64, f"e1 should have 64 channels, got {e1.shape[1]}"
+            assert e2.shape[1] == 128, f"e2 should have 128 channels, got {e2.shape[1]}"
+            assert e3.shape[1] == 256, f"e3 should have 256 channels, got {e3.shape[1]}"
+            assert e4.shape[1] == 512, f"e4 should have 512 channels, got {e4.shape[1]}"
+            
+            # Check spatial downsampling: each should be half the previous
+            assert e0.shape[2] == x.shape[2] // 2, "e0 spatial size mismatch"
+            assert e1.shape[2] == e0.shape[2] // 2, "e1 spatial size mismatch"
+            assert e2.shape[2] == e1.shape[2] // 2, "e2 spatial size mismatch"
+            assert e3.shape[2] == e2.shape[2] // 2, "e3 spatial size mismatch"
+            assert e4.shape[2] == e3.shape[2] // 2, "e4 spatial size mismatch"
+            
+            # Check decoder shapes
+            assert d0.shape == (batch_size, 64, e0.shape[2], e0.shape[3]), \
+                f"d0 shape mismatch: expected (*,64, {e0.shape[2]}, {e0.shape[3]}), got {d0.shape}"
+
+            # Check output shapes match original (non-padded) input size
+            assert segmentation_logits.shape == (batch_size, self.n_classes, orig_height, orig_width), \
+                f"segmentation_logits shape mismatch: expected (*,{self.n_classes}, {orig_height}, {orig_width}), got {segmentation_logits.shape}"
+            assert confidence.shape == (batch_size, orig_height, orig_width), \
+                f"confidence shape mismatch: expected (*,{orig_height}, {orig_width}), got {confidence.shape}"
+            
             self._first_time_forward = False
 
         return {"logits": segmentation_logits, "confidence": confidence}
@@ -236,11 +287,16 @@ class DiceLoss(nn.Module):
         # Get class probabilities
         probs = F.softmax(pred_logits, dim=1)  # (batch_size, n_classes, H, W)
 
+        # No ignore_index support: targets must be in 0..n_classes-1
+        safe_targets = target_indices
+
         # Get ground truth in one-hot format
         # F.one_hot gives n_classes at the end (batch_size, H, W, n_classes)
         # We need to permute it to (batch_size, n_classes, H, W)
-        targets_1hot = F.one_hot(target_indices, num_classes=n_classes)
+        targets_1hot = F.one_hot(safe_targets, num_classes=n_classes)
         targets_1hot = targets_1hot.permute(0, 3, 1, 2).float()
+
+        # No ignore_index masking: assume targets are valid class indices
 
         # Compute Dice loss
         spatial_dims = (2, 3)  # height and width
@@ -262,6 +318,7 @@ class CombinedDiceCELoss(nn.Module):
         Args:
             weight_dice (float): Weight for Dice loss component.
             weight_ce (float): Weight for Cross-Entropy loss component.
+            ce_class_weights (torch.Tensor | None): Optional class weights for CE loss.
         """
         super(CombinedDiceCELoss, self).__init__()
         self.weight_dice = weight_dice
@@ -279,6 +336,7 @@ class CombinedDiceCELoss(nn.Module):
         if isinstance(loss_config, (Path, str)):
             loss_config = config.LossConfig.load(loss_config)
             logging.info(f"Loaded model loss config from {loss_config}")
+
 
         # Initialize loss from config
         obj = cls(

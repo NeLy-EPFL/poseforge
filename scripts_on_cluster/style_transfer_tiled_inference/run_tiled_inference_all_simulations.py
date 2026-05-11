@@ -33,12 +33,35 @@ def find_all_simulation_paths(simulations_basedir: Path) -> list[Path]:
     return sorted(list(set(all_simulation_paths)))  # Remove duplicates and sort
 
 
+def _infer_output_video_filename_from_checkpoint(checkpoint_path: Path) -> str:
+    """Match the non-tiled naming convention translated_<model>_epoch<epoch>.mp4."""
+    if checkpoint_path.suffix != ".pth":
+        raise ValueError(f"checkpoint_path must point to a .pth file, got {checkpoint_path}")
+
+    stem = checkpoint_path.stem
+    if not stem.endswith("_net_G"):
+        raise ValueError(
+            "checkpoint filename must end with '_net_G.pth' to infer epoch, "
+            f"got {checkpoint_path.name}"
+        )
+
+    epoch_str = stem[: -len("_net_G")]
+    if not epoch_str.isdigit():
+        raise ValueError(
+            "checkpoint epoch prefix must be an integer to infer output filename, "
+            f"got {checkpoint_path.name}"
+        )
+
+    model_name = checkpoint_path.parent.name
+    return f"translated_{model_name}_epoch{int(epoch_str)}.mp4"
+
+
 def run_tiled_inference_all_simulations(
     checkpoint_path: str,
     simulations_basedir: str,
     output_basedir: str,
     input_video_filename: str = "processed_nmf_sim_render_flybody_grayscale.mp4",
-    output_video_filename: str = "tiled_inference_output.mp4",
+    output_video_filename: str | None = None,
     patch_batch_size: int | None = None,
     weight_type: str = "cosine",
     randomize_seams: bool = True,
@@ -64,8 +87,10 @@ def run_tiled_inference_all_simulations(
             under `simulations_basedir`.
         input_video_filename (str): Filename of the input video within each
             simulation directory.
-        output_video_filename (str): Filename of the styled output video
-            within each output directory.
+        output_video_filename (str | None): Filename of the styled output
+            video within each output directory. If None, infer
+            translated_<model>_epoch<epoch>.mp4 from checkpoint path,
+            matching the non-tiled inference naming.
         patch_batch_size (int | None): Batch size for processing tiles.
             If None, the largest batch size that fits in GPU memory will be
             automatically detected.
@@ -84,6 +109,9 @@ def run_tiled_inference_all_simulations(
     checkpoint_path = Path(checkpoint_path)
     simulations_basedir = Path(simulations_basedir)
     output_basedir = Path(output_basedir)
+
+    if output_video_filename is None:
+        output_video_filename = _infer_output_video_filename_from_checkpoint(checkpoint_path)
 
     # Set logging level
     if verbose:
@@ -148,7 +176,7 @@ def run_tiled_inference_all_simulations(
         # Periodic memory cleanup every once in a while
         if (i + 1) % memory_cleanup_interval == 0:
             logging.info(f"Processed {i + 1} simulations. Running memory cleanup...")
-            clear_memory_cache(logging_level=logging.INFO)
+            clear_memory_cache()
 
     print(f"Finished processing {len(all_simulation_paths)} simulations.")
 
