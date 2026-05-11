@@ -474,10 +474,10 @@ class Pose2p5DModel(nn.Module):
 
         # Map to input image pixel coordinates
         heatmap_size = heatmaps.shape[-2:]  # (n_rows_out, n_cols_out)
-        # Stride is based on padded input size
-        stride = padded_height / heatmap_size[0]
-        xy_px_padded = xy_px_out * stride  # (N, n_keypoints, 2) - in padded space
-        
+        # Stride from heatmap -> padded input space
+        stride_padded = padded_height / heatmap_size[0]
+        xy_px_padded = xy_px_out * stride_padded  # (N, n_keypoints, 2) - in padded space
+
         # Convert back to original input space if input was padded
         if orig_size != padded_size:
             scale_factor_h = orig_height / padded_height
@@ -529,8 +529,11 @@ class Pose2p5DModel(nn.Module):
             assert xy_conf.shape == (batch_size, self.n_keypoints), \
                 f"xy_conf shape mismatch"
 
-            # Check stride is positive
-            assert stride > 0, f"stride should be positive, got {stride}"
+            # Check strides are positive
+            assert stride_padded > 0, f"stride_padded should be positive, got {stride_padded}"
+            # Also compute and check the original-image-based stride (what labels/loss should use)
+            stride = orig_height / heatmap_size[0]
+            assert stride > 0, f"stride (original-image) should be positive, got {stride}"
 
             depth_n_bins = self.depth_n_bins
             assert depth_logits.shape == (batch_size, self.n_keypoints, depth_n_bins), \
@@ -549,6 +552,11 @@ class Pose2p5DModel(nn.Module):
             "pred_depth": depth_pos,
             "conf_xy": xy_conf,
             "conf_depth": depth_conf,
+            # Return the stride that maps heatmap coordinates to ORIGINAL image pixels.
+            # The loss / target creation expects labels to be divided by this value
+            # (i.e. heatmap_px = img_px / heatmap_stride). Using the original-image
+            # based stride ensures consistency when inputs were padded on the
+            # bottom/right only.
             "heatmap_stride": stride,
         }
 
