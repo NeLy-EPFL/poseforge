@@ -33,7 +33,8 @@ def process_muscle_segmentation(
     output_path: Path,
     muscle_traces_segments: list[str],
     alignment_foreground_segments: list[str] = leg_segment_names,
-    muscle_vrange: tuple[int, int] = (200, 1000),
+    muscle_quantile_range: tuple[float, float] = (0.3, 0.98),
+    n_samples_for_quantile_estimation: int = 100,
     crop_padding: int = 100,
     template_matching_search_limit: int = 50,
     morph_denoise_kernel_size: int = 5,
@@ -41,6 +42,7 @@ def process_muscle_segmentation(
     dilation_kernel_size: int = 1,
     debug_plots_dir: Path | None = None,
     n_workers: int = -1,
+    skip_mapping_and_cropping: bool = False,
 ):
     """
     Process muscle segmentation mapping all steps for each frame in parallel.
@@ -115,14 +117,33 @@ def process_muscle_segmentation(
         behavior_frame_ids = list(f["frame_ids"][:])
         pred_segmaps = f["pred_segmap"][:]
         seg_labels = list(f["pred_segmap"].attrs["class_labels"])
+    
 
     # Get muscle image paths
     muscle_image_paths = list(
-        spotlight_trial_dir.glob("processed/muscle_images/muscle_frame_*.tif")
+        spotlight_trial_dir.glob("processed/aligned_muscle_images/muscle_frame_*.tif")
     )
     muscle_path_by_frameid = {
         int(path.stem.split("_")[-1]): path for path in sorted(muscle_image_paths)
     }
+
+    quantile_estimation_muscle_paths = list(
+        np.random.choice(
+            muscle_image_paths,
+            size=min(n_samples_for_quantile_estimation,
+                     len(muscle_image_paths)),
+            replace=False
+        )
+    )
+    muscle_images = [cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
+                     for p in quantile_estimation_muscle_paths]
+    muscle_vrange = tuple(
+        np.quantile(
+            np.concatenate(muscle_images),
+            muscle_quantile_range
+        )
+    )
+    print(muscle_vrange)
 
     # Load sync ratio
     dual_recording_metadata_path = (
@@ -162,11 +183,14 @@ def process_muscle_segmentation(
         segmap_idx = behavior_frame_to_stack_idx[behavior_frame_id]
         segmap = pred_segmaps[segmap_idx]
 
-        metadata_path = (
-            preprocessed_behavior_image_dir.parent.parent
-            / "all"
-            / f"frame_{behavior_frame_id:09d}.metadata.json"
-        )
+        if skip_mapping_and_cropping:
+            metadata_path = None
+        else:
+            metadata_path = (
+                preprocessed_behavior_image_dir.parent.parent
+                / "all"
+                / f"frame_{behavior_frame_id:09d}.metadata.json"
+            )
 
         input_kwargs = {
             "muscle_frame_id": muscle_frame_id,
@@ -222,10 +246,12 @@ def _extract_muscle_trace_single_frame(muscle_image, masks, roi_sizes):
     assert masks.shape[0] == len(roi_sizes)
 
     muscle_traces = []
+    all_selected_pixels = []
     for i in range(masks.shape[0]):
         mask = masks[i, ...]
         assert mask.shape == muscle_image.shape
         selected_pixels = muscle_image[mask]
+        all_selected_pixels.append(selected_pixels)
         # Use ROI area before dilation regardless of whether dilated masks are
         # used. The dilation allows some margin of error for the alignment, but
         # the (projected) size of the physical muscle shouldn't change.
@@ -237,8 +263,25 @@ def _extract_muscle_trace_single_frame(muscle_image, masks, roi_sizes):
             activation = selected_pixels.mean()
         muscle_traces.append(activation)
 
-    return np.array(muscle_traces)
+    return np.array(muscle_traces), all_selected_pixels
 
+def _load_and_map_segmentation_to_muscle_space_aligned(
+        muscle_path: Path, segmap: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Scale up the segmap to match the muscle image size without applying any transformations.
+    Used when the muscle frames have already been aligned to the behavior frames.
+    """
+
+    # Load muscle image
+    muscle_image = imageio.imread(muscle_path)
+    muscle_image_shape = muscle_image.shape
+    assert muscle_image_shape[0] == muscle_image_shape[1], "Muscle image must be square."
+    assert segmap.shape[0] == segmap.shape[1], "Segmap must be square."
+    zoom_factor = muscle_image_shape[0] / segmap.shape[0]
+    segmap_resized = ndimage.zoom(segmap, zoom_factor, order=0)
+
+    return muscle_image, segmap_resized
 
 def _load_and_map_segmentation_to_muscle_space(
     muscle_path: Path, segmap: np.ndarray, metadata_path: Path
@@ -441,29 +484,40 @@ def _process_and_save_single_frame(
     """Process all segmentation steps for a single frame and save directly
     to an appropriate group in the output H5 file. See
     `process_muscle_segmentation` for args."""
-
-    # Step 1: Load and map segmentation to muscle space
-    muscle_image, segmap_mapped = _load_and_map_segmentation_to_muscle_space(
-        muscle_path, segmap, metadata_path
-    )
-
-    # Crop to bounding box
-    has_feature, muscle_cropped, segmap_cropped, crop_metadata = _crop_by_features(
-        muscle_image, segmap_mapped, padding
-    )
-    if not has_feature:
-        logging.warning(
-            f"No non-background features found in muscle frame {muscle_frame_id}. "
-            "This is extremely unlikely. Check upstream processing."
+    if not metadata_path is None:
+        # Step 1: Load and map segmentation to muscle space
+        muscle_image, segmap_mapped = _load_and_map_segmentation_to_muscle_space(
+            muscle_path, segmap, metadata_path
         )
-        # Continue processing - all masks will be empty which is fine
+
+        # Crop to bounding box
+        has_feature, muscle_cropped, segmap_cropped, crop_metadata = _crop_by_features(
+            muscle_image, segmap_mapped, padding
+        )
+        if not has_feature:
+            logging.warning(
+                f"No non-background features found in muscle frame {muscle_frame_id}. "
+                "This is extremely unlikely. Check upstream processing."
+            )
+            # Continue processing - all masks will be empty which is fine
+    else:
+        # If no metadata path is provided, skip mapping and cropping
+        muscle_cropped, segmap_cropped = _load_and_map_segmentation_to_muscle_space_aligned(
+            muscle_path, segmap
+        )
+        has_feature = True
+        crop_metadata = {}
 
     # Step 2: Fine alignment via template matching
     muscle_norm = _normalize_muscle_image(muscle_cropped, muscle_vrange)
-    foreground_mask = np.isin(segmap_cropped, alignment_foreground_segment_ids)
+    foreground_mask = get_foreground_mask(
+        segmap_cropped, alignment_foreground_segment_ids, muscle_cropped
+    )
+
+    muscles_alignement = prepare_muscle_image_for_alignement(muscle_norm)
 
     x_shift, y_shift, corr_matrix = _template_match(
-        muscle_norm, foreground_mask, search_limit
+        muscles_alignement, foreground_mask, search_limit
     )
     segmap_aligned = ndimage.shift(
         segmap_cropped, (y_shift, x_shift), order=0, mode="nearest"
@@ -492,7 +546,7 @@ def _process_and_save_single_frame(
     # dilation allows some margin of error for the alignment, but the (projected) size
     # of the physical muscle shouldn't change.
     muscle_roi_sizes = [denoised_masks[i].sum() for i in muscle_traces_segment_ids]
-    muscle_traces = _extract_muscle_trace_single_frame(
+    muscle_traces, all_selected_pixels = _extract_muscle_trace_single_frame(
         muscle_cropped, muscle_masks, muscle_roi_sizes
     )
 
@@ -515,6 +569,11 @@ def _process_and_save_single_frame(
             debug_plots_dir=debug_plots_dir,
         )
 
+    for a in all_selected_pixels:
+        print(np.shape(a))
+    
+    all_selected_pixels = np.array(all_selected_pixels, dtype=object)
+
     # Prepare output datasets and attributes
     datasets = {
         "muscle_image_cropped": muscle_cropped,
@@ -523,6 +582,7 @@ def _process_and_save_single_frame(
         "template_matching_correlation_matrix": corr_matrix,
         "masks_morph_denoised": denoised_masks.astype(np.bool_),
         "muscle_traces": muscle_traces,
+        #"all_selected_pixels": all_selected_pixels,
     }
 
     if dilation_kernel_size != 1:
@@ -532,7 +592,7 @@ def _process_and_save_single_frame(
         "muscle_frame_id": muscle_frame_id,
         "behavior_frame_id": behavior_frame_id,
         "muscle_image_path": str(muscle_path.absolute()),
-        "input_transform_metadata_path": str(metadata_path.absolute()),
+        "input_transform_metadata_path": str(metadata_path.absolute()) if metadata_path else "",
         "has_non_background_feature": has_feature,
         "template_matching_x_shift": x_shift,
         "template_matching_y_shift": y_shift,
@@ -545,6 +605,45 @@ def _process_and_save_single_frame(
     _save_to_h5_with_lock(
         output_h5_path=output_h5_path, datasets=datasets, attributes=attributes
     )
+
+def get_foreground_mask(segmap: np.ndarray, foreground_segment_ids: list[int],
+                        muscle_frame:np.ndarray,
+                        max_n_components:int = 6) -> np.ndarray:
+    """Generate and clean a binary foreground mask from segmentation map.
+
+    Args:
+        segmap: Segmentation map array, shape (H, W)
+        foreground_segment_ids: List of segment IDs to include in foreground
+    Returns:
+        foreground_mask: Binary mask of foreground segments, shape (H, W)
+    """
+    foreground_mask = np.isin(segmap, foreground_segment_ids).astype(np.uint8)
+    # Keep only largest connected components to remove noise
+    num_labels, labels_im = cv2.connectedComponents(foreground_mask)
+    if num_labels - 1 > max_n_components:
+        component_sizes = [
+            (labels_im == label).sum() for label in range(1, num_labels)
+        ]
+        largest_labels = np.argsort(component_sizes)[-max_n_components:] + 1
+        cleaned_mask = np.isin(labels_im, largest_labels).astype(np.uint8)
+        cleaned_mask[muscle_frame == 0] = 0  # Ensure background remains zero
+        return cleaned_mask
+    else:
+        foreground_mask[muscle_frame == 0] = 0  # Ensure background remains zero
+        return foreground_mask
+
+def prepare_muscle_image_for_alignement(img: np.ndarray)->np.ndarray:
+    """Apply some simple thresholding to muscle map to make the legs stand out more.
+        current values are 85th and 95th percentiles correspondiong roughly to how much
+        of the image is occupied by legs ranked by intensity.
+    """
+    thr_muscle_frame = np.logical_and(
+        img > np.quantile(img[img>0], 0.85),
+        img < np.quantile(img[img>0], 0.95),
+    )
+    
+    return thr_muscle_frame.astype(np.uint8)
+
 
 
 def _crop_by_features(

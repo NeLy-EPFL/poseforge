@@ -2,6 +2,7 @@ import cv2
 import logging
 from pathlib import Path
 from tqdm import trange
+import argparse
 
 
 def process_trial(
@@ -56,12 +57,32 @@ def process_trial(
     finally:
         cap.release()
 
+def start():
+    parser = argparse.ArgumentParser(
+        description="Split spotlight aligned behavior video into individual frames."
+    )
+    parser.add_argument(
+        "data_dir",
+        type=Path,
+        help="Path to the spotlight recording directory containing the aligned behavior video.",
+        default=Path("bulk_data/behavior_images/spotlight"),
+    )
+    parser.add_argument(
+        "glob_pattern",
+        type=str,
+        help="Glob pattern to match recording directories.",
+        default="fly*",
+    )
+    args = parser.parse_args()
+
+    return args.data_dir, args.glob_pattern
 
 if __name__ == "__main__":
     # Find all recording directories
-    spotlight_data_dir = Path("bulk_data/behavior_images/spotlight")
-    recording_directories = sorted(list(spotlight_data_dir.glob("20250613-fly1b-*")))
-    output_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped")
+    spotlight_data_dir, glob_pattern = start()
+    recording_directories = sorted(list(spotlight_data_dir.glob(glob_pattern)))
+    
+    output_basedir = spotlight_data_dir / "spotlight_aligned_and_cropped"
 
     # Set processing parameters
     edge_tolerance_mm = 4.0

@@ -7,6 +7,9 @@ from pathlib import Path
 from collections import defaultdict
 from tqdm import tqdm
 from pvio.torch_tools import SimpleVideoCollectionLoader, ImageDirVideo
+import argparse
+from importlib.resources import files
+import yaml
 
 from poseforge.pose.keypoints3d import Pose2p5DModel, Pose2p5DPipeline
 from poseforge.pose.keypoints3d.config import ModelWeightsConfig
@@ -27,7 +30,8 @@ def run_keypoints3d_inference(
     camera_fov_deg: float = 5.0,
     camera_rendering_size: tuple[int, int] = (464, 464),
     camera_rotation_euler: tuple[float, float, float] = (0, np.pi, -np.pi / 2),
-):
+    glob_pattern: str = "fly*",
+    ):
     """Run 3D keypoint detection model on all real Spotlight videos and
     save results.
 
@@ -55,7 +59,7 @@ def run_keypoints3d_inference(
             used to create the camera during simulation.
     """
     # Find all trials to process
-    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
+    input_trials = list(input_basedir.glob(f"{glob_pattern}/model_prediction/not_flipped/"))
     input_trials = [trial for trial in input_trials if len(list(trial.iterdir())) > 0]
     print(f"Found {len(list(input_trials))} trials to process")
 
@@ -197,16 +201,81 @@ def run_keypoints3d_inference(
 
         print(f"Wrote results to {output_dir / 'keypoints3d.h5'}")
 
+def start():
+    parser = argparse.ArgumentParser(
+        description="Detect flipped flies in spotlight recordings."
+    )
+    parser.add_argument(
+        "aligned_data_dir",
+        type=Path,
+        default=Path("bulk_data/spotlight_aligned_and_cropped"),
+        help="Base directory containing aligned and cropped spotlight recording trials.",
+    )
+    parser.add_argument(
+        "glob_pattern",
+        type=str,
+        default="fly*",
+        help="Glob pattern to match spotlight trial directories.",
+    )
+    # get package root path for default config path
+    parser.add_argument(
+        "--config_path",
+        type=Path,
+        # path relative to poseforge package root
+        default=files("poseforge").joinpath(
+            "production/spotlight/config.yaml"
+        ),
+    )
+    # make optional
+    parser.add_argument(
+        "--segment_model_dir",
+        type=Path,
+        help="Path to keypoint prediction model directory. If not provided, will be loaded from config file.",
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--epoch",
+        type=int,
+        help="Epoch number of the model checkpoint to use for inference.",
+        default=19,
+    )
+    parser.add_argument(
+        "--step",
+        type=int,
+        help="Step number of the model checkpoint to use for inference.",
+        default=9167,
+    )
+    parser.add_argument(
+        "--output_basedir",
+        type=Path,
+        help="Base directory to save inference results. If not provided, will save to 'production' subdirectory of model directory.",
+        default=None,
+    )
+
+    args = parser.parse_args()
+    
+    return args.aligned_data_dir, args.glob_pattern, args.config_path, args.segment_model_dir, args.epoch, args.step, args.output_basedir
 
 if __name__ == "__main__":
-    input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/keypoints3d/trial_20251118a")
-    epoch = 19  # chosen based on validation performance and visual inspection
-    step = 9167  # last step
+    #input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
+    input_basedir, glob_pattern, config_path, segment_model_dir, epoch, step, output_basedir = start()
+    if not segment_model_dir:
+        # load from config file
+        with open(config_path, "r") as f:
+            prod_config = yaml.safe_load(f)
+        model_dir = Path(prod_config["keypoints3d"]["checkpoint"]).parent.parent
+    else:
+        model_dir = segment_model_dir
 
     print(f"Running inference for epoch {epoch}")
     checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
-    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    if output_basedir is  None:
+        output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    else:
+        output_basedir = output_basedir / f"keypoints3d/epoch{epoch}_step{step}/"
+    output_basedir.mkdir(parents=True, exist_ok=True)
+
     run_keypoints3d_inference(
-        input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir
+        input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir, glob_pattern=glob_pattern
     )

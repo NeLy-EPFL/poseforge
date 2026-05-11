@@ -5,6 +5,9 @@ from torchvision.transforms import Resize
 from torchsummary import summary
 from tqdm import tqdm
 from pvio.torch_tools import SimpleVideoCollectionLoader
+import argparse
+from importlib.resources import files
+import yaml
 
 import poseforge.pose.bodyseg.config as config
 from poseforge.pose.bodyseg import BodySegmentationModel, BodySegmentationPipeline
@@ -21,6 +24,7 @@ def test_bodyseg_model(
     n_workers: int = 16,
     inference_image_size: tuple[int, int] = (256, 256),
     output_buffer_log_interval: int = 10,
+    glob_pattern: str = "fly*", 
 ):
     # System setup
     hardware_avail = get_hardware_availability(check_gpu=True, print_results=True)
@@ -29,7 +33,7 @@ def test_bodyseg_model(
     torch.backends.cudnn.benchmark = True
 
     # Find all trials to process
-    input_trials = list(input_basedir.glob("*/model_prediction/not_flipped/"))
+    input_trials = list(input_basedir.glob(f"{glob_pattern}/model_prediction/not_flipped/"))
     print(f"Found {len(list(input_trials))} trials to process")
     input_trials = [trial for trial in input_trials if len(list(trial.iterdir())) > 0]
     print(f"{len(input_trials)} trials have images to process")
@@ -47,6 +51,7 @@ def test_bodyseg_model(
 
     # Create model and learning pipeline
     architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
+    print(f"Loading model architecture from {architecture_config_path}")
     model_weights = config.ModelWeightsConfig(model_weights=model_checkpoint_path)
     model = BodySegmentationModel.create_architecture_from_config(
         architecture_config_path
@@ -133,10 +138,74 @@ def test_bodyseg_model(
     assert output_buffer.n_open_buckets == 0
     print("Inference complete")
 
+def start():
+    parser = argparse.ArgumentParser(
+        description="Detect flipped flies in spotlight recordings."
+    )
+    parser.add_argument(
+        "aligned_data_dir",
+        type=Path,
+        default=Path("bulk_data/spotlight_aligned_and_cropped"),
+        help="Base directory containing aligned and cropped spotlight recording trials.",
+    )
+    parser.add_argument(
+        "glob_pattern",
+        type=str,
+        default="fly*",
+        help="Glob pattern to match spotlight trial directories.",
+    )
+    # get package root path for default config path
+    parser.add_argument(
+        "--config_path",
+        type=Path,
+        # path relative to poseforge package root
+        default=files("poseforge").joinpath(
+            "production/spotlight/config.yaml"
+        ),
+    )
+    # make optional
+    parser.add_argument(
+        "--segment_model_dir",
+        type=Path,
+        help="Path to segment model directory. If not provided, will be loaded from config file.",
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
+        "--epoch",
+        type=int,
+        help="Epoch number of the model checkpoint to use for inference.",
+        default=14,
+    )
+    parser.add_argument(
+        "--step",
+        type=int,
+        help="Step number of the model checkpoint to use for inference.",
+        default=12000,
+    )
+    parser.add_argument(
+        "--output_basedir",
+        type=Path,
+        help="Base directory to save output predictions. If not provided, will be saved in the model directory under production/epoch{epoch}_step{step}/",
+        required=False,
+        default=None,
+    )
+
+    args = parser.parse_args()
+    
+    return args.aligned_data_dir, args.glob_pattern, args.config_path, args.segment_model_dir, args.epoch, args.step, args.output_basedir
 
 if __name__ == "__main__":
-    input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    model_dir = Path("bulk_data/pose_estimation/bodyseg/trial_20251118a")
+    # parse paths
+    input_basedir, glob_pattern, config_path, segment_model_dir, epoch, step, output_basedir = start()
+    if not segment_model_dir:
+        # load from config file
+        with open(config_path, "r") as f:
+            prod_config = yaml.safe_load(f)
+        model_dir = Path(prod_config["bodyseg"]["checkpoint"]).parent.parent
+    else:
+        model_dir = segment_model_dir
+
     batch_size = 192
     n_workers = 16
     inference_image_size = (256, 256)
@@ -145,8 +214,13 @@ if __name__ == "__main__":
     step = 12000  # last step of each epoch
 
     model_checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
-    output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    if output_basedir is None:
+        output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
+    else: 
+        output_basedir = output_basedir / f"bodyseg/epoch{epoch}_step{step}/"
     output_basedir.mkdir(parents=True, exist_ok=True)
+
+
     test_bodyseg_model(
         input_basedir=input_basedir,
         model_dir=model_dir,
@@ -156,4 +230,5 @@ if __name__ == "__main__":
         n_workers=n_workers,
         inference_image_size=inference_image_size,
         output_buffer_log_interval=output_buffer_log_interval,
+        glob_pattern=glob_pattern,
     )
