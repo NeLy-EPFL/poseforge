@@ -488,6 +488,10 @@ class Pose2p5DModel(nn.Module):
         else:
             xy_px_in = xy_px_padded
 
+        # Compute the stride that maps heatmap -> original image pixel space
+        # This is what the loss function expects for label conversion
+        stride = orig_height / heatmap_size[0]
+
         # Compute depth distributions
         # Compute logits using depth head
         depth_logits = self.depth_head(d0)  # (N, n_keypoints, depth_n_bins)
@@ -531,8 +535,6 @@ class Pose2p5DModel(nn.Module):
 
             # Check strides are positive
             assert stride_padded > 0, f"stride_padded should be positive, got {stride_padded}"
-            # Also compute and check the original-image-based stride (what labels/loss should use)
-            stride = orig_height / heatmap_size[0]
             assert stride > 0, f"stride (original-image) should be positive, got {stride}"
 
             depth_n_bins = self.depth_n_bins
