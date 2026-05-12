@@ -1,5 +1,7 @@
 import logging
 import torch
+import numpy as np
+import matplotlib.pyplot as plt
 from typing import Callable
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
@@ -22,6 +24,7 @@ from poseforge.util import (
     count_optimizer_parameters,
     count_module_parameters,
     clear_memory_cache,
+    plot,
 )
 
 
@@ -259,7 +262,7 @@ class BodySegmentationPipeline:
                         target_indices,
                     )
                     clear_memory_cache()
-                    val_loss_dict = self.validate(
+                    val_loss_dict, val_viz_data = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
                     )
@@ -269,6 +272,7 @@ class BodySegmentationPipeline:
                         within_epoch_step_idx=step_idx,
                         n_batches_per_epoch=n_batches_per_epoch,
                         val_loss_dict=val_loss_dict,
+                        val_viz_data=val_viz_data,
                     )
 
                 # Save checkpoint
@@ -308,6 +312,12 @@ class BodySegmentationPipeline:
 
         total_loss_dict = defaultdict(lambda: 0.0)
         self.model.eval()
+        
+        # Variables to store visualization data from first batch
+        val_frames_viz = None
+        val_target_viz = None
+        val_pred_logits_viz = None
+        
         with torch.no_grad():
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
                 tqdm(validation_data_loader, desc="Validation", disable=None)
@@ -335,6 +345,12 @@ class BodySegmentationPipeline:
                     pred_dict = self.model(frames)
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
+                # Capture first batch for visualization
+                if step_idx == 0:
+                    val_frames_viz = frames.clone().detach().cpu()
+                    val_target_viz = target_indices.clone().detach().cpu()
+                    val_pred_logits_viz = pred_dict["logits"].clone().detach().cpu()
+
                 # Accumulate losses
                 for key, loss in loss_dict.items():
                     total_loss_dict[key] += loss.item()
@@ -349,7 +365,8 @@ class BodySegmentationPipeline:
         clear_memory_cache()
         self.model.train()
         n_steps_iterated = step_idx + 1
-        return {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
+        avg_losses = {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
+        return avg_losses, (val_frames_viz, val_target_viz, val_pred_logits_viz)
 
     def inference(self, frames: torch.Tensor) -> dict[str, torch.Tensor]:
         input_device = frames.device
@@ -505,6 +522,61 @@ class BodySegmentationPipeline:
             path = checkpoint_path_stem.with_suffix(".grad_scaler.pth")
             torch.save(grad_scaler.state_dict(), path)
 
+    def _create_validation_visualization(
+        self,
+        val_frames: torch.Tensor,
+        val_target: torch.Tensor,
+        val_pred_logits: torch.Tensor,
+    ) -> plt.Figure:
+        """Create side-by-side GT vs prediction segmentation overlays for first sample.
+        
+        Args:
+            val_frames: Input frames (B, C, H, W) on CPU, values in [0,1]
+            val_target: Target segmentation indices (B, H, W) on CPU
+            val_pred_logits: Predicted logits (B, n_classes, H, W) on CPU
+            
+        Returns:
+            Figure with 2 subplots: GT overlay and Prediction overlay
+        """
+        # Get color palette for segmentation
+        color_palette = plot.get_segmentation_color_palette(
+            num_classes=self.model.n_classes
+        )
+        
+        # Extract first sample from batch
+        input_img = val_frames[0].permute(1, 2, 0).numpy()  # (H, W, 3)
+        target_seg = val_target[0].numpy()  # (H, W)
+        pred_logits = val_pred_logits[0]  # (n_classes, H, W)
+        
+        # Get predicted class indices
+        pred_indices = torch.argmax(pred_logits, dim=0).numpy()  # (H, W)
+        
+        # Convert class indices to RGB using color palette
+        target_rgb = color_palette[target_seg]  # (H, W, 3)
+        pred_rgb = color_palette[pred_indices]  # (H, W, 3)
+        
+        # Blend with input image (60% input, 40% segmentation)
+        target_overlay = 0.6 * input_img + 0.4 * (target_rgb / 255.0)
+        pred_overlay = 0.6 * input_img + 0.4 * (pred_rgb / 255.0)
+        
+        # Clamp to [0, 1] to avoid overflow artifacts
+        target_overlay = np.clip(target_overlay, 0, 1)
+        pred_overlay = np.clip(pred_overlay, 0, 1)
+        
+        # Create figure with side-by-side subplots
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        
+        axes[0].imshow(target_overlay, interpolation="nearest")
+        axes[0].set_title("Ground Truth Segmentation")
+        axes[0].axis("off")
+        
+        axes[1].imshow(pred_overlay, interpolation="nearest")
+        axes[1].set_title("Predicted Segmentation")
+        axes[1].axis("off")
+        
+        plt.tight_layout()
+        return fig
+
     def _update_logs_training(
         self,
         writer: SummaryWriter,
@@ -535,6 +607,7 @@ class BodySegmentationPipeline:
         within_epoch_step_idx: int,
         n_batches_per_epoch: int,
         val_loss_dict: dict[str, float],
+        val_viz_data: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
     ) -> None:
         global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
         log_str = (
@@ -545,3 +618,18 @@ class BodySegmentationPipeline:
             log_str += f"{key}: {value:.4f}, "
             writer.add_scalar(f"val/loss/{key}", value, global_step_idx)
         logging.info(log_str)
+        
+        # Log segmentation visualization if available
+        if val_viz_data is not None:
+            val_frames_viz, val_target_viz, val_pred_logits_viz = val_viz_data
+            if (val_frames_viz is not None and 
+                val_target_viz is not None and 
+                val_pred_logits_viz is not None):
+                try:
+                    fig = self._create_validation_visualization(
+                        val_frames_viz, val_target_viz, val_pred_logits_viz
+                    )
+                    writer.add_figure("val/segmentation_overlay", fig, global_step_idx)
+                    plt.close(fig)
+                except Exception as e:
+                    logging.warning(f"Failed to create validation visualization: {e}")
