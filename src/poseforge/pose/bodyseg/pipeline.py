@@ -540,7 +540,7 @@ class BodySegmentationPipeline:
         """
         # Get color palette for segmentation
         color_palette = plot.get_segmentation_color_palette(
-            num_classes=self.model.n_classes
+            n_classes=self.model.n_classes
         )
         
         # Extract first sample from batch
