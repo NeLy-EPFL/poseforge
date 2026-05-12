@@ -32,15 +32,21 @@ def visualize_simulation(
 
 if __name__ == "__main__":
     inference_output_basedir = Path(
-        "bulk_data/pose_estimation/contrastive_pretraining/trial_20251117a/inference/"
+        "/mnt/upramdya_data/VAS/poseforge/poseforge_contrastive/trial_20260504_tiledlowlr_b32/inference/"
     )
     output_basedir = inference_output_basedir / "latents_viz"
+    # example_sims = [
+    #     "BO_Gal4_fly5_trial005/segment_003/subsegment_000",  # walking
+    #     "BO_Gal4_fly5_trial005/segment_003/subsegment_001",  # grooming
+    #     "BO_Gal4_fly5_trial005/segment_003/subsegment_002",  # both
+    # ]
     example_sims = [
-        "BO_Gal4_fly5_trial005/segment_003/subsegment_000",  # walking
-        "BO_Gal4_fly5_trial005/segment_003/subsegment_001",  # grooming
-        "BO_Gal4_fly5_trial005/segment_003/subsegment_002",  # both
+        "BO_Gal4_fly2_trial005/segment_001/subsegment_000", # grooming clip
+        "BO_Gal4_fly2_trial005/segment_000/subsegment_000", # walk and turn clip
     ]
-    training_stages = ["untrained", "epoch009_step003055"]
+
+    training_stages = ["untrained", "epoch001_step000500", "epoch003_step000500",
+                       "epoch005_step000500", "epoch007_step000500", "epoch009_step000500"]
     source_data_freq = 300  # Hz
     play_speed = 0.1  # fraction of real time
     trail_duration_sec = 0.5  # seconds

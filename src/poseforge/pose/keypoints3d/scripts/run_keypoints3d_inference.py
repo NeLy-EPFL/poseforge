@@ -10,6 +10,7 @@ from pvio.torch_tools import SimpleVideoCollectionLoader, ImageDirVideo
 import argparse
 from importlib.resources import files
 import yaml
+import re
 
 from poseforge.pose.keypoints3d import Pose2p5DModel, Pose2p5DPipeline
 from poseforge.pose.keypoints3d.config import ModelWeightsConfig
@@ -22,6 +23,7 @@ def run_keypoints3d_inference(
     input_basedir: Path,
     model_dir: Path,
     model_checkpoint_path: Path,
+    feature_extractor_checkpoint_path: Path | None = None,
     output_basedir: Path | None = None,
     batch_size: int = 512,
     n_workers: int = 16,
@@ -83,7 +85,10 @@ def run_keypoints3d_inference(
 
     # Create model and learning pipeline
     architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
-    model_weights = ModelWeightsConfig(model_weights=model_checkpoint_path)
+    model_weights = ModelWeightsConfig(
+        model_weights=model_checkpoint_path,
+        feature_extractor_weights=feature_extractor_checkpoint_path
+    )
     model = Pose2p5DModel.create_architecture_from_config(architecture_config_path)
     model.load_weights_from_config(model_weights)
     pipeline = Pose2p5DPipeline(model, device="cuda", use_float16=True)
@@ -203,7 +208,7 @@ def run_keypoints3d_inference(
 
 def start():
     parser = argparse.ArgumentParser(
-        description="Detect flipped flies in spotlight recordings."
+        description="Run 3D keypoint detection model on spotlight recordings."
     )
     parser.add_argument(
         "aligned_data_dir",
@@ -217,34 +222,13 @@ def start():
         default="fly*",
         help="Glob pattern to match spotlight trial directories.",
     )
-    # get package root path for default config path
     parser.add_argument(
         "--config_path",
         type=Path,
-        # path relative to poseforge package root
         default=files("poseforge").joinpath(
             "production/spotlight/config.yaml"
         ),
-    )
-    # make optional
-    parser.add_argument(
-        "--segment_model_dir",
-        type=Path,
-        help="Path to keypoint prediction model directory. If not provided, will be loaded from config file.",
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "--epoch",
-        type=int,
-        help="Epoch number of the model checkpoint to use for inference.",
-        default=19,
-    )
-    parser.add_argument(
-        "--step",
-        type=int,
-        help="Step number of the model checkpoint to use for inference.",
-        default=9167,
+        help="Path to config file containing model paths and parameters.",
     )
     parser.add_argument(
         "--output_basedir",
@@ -255,27 +239,55 @@ def start():
 
     args = parser.parse_args()
     
-    return args.aligned_data_dir, args.glob_pattern, args.config_path, args.segment_model_dir, args.epoch, args.step, args.output_basedir
+    return args.aligned_data_dir, args.glob_pattern, args.config_path, args.output_basedir
 
 if __name__ == "__main__":
     #input_basedir = Path("bulk_data/behavior_images/spotlight_aligned_and_cropped/")
-    input_basedir, glob_pattern, config_path, segment_model_dir, epoch, step, output_basedir = start()
-    if not segment_model_dir:
-        # load from config file
-        with open(config_path, "r") as f:
-            prod_config = yaml.safe_load(f)
-        model_dir = Path(prod_config["keypoints3d"]["checkpoint"]).parent.parent
-    else:
-        model_dir = segment_model_dir
+    input_basedir, glob_pattern, config_path, output_basedir = start()
+    
+    # load from config file
+    with open(config_path, "r") as f:
+        prod_config = yaml.safe_load(f)
 
-    print(f"Running inference for epoch {epoch}")
-    checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
-    if output_basedir is  None:
+    # Extract epoch and step from checkpoint filename
+    checkpoint_path = Path(prod_config["keypoints3d"]["checkpoint"])
+    match = re.search(r"epoch(\d+)_step(\d+)", checkpoint_path.stem)
+    if not match:
+        raise ValueError(
+            f"Could not extract epoch and step from checkpoint path: {checkpoint_path}"
+        )
+    epoch, step = int(match.group(1)), int(match.group(2))
+    
+    model_dir = checkpoint_path.parent.parent
+    batch_size = prod_config["keypoints3d"]["batch_size"]
+    n_workers = prod_config.get("common", {}).get("n_workers", prod_config["keypoints3d"].get("n_workers", 16))
+    inference_image_size = tuple(prod_config.get("common", {}).get("inference_image_size") or \
+                                 prod_config["keypoints3d"]["inference_image_size"])
+    camera_pos = tuple(prod_config["keypoints3d"]["camera_pos"])
+    camera_fov_deg = prod_config["keypoints3d"]["camera_fov_deg"]
+    camera_rendering_size = tuple(prod_config["keypoints3d"]["camera_rendering_size"])
+    camera_rotation_euler = tuple(prod_config["keypoints3d"]["camera_rotation_euler"])
+    feature_extractor_checkpoint_path = prod_config.get("common", {}).get("feature_extractor_checkpoint") or \
+                                        prod_config["keypoints3d"].get("contrastive_checkpoint")
+
+    if output_basedir is None:
         output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
     else:
         output_basedir = output_basedir / f"keypoints3d/epoch{epoch}_step{step}/"
     output_basedir.mkdir(parents=True, exist_ok=True)
 
     run_keypoints3d_inference(
-        input_basedir, model_dir, checkpoint_path, output_basedir=output_basedir, glob_pattern=glob_pattern
+        input_basedir, 
+        model_dir, 
+        checkpoint_path,
+        feature_extractor_checkpoint_path=feature_extractor_checkpoint_path,
+        output_basedir=output_basedir, 
+        batch_size=batch_size,
+        n_workers=n_workers,
+        inference_image_size=inference_image_size,
+        camera_pos=camera_pos,
+        camera_fov_deg=camera_fov_deg,
+        camera_rendering_size=camera_rendering_size,
+        camera_rotation_euler=camera_rotation_euler,
+        glob_pattern=glob_pattern,
     )
