@@ -540,8 +540,11 @@ class BodySegmentationPipeline:
             Figure with sample visualization (each sample has 2 subplots)
         """
         # Get color palette for segmentation
-        color_palette = plot.get_segmentation_color_palette(
+        color_palette = np.asarray(
+            plot.get_segmentation_color_palette(
             n_classes=self.model.n_classes
+            ),
+            dtype=np.float32,
         )
         
         n_samples = val_frames.shape[0]
@@ -567,8 +570,8 @@ class BodySegmentationPipeline:
             pred_rgb = color_palette[pred_indices]  # (H, W, 3)
             
             # Blend with input image (60% input, 40% segmentation)
-            target_overlay = 0.6 * input_img + 0.4 * (target_rgb / 255.0)
-            pred_overlay = 0.6 * input_img + 0.4 * (pred_rgb / 255.0)
+            target_overlay = 0.6 * input_img + 0.4 * target_rgb
+            pred_overlay = 0.6 * input_img + 0.4 * pred_rgb
             
             # Clamp to [0, 1] to avoid overflow artifacts
             target_overlay = np.clip(target_overlay, 0, 1)
