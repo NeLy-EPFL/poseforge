@@ -271,11 +271,12 @@ class Pose2p5DPipeline:
                         bin_values=self.model.depth_bin_centers,  # buffered upon init
                     )
                 
-                # Capture first batch for visualization
+                # Capture first batch for visualization (up to 3 samples)
                 if step_idx == 0:
-                    val_frames_viz = frames_collapsed.clone().detach().cpu()
-                    val_gt_xy_viz = xy_labels.clone().detach().cpu()
-                    val_pred_xy_viz = pred_dict["pred_xy"].clone().detach().cpu()
+                    n_samples = min(3, frames_collapsed.shape[0])
+                    val_frames_viz = frames_collapsed[:n_samples].clone().detach().cpu()
+                    val_gt_xy_viz = xy_labels[:n_samples].clone().detach().cpu()
+                    val_pred_xy_viz = pred_dict["pred_xy"][:n_samples].clone().detach().cpu()
                 
                 # Accumulate losses
                 for key, loss in loss_dict.items():
@@ -473,7 +474,7 @@ class Pose2p5DPipeline:
         val_pred_xy: torch.Tensor,
         marker_size: int = 50,
     ) -> plt.Figure:
-        """Create visualization with GT keypoints in green and predictions in red on same image.
+        """Create visualization with GT keypoints in green and predictions in red for up to 3 samples.
         
         Args:
             val_frames: Input frames (B, C, H, W) on CPU, values in [0,1]
@@ -482,32 +483,36 @@ class Pose2p5DPipeline:
             marker_size: Size of marker dots for keypoints
             
         Returns:
-            Figure showing input image with overlaid keypoints
+            Figure showing input images with overlaid keypoints
         """
-        # Extract first sample from batch
-        input_img = val_frames[0].permute(1, 2, 0).numpy()  # (H, W, 3)
-        gt_xy = val_gt_xy[0].numpy()  # (n_keypoints, 2)
-        pred_xy = val_pred_xy[0].numpy()  # (n_keypoints, 2)
+        n_samples = val_frames.shape[0]
+        # Create figure with n_samples rows and 1 column
+        fig, axes = plt.subplots(n_samples, 1, figsize=(8, 8*n_samples))
+        if n_samples == 1:
+            axes = [axes]  # Ensure iterable for single sample
         
-        # Create figure with single subplot
-        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        
-        # Display input image
-        ax.imshow(input_img, interpolation="nearest")
-        
-        # Plot GT keypoints in green as circles
-        if gt_xy.shape[0] > 0:
-            ax.scatter(gt_xy[:, 0], gt_xy[:, 1], c='lime', s=marker_size, 
-                      marker='o', label='GT', edgecolors='darkgreen', linewidth=1.5, zorder=2)
-        
-        # Plot predicted keypoints in red as X-marks
-        if pred_xy.shape[0] > 0:
-            ax.scatter(pred_xy[:, 0], pred_xy[:, 1], c='red', s=marker_size, 
-                      marker='x', label='Prediction', linewidth=2, zorder=3)
-        
-        ax.set_title("Keypoint Detection: GT (green) vs Prediction (red)")
-        ax.legend(loc='upper right')
-        ax.axis('off')
+        for sample_idx in range(n_samples):
+            # Extract sample
+            input_img = val_frames[sample_idx].permute(1, 2, 0).numpy()  # (H, W, 3)
+            gt_xy = val_gt_xy[sample_idx].numpy()  # (n_keypoints, 2)
+            pred_xy = val_pred_xy[sample_idx].numpy()  # (n_keypoints, 2)
+            
+            # Display input image
+            axes[sample_idx].imshow(input_img, interpolation="nearest")
+            
+            # Plot GT keypoints in green as circles
+            if gt_xy.shape[0] > 0:
+                axes[sample_idx].scatter(gt_xy[:, 0], gt_xy[:, 1], c='lime', s=marker_size, 
+                          marker='o', label='GT', edgecolors='darkgreen', linewidth=1.5, zorder=2)
+            
+            # Plot predicted keypoints in red as X-marks
+            if pred_xy.shape[0] > 0:
+                axes[sample_idx].scatter(pred_xy[:, 0], pred_xy[:, 1], c='red', s=marker_size, 
+                          marker='x', label='Prediction', linewidth=2, zorder=3)
+            
+            axes[sample_idx].set_title(f"Sample {sample_idx+1}: Keypoint Detection")
+            axes[sample_idx].legend(loc='upper right')
+            axes[sample_idx].axis('off')
         
         plt.tight_layout()
         return fig

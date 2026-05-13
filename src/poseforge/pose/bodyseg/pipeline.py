@@ -345,11 +345,12 @@ class BodySegmentationPipeline:
                     pred_dict = self.model(frames)
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
-                # Capture first batch for visualization
+                # Capture first batch for visualization (up to 3 samples)
                 if step_idx == 0:
-                    val_frames_viz = frames.clone().detach().cpu()
-                    val_target_viz = target_indices.clone().detach().cpu()
-                    val_pred_logits_viz = pred_dict["logits"].clone().detach().cpu()
+                    n_samples = min(3, frames.shape[0])
+                    val_frames_viz = frames[:n_samples].clone().detach().cpu()
+                    val_target_viz = target_indices[:n_samples].clone().detach().cpu()
+                    val_pred_logits_viz = pred_dict["logits"][:n_samples].clone().detach().cpu()
 
                 # Accumulate losses
                 for key, loss in loss_dict.items():
@@ -528,7 +529,7 @@ class BodySegmentationPipeline:
         val_target: torch.Tensor,
         val_pred_logits: torch.Tensor,
     ) -> plt.Figure:
-        """Create side-by-side GT vs prediction segmentation overlays for first sample.
+        """Create GT vs prediction segmentation overlays for up to 3 samples.
         
         Args:
             val_frames: Input frames (B, C, H, W) on CPU, values in [0,1]
@@ -536,43 +537,52 @@ class BodySegmentationPipeline:
             val_pred_logits: Predicted logits (B, n_classes, H, W) on CPU
             
         Returns:
-            Figure with 2 subplots: GT overlay and Prediction overlay
+            Figure with sample visualization (each sample has 2 subplots)
         """
         # Get color palette for segmentation
         color_palette = plot.get_segmentation_color_palette(
             n_classes=self.model.n_classes
         )
         
-        # Extract first sample from batch
-        input_img = val_frames[0].permute(1, 2, 0).numpy()  # (H, W, 3)
-        target_seg = val_target[0].numpy()  # (H, W)
-        pred_logits = val_pred_logits[0]  # (n_classes, H, W)
+        n_samples = val_frames.shape[0]
+        # Create figure with 2 columns (GT, Pred) and n_samples rows
+        fig, axes = plt.subplots(n_samples, 2, figsize=(10, 4*n_samples))
+        if n_samples == 1:
+            axes = axes.reshape(1, -1)  # Ensure 2D array for single sample
         
-        # Get predicted class indices
-        pred_indices = torch.argmax(pred_logits, dim=0).numpy()  # (H, W)
-        
-        # Convert class indices to RGB using color palette
-        target_rgb = color_palette[target_seg]  # (H, W, 3)
-        pred_rgb = color_palette[pred_indices]  # (H, W, 3)
-        
-        # Blend with input image (60% input, 40% segmentation)
-        target_overlay = 0.6 * input_img + 0.4 * (target_rgb / 255.0)
-        pred_overlay = 0.6 * input_img + 0.4 * (pred_rgb / 255.0)
-        
-        # Clamp to [0, 1] to avoid overflow artifacts
-        target_overlay = np.clip(target_overlay, 0, 1)
-        pred_overlay = np.clip(pred_overlay, 0, 1)
-        
-        # Create figure with side-by-side subplots
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        
-        axes[0].imshow(target_overlay, interpolation="nearest")
-        axes[0].set_title("Ground Truth Segmentation")
-        axes[0].axis("off")
-        
-        axes[1].imshow(pred_overlay, interpolation="nearest")
-        axes[1].set_title("Predicted Segmentation")
-        axes[1].axis("off")
+        for sample_idx in range(n_samples):
+            # Extract sample
+            input_img = val_frames[sample_idx].permute(1, 2, 0).numpy()  # (H, W, 3)
+            target_seg = val_target[sample_idx].numpy()  # (H, W)
+            pred_logits = val_pred_logits[sample_idx]  # (n_classes, H, W)
+            
+            # Get predicted class indices
+            pred_indices = torch.argmax(pred_logits, dim=0).numpy()  # (H, W)
+            
+            # Convert class indices to RGB using color palette
+            # Ensure indices are proper integer types for fancy indexing
+            target_seg = target_seg.astype(np.int64)
+            pred_indices = pred_indices.astype(np.int64)
+            target_rgb = color_palette[target_seg]  # (H, W, 3)
+            pred_rgb = color_palette[pred_indices]  # (H, W, 3)
+            
+            # Blend with input image (60% input, 40% segmentation)
+            target_overlay = 0.6 * input_img + 0.4 * (target_rgb / 255.0)
+            pred_overlay = 0.6 * input_img + 0.4 * (pred_rgb / 255.0)
+            
+            # Clamp to [0, 1] to avoid overflow artifacts
+            target_overlay = np.clip(target_overlay, 0, 1)
+            pred_overlay = np.clip(pred_overlay, 0, 1)
+            
+            # Plot GT segmentation overlay
+            axes[sample_idx, 0].imshow(target_overlay, interpolation="nearest")
+            axes[sample_idx, 0].set_title(f"Sample {sample_idx+1}: Ground Truth")
+            axes[sample_idx, 0].axis("off")
+            
+            # Plot predicted segmentation overlay
+            axes[sample_idx, 1].imshow(pred_overlay, interpolation="nearest")
+            axes[sample_idx, 1].set_title(f"Sample {sample_idx+1}: Prediction")
+            axes[sample_idx, 1].axis("off")
         
         plt.tight_layout()
         return fig
