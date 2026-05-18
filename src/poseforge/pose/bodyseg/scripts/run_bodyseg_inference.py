@@ -8,6 +8,7 @@ from pvio.torch_tools import SimpleVideoCollectionLoader
 import argparse
 from importlib.resources import files
 import yaml
+import re
 
 import poseforge.pose.bodyseg.config as config
 from poseforge.pose.bodyseg import BodySegmentationModel, BodySegmentationPipeline
@@ -23,6 +24,7 @@ def test_bodyseg_model(
     batch_size: int = 512,
     n_workers: int = 16,
     inference_image_size: tuple[int, int] = (256, 256),
+    class_labels: list[str] | None = None,
     output_buffer_log_interval: int = 10,
     glob_pattern: str = "fly*", 
 ):
@@ -52,10 +54,11 @@ def test_bodyseg_model(
     # Create model and learning pipeline
     architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
     print(f"Loading model architecture from {architecture_config_path}")
-    model_weights = config.ModelWeightsConfig(model_weights=model_checkpoint_path)
     model = BodySegmentationModel.create_architecture_from_config(
         architecture_config_path
     ).cuda()
+    model_weights = config.ModelWeightsConfig(model_weights=model_checkpoint_path)
+    print(f"Loading model weights from {model_weights}")
     model.load_weights_from_config(model_weights)
     summary(model, (3, *inference_image_size))
     pipeline = BodySegmentationPipeline(model, device="cuda", use_float16=True)
@@ -76,7 +79,10 @@ def test_bodyseg_model(
                 compression="gzip",
                 shuffle=True,
             )
-            ds.attrs["class_labels"] = pipeline.class_labels
+            if class_labels is not None:
+                ds.attrs["class_labels"] = class_labels
+            else:
+                ds.attrs["class_labels"] = pipeline.class_labels
             confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
             ds = f.create_dataset(
                 "pred_confidence",
@@ -140,7 +146,7 @@ def test_bodyseg_model(
 
 def start():
     parser = argparse.ArgumentParser(
-        description="Detect flipped flies in spotlight recordings."
+        description="Run body segmentation inference on spotlight recordings."
     )
     parser.add_argument(
         "aligned_data_dir",
@@ -154,34 +160,13 @@ def start():
         default="fly*",
         help="Glob pattern to match spotlight trial directories.",
     )
-    # get package root path for default config path
     parser.add_argument(
         "--config_path",
         type=Path,
-        # path relative to poseforge package root
         default=files("poseforge").joinpath(
             "production/spotlight/config.yaml"
         ),
-    )
-    # make optional
-    parser.add_argument(
-        "--segment_model_dir",
-        type=Path,
-        help="Path to segment model directory. If not provided, will be loaded from config file.",
-        required=False,
-        default=None,
-    )
-    parser.add_argument(
-        "--epoch",
-        type=int,
-        help="Epoch number of the model checkpoint to use for inference.",
-        default=14,
-    )
-    parser.add_argument(
-        "--step",
-        type=int,
-        help="Step number of the model checkpoint to use for inference.",
-        default=12000,
+        help="Path to config file containing model paths and parameters.",
     )
     parser.add_argument(
         "--output_basedir",
@@ -193,42 +178,48 @@ def start():
 
     args = parser.parse_args()
     
-    return args.aligned_data_dir, args.glob_pattern, args.config_path, args.segment_model_dir, args.epoch, args.step, args.output_basedir
+    return args.aligned_data_dir, args.glob_pattern, args.config_path, args.output_basedir
 
 if __name__ == "__main__":
     # parse paths
-    input_basedir, glob_pattern, config_path, segment_model_dir, epoch, step, output_basedir = start()
-    if not segment_model_dir:
-        # load from config file
-        with open(config_path, "r") as f:
-            prod_config = yaml.safe_load(f)
-        model_dir = Path(prod_config["bodyseg"]["checkpoint"]).parent.parent
-    else:
-        model_dir = segment_model_dir
+    input_basedir, glob_pattern, config_path, output_basedir = start()
+    
+    # load from config file
+    with open(config_path, "r") as f:
+        prod_config = yaml.safe_load(f)
+    
+    # Extract epoch and step from checkpoint filename
+    checkpoint_path = Path(prod_config["bodyseg"]["checkpoint"])
+    match = re.search(r"epoch(\d+)_step(\d+)", checkpoint_path.stem)
+    if not match:
+        raise ValueError(
+            f"Could not extract epoch and step from checkpoint path: {checkpoint_path}"
+        )
+    epoch, step = int(match.group(1)), int(match.group(2))
 
-    batch_size = 192
-    n_workers = 16
-    inference_image_size = (256, 256)
-    output_buffer_log_interval = 10
-    epoch = 14  # chosen by validation performance and visual inspection
-    step = 12000  # last step of each epoch
+    model_dir = checkpoint_path.parent.parent
+    batch_size = prod_config["bodyseg"]["batch_size"]
+    n_workers = prod_config.get("common", {}).get("n_workers", prod_config["bodyseg"].get("n_workers", 16))
+    inference_image_size = tuple(prod_config.get("common", {}).get("inference_image_size") or \
+                                 prod_config["bodyseg"]["inference_image_size"])
+    class_labels = prod_config.get("common", {}).get("class_labels")
+    output_buffer_log_interval = prod_config["bodyseg"]["output_buffer_log_interval"]
 
-    model_checkpoint_path = model_dir / f"checkpoints/epoch{epoch}_step{step}.model.pth"
     if output_basedir is None:
         output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
     else: 
         output_basedir = output_basedir / f"bodyseg/epoch{epoch}_step{step}/"
     output_basedir.mkdir(parents=True, exist_ok=True)
 
-
     test_bodyseg_model(
         input_basedir=input_basedir,
         model_dir=model_dir,
-        model_checkpoint_path=model_checkpoint_path,
+        model_checkpoint_path=checkpoint_path,
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,
         inference_image_size=inference_image_size,
+        class_labels=class_labels,
         output_buffer_log_interval=output_buffer_log_interval,
         glob_pattern=glob_pattern,
     )
