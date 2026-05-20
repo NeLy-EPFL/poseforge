@@ -11,6 +11,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output /home/%u/poseforge/scripts_on_cluster/keypoints3d_training/output_20260507_tiled.log
 
+
 echo "Hello from $(hostname)"
 
 . ~/spack/share/spack/setup-env.sh
@@ -18,12 +19,12 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
-atomic_variants_base_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
-out_dir = "scratch/stimpfli/pose_estimation/keypoints3d/trial_20260507_tiled"
+atomic_variants_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260507_tiled"
 
 training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
 
-feature_extractor_basedir="/scratch/stimpfli/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
+feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
 contrastive_pretraining_epoch="epoch007"
 contrastive_pretraining_local_step="step000500"
 
@@ -56,17 +57,16 @@ python -u $training_cli_path \
         "$atomic_variants_base_dir/BO_Gal4_fly4_trial005" \
     --training-data-config.val-data-dirs \
         "$atomic_variants_base_dir/BO_Gal4_fly5_trial001" \
-    --training-data-config.input-image-size 900 900 \
+    --training-data-config.input-image-size 912 912 \
     --training-data-config.atomic-batch-n-samples 32 \
-    --training-data-config.atomic-batch-n-variants 4 \
-    --training-data-config.train-batch-size 64 \
+    --training-data-config.atomic-batch-n-variants 2 \
+    --training-data-config.train-batch-size 32 \
     --training-data-config.val-batch-size 32 \
-    --training-data-config.num-workers 16 \
-    --training-artifacts-config.output-basedir \
-        "$out_dir" \
+    --training-data-config.num-workers 8 \
+    --training-artifacts-config.output-basedir "$out_dir" \
     --training-artifacts-config.logging-interval 10 \
     --training-artifacts-config.checkpoint-interval 1000 \
     --training-artifacts-config.validation-interval 1000 \
-    --training-artifacts-config.n-batches-per-validation 150
+    --training-artifacts-config.n-batches-per-validation 150 \
 
 echo "Training ends at $(date)"
