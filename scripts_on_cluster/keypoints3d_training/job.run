@@ -20,6 +20,7 @@ cd $HOME/poseforge
 
 atomic_variants_base_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
 out_dir = "scratch/stimpfli/pose_estimation/keypoints3d/trial_20260507_tiled"
+activation_noise_std=0.1
 
 training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
 
@@ -31,6 +32,7 @@ echo "Training starting at $(date)"
 
 python -u $training_cli_path \
     --n-epochs 30 \
+    --model-architecture-config.activation-noise-std $activation_noise_std \
     --model-weights-config.feature-extractor-weights \
         "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
     --training-data-config.train-data-dirs \
@@ -56,7 +58,7 @@ python -u $training_cli_path \
         "$atomic_variants_base_dir/BO_Gal4_fly4_trial005" \
     --training-data-config.val-data-dirs \
         "$atomic_variants_base_dir/BO_Gal4_fly5_trial001" \
-    --training-data-config.input-image-size 900 900 \
+    --training-data-config.input-image-size 912 912 \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 4 \
     --training-data-config.train-batch-size 64 \
