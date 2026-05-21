@@ -44,13 +44,15 @@ class SimulatedDataSequence:
         self.frame_size = metadata["frame_size"]
         self.fps = metadata["fps"]
 
-        # If image has been downsampled from the original, compute the zoom factor and
-        # return keypoint positions converted to the scale of output images.
-        if original_image_size is not None:
-            zoom_factor = np.array(self.frame_size) / np.array(original_image_size)
-        else:
-            zoom_factor = np.array([1.0, 1.0])
-        self.image_zoom_factor = zoom_factor
+        # If original_image_size was not provided manually, extract it from the segmentation labels
+        if self.original_image_size is None and simulated_labels_path is not None:
+            with h5py.File(simulated_labels_path, "r") as ds:
+                seg_shape = ds["postprocessed"]["segmentation_labels"].shape
+                self.original_image_size = (seg_shape[1], seg_shape[2])
+
+        # If there's a mismatch between the original image size and the video frame size,
+        # we assume it is due to FFMPEG padding the output video to a multiple of 16.
+        # We will pad the segmentation maps to match, and leave keypoints unscaled.
 
     def get_sim_data_metadata(self) -> dict:
         metadata = {}
@@ -137,9 +139,6 @@ class SimulatedDataSequence:
                 assert (
                     len(keypoint_pos.shape) == 3 and keypoint_pos.shape[2] == 3
                 ), f"Unexpected keypoint_pos shape: {keypoint_pos.shape}"
-                # Rescale to match output image size if original size is different
-                if self.original_image_size is not None:
-                    keypoint_pos[:, :, :2] *= self.image_zoom_factor[None, None, :]
                 labels["keypoint_pos"] = keypoint_pos
 
             if load_mesh_states:
@@ -150,24 +149,27 @@ class SimulatedDataSequence:
 
             if load_body_seg_maps:
                 seg_labels_ds = ds["segmentation_labels"]
-                # Resize to the same target size as the returned synthetic frames.
-                # When original_image_size is provided, the frame videos may be
-                # padded for encoding, but the training crop uses the original size.
-                target_frame_size = (
-                    self.original_image_size
-                    if self.original_image_size is not None
-                    else self.frame_size
-                )
+                
+                target_frame_size = self.frame_size
                 resized_body_seg_maps = np.empty(
                     (len(frame_indices), *target_frame_size), dtype=np.uint8
                 )
+                
+                # If padding is needed due to FFMPEG
+                pad_bottom = 0
+                pad_right = 0
+                if self.original_image_size is not None:
+                    pad_bottom = max(0, target_frame_size[0] - self.original_image_size[0])
+                    pad_right = max(0, target_frame_size[1] - self.original_image_size[1])
+
                 for i, frame_idx in enumerate(frame_indices):
                     input_map = seg_labels_ds[frame_idx, :, :]
-                    resized_body_seg_maps[i, :, :] = cv2.resize(
-                        input_map,
-                        (target_frame_size[1], target_frame_size[0]),
-                        interpolation=cv2.INTER_NEAREST,
-                    )
+                    if pad_bottom > 0 or pad_right > 0:
+                        resized_body_seg_maps[i, :, :] = cv2.copyMakeBorder(
+                            input_map, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=0
+                        )
+                    else:
+                        resized_body_seg_maps[i, :, :] = input_map
                 labels["body_seg_maps"] = resized_body_seg_maps
 
         return labels

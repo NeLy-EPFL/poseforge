@@ -106,9 +106,9 @@ class AtomicBatchDataset(Dataset):
                 if not _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED:
                     logging.info(
                         """
-================================ BODY SEGMENTATION RESIZE WARNING ================================
+================================ BODY SEGMENTATION PADDING WARNING ================================
 The stored body_seg_maps do not match the loaded atomic-batch frame size.
-Resizing masks to match the frames now so training can continue, but this is not ideal.
+Assuming this is due to FFMPEG padding the output videos, so padding the masks to match the frames.
 You should regenerate the atomic batches so the images and body_seg_maps are written
 with the same target size from the start.
 ===============================================================================================
@@ -119,11 +119,15 @@ with the same target size from the start.
                     raise ValueError(
                         f"Expected body_seg_maps to have shape (n_frames, H, W), got {body_seg_maps.shape}"
                     )
-                body_seg_maps = F.interpolate(
-                    body_seg_maps.unsqueeze(1),
-                    size=(frame_height, frame_width),
-                    mode="nearest",
-                ).squeeze(1)
+                pad_bottom = max(0, frame_height - body_seg_maps.shape[-2])
+                pad_right = max(0, frame_width - body_seg_maps.shape[-1])
+                # F.pad format is (pad_left, pad_right, pad_top, pad_bottom)
+                body_seg_maps = F.pad(
+                    body_seg_maps,
+                    (0, pad_right, 0, pad_bottom),
+                    mode="constant",
+                    value=0
+                )
                 sim_data = dict(sim_data)
                 sim_data["body_seg_maps"] = body_seg_maps
 
