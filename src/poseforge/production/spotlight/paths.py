@@ -123,9 +123,9 @@ class SpotlightRecordingPaths:
         ]
         required_muscle_path_attrs = [
             "dual_recording_timing_config",
-            "muscle_cam_calib",
+            # "muscle_cam_calib",
             "aligned_muscle_frames_dir",
-            "muscle_frames_metadata",
+            # "muscle_frames_metadata",
         ]
         if not self._check_paths_exist(required_behavior_path_attrs):
             raise FileNotFoundError(

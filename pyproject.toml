@@ -3,7 +3,7 @@ name = "poseforge"
 version = "0.3.0"
 description = "Pose estimation guided by a biomechanical model."
 authors = [
-    {name = "Sibo Wang-Chen",email = "sibo.wang@epfl.ch"}
+    { name = "Sibo Wang-Chen", email = "sibo.wang@epfl.ch" }
 ]
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -20,7 +20,7 @@ dependencies = [
     "tqdm>=4.67,<5",
     # "flygym>=1.2.1,<2",  # TODO: make it compatible with python 3.13
     # "dm_control==1.0.27",  # TODO: flygym requires one specific version of dm_control- make sure they match!
-    "tyro==0.9.31",
+    "tyro>=1,<2",
     "wandb==0.21.1",
     "packaging>=25.0,<26",
     "imageio>=2.37.0,<3",
@@ -37,22 +37,26 @@ dependencies = [
     "cmasher>=1.3.3,<2",
     "torchsummary>=1.5.1,<2",
     "imagecodecs==2025.8.2",
-    "opencv-python>=4.12,<5",
+    "opencv-python>=4.5,<5",
     "filelock>=3.20.0,<4",
     "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
     "loguru==0.7.*",
-    # The following should be installed manually (pip install -e .):
+    "parallel-video-io==0.1.5",
+    "parallel-matplotlib-animation==0.1.2",
+    "seqikpy==1.1.0",
+    "spotlight-tools",
+    # The following should be installed manually:
     # flygym & dm_control
-    # parallel-video-io
-    # parallel-matplotlib-animation
     # seqikpy
-    # spotlight-tools
     # contrastive-unpaired-translation
 ]
 
-[tool.poetry]
-packages = [{include = "poseforge", from = "src"}]
-
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/poseforge"]
+
+[tool.uv.sources]
+spotlight-tools = { git = "https://github.com/NeLy-EPFL/spotlight-tools", tag = "snapshot20260521b" }
