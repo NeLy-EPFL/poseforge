@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/%u/poseforge/scripts_on_cluster/bodyseg_training/output_20260507_tiled_nocoxa.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/bodyseg_training/output_20260507_tiled_nocoxa_noise05.log
 
 echo "Hello from $(hostname)"
 
@@ -19,7 +19,8 @@ conda activate poseforge
 cd $HOME/poseforge
 
 atomic_batch_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
-out_dir="/scratch/stimpfli/poseforge/pose_estimation/bodyseg/output_20260507_tiled_nocoxa"
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/bodyseg/output_20260507_tiled_nocoxa_noise05"
+activation_noise_std=0.5
 
 feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
 training_cli_path="src/poseforge/pose/bodyseg/scripts/run_bodyseg_training.py"
@@ -32,6 +33,7 @@ python -u $training_cli_path \
     --n_epochs 50 \
     --seed 42 \
     --model-architecture-config.n-classes 13 \
+    --model-architecture-config.activation-noise-std $activation_noise_std \
     --model-architecture-config.final-upsampler-n-hidden-channels 32 \
     --model-architecture-config.confidence-method entropy \
     --selected-original-class-indices \

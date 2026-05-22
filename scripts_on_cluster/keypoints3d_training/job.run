@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/%u/poseforge/scripts_on_cluster/keypoints3d_training/output_20260507_tiled.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/keypoints3d_training/output_20260507_tiled_10noise.log
 
 
 echo "Hello from $(hostname)"
@@ -20,7 +20,8 @@ conda activate poseforge
 cd $HOME/poseforge
 
 atomic_variants_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
-out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260507_tiled"
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260507_tiled_10noise"
+activation_noise_std=10.0
 
 training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
 
@@ -32,6 +33,7 @@ echo "Training starting at $(date)"
 
 python -u $training_cli_path \
     --n-epochs 30 \
+    --model-architecture-config.activation-noise-std $activation_noise_std \
     --model-weights-config.feature-extractor-weights \
         "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
     --training-data-config.train-data-dirs \

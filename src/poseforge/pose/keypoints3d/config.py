@@ -28,6 +28,9 @@ class ModelArchitectureConfig(SerializableDataClass):
     groupnorm_n_groups: int = 32
     # Std dev for initializing of final layers in x-y and depth heads (no ReLU after)
     pose_head_init_std: float = 1e-3
+    # Std dev of multiplicative Gaussian noise applied to ResNet activations during training.
+    # Set to 0.0 to disable.
+    activation_noise_std: float = 0.0
 
 
 @dataclass(frozen=True)

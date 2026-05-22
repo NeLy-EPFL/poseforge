@@ -15,6 +15,7 @@ class BodySegmentationModel(nn.Module):
         feature_extractor: ResNetFeatureExtractor,
         final_upsampler_n_hidden_channels: int,
         confidence_method: str = "entropy",
+        activation_noise_std: float = 0.0,
     ):
         """
         Args:
@@ -34,6 +35,7 @@ class BodySegmentationModel(nn.Module):
         self.feature_extractor = feature_extractor
         self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
         self.confidence_method = confidence_method
+        self.activation_noise_std = activation_noise_std
 
         if confidence_method not in ["entropy", "peak"]:
             raise ValueError(
@@ -107,6 +109,7 @@ class BodySegmentationModel(nn.Module):
             feature_extractor=feature_extractor,
             final_upsampler_n_hidden_channels=architecture_config.final_upsampler_n_hidden_channels,
             confidence_method=architecture_config.confidence_method,
+            activation_noise_std=architecture_config.activation_noise_std,
         )
 
         logging.info("Created BodySegmentationModel from architecture config")
@@ -189,6 +192,13 @@ class BodySegmentationModel(nn.Module):
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
             x, return_intermediates=True
         )
+
+        if self.training and self.activation_noise_std > 0:
+            e0 = e0 * (1.0 + torch.randn_like(e0) * self.activation_noise_std)
+            e1 = e1 * (1.0 + torch.randn_like(e1) * self.activation_noise_std)
+            e2 = e2 * (1.0 + torch.randn_like(e2) * self.activation_noise_std)
+            e3 = e3 * (1.0 + torch.randn_like(e3) * self.activation_noise_std)
+            e4 = e4 * (1.0 + torch.randn_like(e4) * self.activation_noise_std)
 
         d4 = e4  # this is just the bottleneck
 
