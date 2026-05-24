@@ -523,6 +523,21 @@ def run_neuromechfly_simulation(
     all_bodies = [b.name for b in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfbody]
     segmentation_geoms = [geom.name for _, geoms in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfgeom.items() for geom in geoms ]
 
+    import json
+    
+    # Process segmentation maps to explicitly set background to 0 and shift others by 1
+    seg_maps = segmentid_renderer.frames["nmf/trackcam"].copy()
+    # 255 is the skybox in uint8
+    valid_mask = (seg_maps != 255)
+    seg_maps[valid_mask] = seg_maps[valid_mask] + 1
+    seg_maps[~valid_mask] = 0
+
+    seg_mapping = {"Background": 0}
+    for i, geom in enumerate(segmentation_geoms):
+        seg_mapping[geom] = i + 1
+    
+    segmentation_labels_json = json.dumps(seg_mapping)
+
     hist_dict = {
         "values": {
             "timestamp": timestamps_hist,
@@ -531,13 +546,13 @@ def run_neuromechfly_simulation(
             "cardinal_vectors": cardinal_vectors_hist,
             "camera_matrix": camera_matrix_hist,
             "fly_base_pos": fly_base_pos_hist,
-            "segmentation_maps": segmentid_renderer.frames["nmf/trackcam"].copy(), # store the segmentation maps as an array of shape (n_frames, height, width) with integer values corresponding to body ids in the simulation
+            "segmentation_maps": seg_maps, # store the segmentation maps as an array of shape (n_frames, height, width) with integer values corresponding to body ids in the simulation
         },
         "keys": {
             "joint_angles": all_dofs,
             "sensorized_body_segments": sensorized_body_segments,
             "all_bodies": all_bodies,
-            "segmentation_labels": segmentation_geoms, # checked that the segmentation values corredspond to the body
+            "segmentation_labels": segmentation_labels_json, # Explicit JSON dictionary mapping string names to integer IDs
             "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
         },
     }
@@ -721,7 +736,7 @@ def simulate_one_segment(
     visual_paths: list[Path],
     output_data_freq: int = 300,
     render_play_speed: float = 0.1,
-    render_window_size=(900, 900),
+    render_window_size=(912, 912),
     min_sim_duration_sec: float = 0.2,
     max_sim_steps: int | None = None,
     render_depth: bool = False,
@@ -747,7 +762,9 @@ def simulate_one_segment(
             affects how the rendered video is played (i.e. the metadata of
             the output video used by media players).
         render_window_size (tuple[int, int]): Window size to use when
-            rendering the simulation.
+            rendering the simulation. Both dimensions must be a multiple of 16
+            to avoid FFMPEG automatically padding the output video, which causes
+            shape mismatches with the unpadded segmentation maps.
         min_sim_duration_sec (float): Minimum simulation duration to
             consider the simulation successful.
         max_sim_steps (int | None): If not None, limit the number of
@@ -778,6 +795,13 @@ def simulate_one_segment(
         calling this function.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if render_window_size[0] % 16 != 0 or render_window_size[1] % 16 != 0:
+        raise ValueError(
+            f"render_window_size {render_window_size} must be a multiple of 16 in both "
+            "dimensions to prevent FFMPEG from automatically padding the output video. "
+            "Padding causes shape mismatches with the unpadded segmentation maps."
+        )
 
     if use_flybody:
         axis_order = FlybodyAxisOrder.YAW_ROLL_PITCH

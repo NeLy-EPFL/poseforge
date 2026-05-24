@@ -46,6 +46,7 @@ class Pose2p5DModel(nn.Module):
         confidence_method: str = "entropy",
         groupnorm_n_groups: int = 32,
         pose_head_init_std: float = 1e-3,
+        activation_noise_std: float = 0.0,
     ):
         """
         Args:
@@ -74,6 +75,8 @@ class Pose2p5DModel(nn.Module):
                 channels in various layers that precede GroupNorm.
             pose_head_init_std (float): Standard deviation for initializing
                 heatmap/depth head layers that are not followed by ReLU.
+            activation_noise_std (float): Standard deviation of multiplicative
+                noise applied to activations during training.
         """
         super().__init__()
         self.n_keypoints = n_keypoints
@@ -87,6 +90,7 @@ class Pose2p5DModel(nn.Module):
         self.confidence_method = confidence_method.lower()
         self.groupnorm_n_groups = groupnorm_n_groups
         self.pose_head_init_std = pose_head_init_std
+        self.activation_noise_std = activation_noise_std
 
         # Check input validity
         if confidence_method not in ["entropy", "peak"]:
@@ -169,6 +173,7 @@ class Pose2p5DModel(nn.Module):
             confidence_method=architecture_config.confidence_method,
             groupnorm_n_groups=architecture_config.groupnorm_n_groups,
             pose_head_init_std=architecture_config.pose_head_init_std,
+            activation_noise_std=architecture_config.activation_noise_std,
         )
 
         logging.info("Created Pose2p5DModel from architecture config")
@@ -455,6 +460,13 @@ class Pose2p5DModel(nn.Module):
         e0, e1, e2, e3, e4 = self.feature_extractor.forward(
             x, return_intermediates=True
         )
+
+        if self.training and self.activation_noise_std > 0:
+            e0 = e0 * (1.0 + torch.randn_like(e0) * self.activation_noise_std)
+            e1 = e1 * (1.0 + torch.randn_like(e1) * self.activation_noise_std)
+            e2 = e2 * (1.0 + torch.randn_like(e2) * self.activation_noise_std)
+            e3 = e3 * (1.0 + torch.randn_like(e3) * self.activation_noise_std)
+            e4 = e4 * (1.0 + torch.randn_like(e4) * self.activation_noise_std)
 
         d4 = e4  # this is just the bottleneck
 

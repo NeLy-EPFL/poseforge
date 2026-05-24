@@ -13,6 +13,9 @@ class ModelArchitectureConfig(SerializableDataClass):
     final_upsampler_n_hidden_channels: int = 32
     # Method to compute confidence scores, "entropy" or "peak"
     confidence_method: str = "entropy"
+    # Std dev of multiplicative Gaussian noise applied to ResNet activations during training.
+    # Set to 0.0 to disable.
+    activation_noise_std: float = 0.0
 
 
 @dataclass(frozen=True)
