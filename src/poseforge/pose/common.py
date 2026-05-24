@@ -23,6 +23,7 @@ class ResNetFeatureExtractor(nn.Module):
         if weights == "IMAGENET1K_V1":  # only option as of 2025-09
             weights = ResNet18_Weights.IMAGENET1K_V1
 
+
         if isinstance(weights, ResNet18_Weights):
             # Use an off-the-shelf pretrained ResNet backbone from torchvision.models
             backbone_weights = weights  # used to initialize models.resnet18

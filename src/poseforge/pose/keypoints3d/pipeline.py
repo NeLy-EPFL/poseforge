@@ -1,5 +1,7 @@
 import torch
 import logging
+import numpy as np
+import matplotlib.pyplot as plt
 from time import time
 from collections import defaultdict
 from itertools import chain
@@ -174,7 +176,7 @@ class Pose2p5DPipeline:
                     )
                     clear_memory_cache()
 
-                    val_loss_dict = self.validate(
+                    val_loss_dict, val_viz_data = self.validate(
                         val_loader,
                         max_batches=artifacts_config.n_batches_per_validation,
                     )
@@ -184,6 +186,7 @@ class Pose2p5DPipeline:
                         within_epoch_step_idx=step_idx,
                         n_batches_per_epoch=n_batches_per_epoch,
                         val_loss_dict=val_loss_dict,
+                        val_viz_data=val_viz_data,
                     )
                     clear_memory_cache()
 
@@ -225,7 +228,8 @@ class Pose2p5DPipeline:
                 is large and you want to run a quick validation.
 
         Returns:
-            dict[str, float]: average loss values for each loss term.
+            tuple: (loss_dict, visualization_data) where visualization_data is
+                (val_frames_viz, val_gt_xy_viz, val_pred_xy_viz)
         """
         if max_batches is None:
             max_batches = len(validation_data_loader)
@@ -238,6 +242,12 @@ class Pose2p5DPipeline:
 
         self.model.eval()
         clear_memory_cache()
+        
+        # Variables to store visualization data from first batch
+        val_frames_viz = None
+        val_gt_xy_viz = None
+        val_pred_xy_viz = None
+        
         with torch.no_grad():
             for step_idx, (atomic_batches_frames, atomic_batches_sim_data) in enumerate(
                 tqdm(validation_data_loader, desc="Validation", disable=None)
@@ -260,6 +270,14 @@ class Pose2p5DPipeline:
                         depth_labels=depth_labels_adjusted,
                         bin_values=self.model.depth_bin_centers,  # buffered upon init
                     )
+                
+                # Capture first batch for visualization (up to 3 samples)
+                if step_idx == 0:
+                    n_samples = min(3, frames_collapsed.shape[0])
+                    val_frames_viz = frames_collapsed[:n_samples].clone().detach().cpu()
+                    val_gt_xy_viz = xy_labels[:n_samples].clone().detach().cpu()
+                    val_pred_xy_viz = pred_dict["pred_xy"][:n_samples].clone().detach().cpu()
+                
                 # Accumulate losses
                 for key, loss in loss_dict.items():
                     total_loss_dict[key] += loss.item()
@@ -267,7 +285,8 @@ class Pose2p5DPipeline:
         clear_memory_cache()
         self.model.train()
         n_steps_iterated = step_idx + 1
-        return {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
+        avg_losses = {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
+        return avg_losses, (val_frames_viz, val_gt_xy_viz, val_pred_xy_viz)
 
     def inference(self, frames: torch.Tensor) -> dict[str, torch.Tensor]:
         """Run inference on a batch of frames. Note that this method
@@ -401,6 +420,7 @@ class Pose2p5DPipeline:
         within_epoch_step_idx: int,
         n_batches_per_epoch: int,
         val_loss_dict: dict[str, float],
+        val_viz_data: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
     ) -> None:
         global_step_idx = epoch_idx * n_batches_per_epoch + within_epoch_step_idx
         log_str = (
@@ -411,6 +431,21 @@ class Pose2p5DPipeline:
             log_str += f"{key}: {value:.4f}, "
             writer.add_scalar(f"val/loss/{key}", value, global_step_idx)
         logging.info(log_str)
+        
+        # Log keypoint visualization if available
+        if val_viz_data is not None:
+            val_frames_viz, val_gt_xy_viz, val_pred_xy_viz = val_viz_data
+            if (val_frames_viz is not None and 
+                val_gt_xy_viz is not None and 
+                val_pred_xy_viz is not None):
+                try:
+                    fig = self._create_validation_visualization(
+                        val_frames_viz, val_gt_xy_viz, val_pred_xy_viz
+                    )
+                    writer.add_figure("val/keypoint_detection", fig, global_step_idx)
+                    plt.close(fig)
+                except Exception as e:
+                    logging.warning(f"Failed to create validation visualization: {e}")
 
     @staticmethod
     def _save_checkpoint(
@@ -431,6 +466,56 @@ class Pose2p5DPipeline:
         if grad_scaler is not None:
             path = checkpoint_path_stem.with_suffix(".grad_scaler.pth")
             torch.save(grad_scaler.state_dict(), path)
+
+    def _create_validation_visualization(
+        self,
+        val_frames: torch.Tensor,
+        val_gt_xy: torch.Tensor,
+        val_pred_xy: torch.Tensor,
+        marker_size: int = 50,
+    ) -> plt.Figure:
+        """Create visualization with GT keypoints in green and predictions in red for up to 3 samples.
+        
+        Args:
+            val_frames: Input frames (B, C, H, W) on CPU, values in [0,1]
+            val_gt_xy: Ground truth keypoint positions (B, n_keypoints, 2) on CPU
+            val_pred_xy: Predicted keypoint positions (B, n_keypoints, 2) on CPU
+            marker_size: Size of marker dots for keypoints
+            
+        Returns:
+            Figure showing input images with overlaid keypoints
+        """
+        n_samples = val_frames.shape[0]
+        # Create figure with n_samples rows and 1 column
+        fig, axes = plt.subplots(n_samples, 1, figsize=(8, 8*n_samples))
+        if n_samples == 1:
+            axes = [axes]  # Ensure iterable for single sample
+        
+        for sample_idx in range(n_samples):
+            # Extract sample
+            input_img = val_frames[sample_idx].permute(1, 2, 0).numpy()  # (H, W, 3)
+            gt_xy = val_gt_xy[sample_idx].numpy()  # (n_keypoints, 2)
+            pred_xy = val_pred_xy[sample_idx].numpy()  # (n_keypoints, 2)
+            
+            # Display input image
+            axes[sample_idx].imshow(input_img, interpolation="nearest")
+            
+            # Plot GT keypoints in green as circles
+            if gt_xy.shape[0] > 0:
+                axes[sample_idx].scatter(gt_xy[:, 0], gt_xy[:, 1], c='lime', s=marker_size, 
+                          marker='o', label='GT', edgecolors='darkgreen', linewidth=1.5, zorder=2)
+            
+            # Plot predicted keypoints in red as X-marks
+            if pred_xy.shape[0] > 0:
+                axes[sample_idx].scatter(pred_xy[:, 0], pred_xy[:, 1], c='red', s=marker_size, 
+                          marker='x', label='Prediction', linewidth=2, zorder=3)
+            
+            axes[sample_idx].set_title(f"Sample {sample_idx+1}: Keypoint Detection")
+            axes[sample_idx].legend(loc='upper right')
+            axes[sample_idx].axis('off')
+        
+        plt.tight_layout()
+        return fig
 
     def _check_amp_status_during_training(
         self,

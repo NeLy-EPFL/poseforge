@@ -23,7 +23,6 @@ def run_keypoints3d_inference(
     input_basedir: Path,
     model_dir: Path,
     model_checkpoint_path: Path,
-    feature_extractor_checkpoint_path: Path | None = None,
     output_basedir: Path | None = None,
     batch_size: int = 512,
     n_workers: int = 16,
@@ -86,9 +85,7 @@ def run_keypoints3d_inference(
     # Create model and learning pipeline
     architecture_config_path = model_dir / "configs/model_architecture_config.yaml"
     model_weights = ModelWeightsConfig(
-        model_weights=model_checkpoint_path,
-        feature_extractor_weights=feature_extractor_checkpoint_path,
-    )
+        model_weights=model_checkpoint_path)
     model = Pose2p5DModel.create_architecture_from_config(architecture_config_path)
     model.load_weights_from_config(model_weights)
     pipeline = Pose2p5DPipeline(model, device="cuda", use_float16=True)
@@ -248,6 +245,7 @@ if __name__ == "__main__":
     with open(config_path, "r") as f:
         prod_config = yaml.safe_load(f)
 
+
     # Extract epoch and step from checkpoint filename
     checkpoint_path = Path(prod_config["keypoints3d"]["checkpoint"])
     match = re.search(r"epoch(\d+)_step(\d+)", checkpoint_path.stem)
@@ -270,9 +268,6 @@ if __name__ == "__main__":
     camera_fov_deg = prod_config["keypoints3d"]["camera_fov_deg"]
     camera_rendering_size = tuple(prod_config["keypoints3d"]["camera_rendering_size"])
     camera_rotation_euler = tuple(prod_config["keypoints3d"]["camera_rotation_euler"])
-    feature_extractor_checkpoint_path = prod_config.get("common", {}).get(
-        "feature_extractor_checkpoint"
-    ) or prod_config["keypoints3d"].get("contrastive_checkpoint")
 
     if output_basedir is None:
         output_basedir = model_dir / f"production/epoch{epoch}_step{step}/"
@@ -284,11 +279,10 @@ if __name__ == "__main__":
         input_basedir=input_basedir,
         model_dir=model_dir,
         model_checkpoint_path=checkpoint_path,
-        feature_extractor_checkpoint_path=feature_extractor_checkpoint_path,
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,
-        inference_image_size=inference_image_size,
+        c=inference_image_size,
         camera_pos=camera_pos,
         camera_fov_deg=camera_fov_deg,
         camera_rendering_size=camera_rendering_size,
