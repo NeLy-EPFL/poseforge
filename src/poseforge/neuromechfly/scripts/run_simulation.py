@@ -57,7 +57,7 @@ from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
 from poseforge.neuromechfly.postprocessing import postprocess_segment
 from poseforge.util import get_hardware_availability
 
-# sets the rendering rules
+# sets the rendering rules
 visual_paths = [
        #Path(__file__).parent.parent / "visuals/base.yaml",
     #    Path(__file__).parent.parent / "visuals/per_link_color.yaml",
@@ -67,6 +67,23 @@ visual_paths = [
         Path(__file__).parent.parent / "visuals/flybody_base.yaml",
         # Path(__file__).parent.parent / "visuals/flybody_grayscale.yaml",
     ]
+
+def get_default_visual_paths(use_flybody: bool) -> list[Path]:
+    """Get the default visual paths depending on the chosen model (flybody vs nmf)."""
+    visuals_dir = Path(__file__).parent.parent / "visuals"
+    if use_flybody:
+        return [#visuals_dir / "flybody_base.yaml",
+                visuals_dir / "flybody_grayscale.yaml",
+                # visuals/per_link_color.yaml,
+                # visuals/per_leg_color.yaml, etc
+                ]
+    else:
+        return [#visuals_dir / "base.yaml",
+                visuals_dir / "grayscale.yaml",
+                # visuals/per_link_color.yaml,
+                # visuals/per_leg_color.yaml, etc
+                ]
+
 
 def simulate_using_kinematic_prior(
     recorded_trial_path: str,
@@ -79,6 +96,7 @@ def simulate_using_kinematic_prior(
     max_segments_per_trial: int | None = None,
     max_sim_steps_per_segment: int | None = None,
     use_flybody: bool = False,
+    visual_paths: list[Path] | None = None,
 ) -> None:
     """CLI to run replay kinematic motion priors from Aymanns et al. 2022
     in NeuroMechFly.
@@ -108,9 +126,13 @@ def simulate_using_kinematic_prior(
             segment to simulate, limit the number of simulation steps to
             this number. This is mainly for testing.
         use_flybody (bool): Whether to use the flybody model to simulate the kinematics
+        visual_paths (list[Path] | None): List of paths to visual config
+            YAML files. If None, selected dynamically based on `use_flybody`.
     """
     recorded_trial_path = Path(recorded_trial_path)
     trial_output_dir = Path(trial_output_dir)
+    if visual_paths is None:
+        visual_paths = get_default_visual_paths(use_flybody)
     assert (
         recorded_trial_path.is_file()
     ), f"Input path {recorded_trial_path} is not a file"
@@ -173,6 +195,7 @@ def run_sequentially_for_testing(
         max_segments_per_trial: int | None = None,
         max_sim_steps_per_segment: int | None = None,
         use_flybody: bool = False,
+        visual_paths: list[Path] | None = None,
 ):
     """Run everything sequentially (for debugging)"""
     # Configs
@@ -204,6 +227,7 @@ def run_sequentially_for_testing(
             max_segments_per_trial=max_segments_per_trial,
             max_sim_steps_per_segment=max_sim_steps_per_segment,
             use_flybody=use_flybody,
+            visual_paths=visual_paths,
         )
 
 

@@ -71,7 +71,7 @@ class BodySegmentationPipeline:
     def create_target_label_mapper(
         selected_original_class_indices: list[int],
         n_output_classes: int,
-        original_n_classes: int = 87,
+        original_n_classes: int = 100,
     ) -> Callable[[torch.Tensor], torch.Tensor]:
         """Create a mapper from original labels to reduced labels.
 

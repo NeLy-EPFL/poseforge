@@ -523,6 +523,21 @@ def run_neuromechfly_simulation(
     all_bodies = [b.name for b in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfbody]
     segmentation_geoms = [geom.name for _, geoms in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfgeom.items() for geom in geoms ]
 
+    import json
+    
+    # Process segmentation maps to explicitly set background to 0 and shift others by 1
+    seg_maps = segmentid_renderer.frames["nmf/trackcam"].copy()
+    # 255 is the skybox in uint8
+    valid_mask = (seg_maps != 255)
+    seg_maps[valid_mask] = seg_maps[valid_mask] + 1
+    seg_maps[~valid_mask] = 0
+
+    seg_mapping = {"Background": 0}
+    for i, geom in enumerate(segmentation_geoms):
+        seg_mapping[geom] = i + 1
+    
+    segmentation_labels_json = json.dumps(seg_mapping)
+
     hist_dict = {
         "values": {
             "timestamp": timestamps_hist,
@@ -531,13 +546,13 @@ def run_neuromechfly_simulation(
             "cardinal_vectors": cardinal_vectors_hist,
             "camera_matrix": camera_matrix_hist,
             "fly_base_pos": fly_base_pos_hist,
-            "segmentation_maps": segmentid_renderer.frames["nmf/trackcam"].copy(), # store the segmentation maps as an array of shape (n_frames, height, width) with integer values corresponding to body ids in the simulation
+            "segmentation_maps": seg_maps, # store the segmentation maps as an array of shape (n_frames, height, width) with integer values corresponding to body ids in the simulation
         },
         "keys": {
             "joint_angles": all_dofs,
             "sensorized_body_segments": sensorized_body_segments,
             "all_bodies": all_bodies,
-            "segmentation_labels": segmentation_geoms, # checked that the segmentation values corredspond to the body
+            "segmentation_labels": segmentation_labels_json, # Explicit JSON dictionary mapping string names to integer IDs
             "cardinal_vectors": ["forward", "left", "up"],  # see flygym docs
         },
     }
