@@ -526,7 +526,7 @@ def run_neuromechfly_simulation(
     import json
     
     # Process segmentation maps to explicitly set background to 0 and shift others by 1
-    seg_maps = segmentid_renderer.frames["nmf/trackcam"].copy()
+    seg_maps = np.array(segmentid_renderer.frames["nmf/trackcam"])
     # 255 is the skybox in uint8
     valid_mask = (seg_maps != 255)
     seg_maps[valid_mask] = seg_maps[valid_mask] + 1
