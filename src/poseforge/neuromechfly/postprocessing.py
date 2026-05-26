@@ -658,6 +658,7 @@ def visualize_subsegment(
             
             # background has label 255 set background to len(keys) as not included in keys
             seg_labels_all[seg_labels_all == 255] = len(keys)
+            keys.append("Background")
             assert "c_thorax" in keys[0], "Expected 'c_thorax' to be the first key in segmentation labels keys."
             max_num_labels = len(keys) + 1 # background is 255
 
