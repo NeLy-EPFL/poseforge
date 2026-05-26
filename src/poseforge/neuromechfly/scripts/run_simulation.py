@@ -57,17 +57,6 @@ from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
 from poseforge.neuromechfly.postprocessing import postprocess_segment
 from poseforge.util import get_hardware_availability
 
-# sets the rendering rules
-visual_paths = [
-       #Path(__file__).parent.parent / "visuals/base.yaml",
-    #    Path(__file__).parent.parent / "visuals/per_link_color.yaml",
-       #Path(__file__).parent.parent / "visuals/per_leg_color.yaml",
-    #    Path(__file__).parent.parent / "visuals/gray.yaml",
-    #    Path(__file__).parent.parent / "visuals/grayscale.yaml",
-        Path(__file__).parent.parent / "visuals/flybody_base.yaml",
-        # Path(__file__).parent.parent / "visuals/flybody_grayscale.yaml",
-    ]
-
 def get_default_visual_paths(use_flybody: bool) -> list[Path]:
     """Get the default visual paths depending on the chosen model (flybody vs nmf)."""
     visuals_dir = Path(__file__).parent.parent / "visuals"
@@ -237,7 +226,7 @@ if __name__ == "__main__":
     #get_hardware_availability(check_gpu=False, print_results=True)
 
     # Run the CLI
-    # tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
+    tyro.cli(simulate_using_kinematic_prior)  # TODO: enable CLI
 
     # Run everything sequentially (for debugging)  # TODO: disable testing
-    tyro.cli(run_sequentially_for_testing)
+    # tyro.cli(run_sequentially_for_testing)
