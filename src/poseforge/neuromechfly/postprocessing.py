@@ -754,7 +754,7 @@ def postprocess_segment(
     max_tilt_angle_deg: float = 30.0,
     mask_morph_closing_size_sec: float = 0.03,
     min_subsegment_duration_sec: float = 0.1,
-    image_crop_size: int = 900,
+    image_crop_size: int = 912,
     visualize: bool = False,
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
@@ -762,6 +762,12 @@ def postprocess_segment(
     n_jobs: int = -1,
     use_flybody: bool = False,
 ):
+    if image_crop_size % 16 != 0:
+        raise ValueError(
+            f"image_crop_size ({image_crop_size}) must be a multiple of 16 to prevent "
+            "FFMPEG from automatically padding the output video."
+        )
+
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
 
@@ -812,7 +818,6 @@ def postprocess_segment(
                 image_crop_size,
                 n_jobs=n_jobs,
                 use_flybody=use_flybody,
-
             )
 
             # Visualize the subsegment if requested
