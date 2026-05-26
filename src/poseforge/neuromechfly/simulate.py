@@ -521,6 +521,7 @@ def run_neuromechfly_simulation(
                             for j in sim.world.fly_lookup["nmf"].get_actuated_jointdofs_order(actuator_type)]
 
     all_bodies = [b.name for b in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfbody]
+    all_world_geoms = [sim.mj_model.geom(i).name for i in range(sim.mj_model.ngeom)]
 
     import json
     
@@ -532,7 +533,7 @@ def run_neuromechfly_simulation(
     seg_maps[~valid_mask] = 0
 
     seg_mapping = {"Background": 0}
-    for i, body in enumerate(all_bodies):
+    for i, body in enumerate(all_world_geoms):
         seg_mapping[body] = i + 1
     
     segmentation_labels_json = json.dumps(seg_mapping)
