@@ -6,10 +6,10 @@ from poseforge.style_transfer import parse_hyperparameters_from_checkpoint_path
 
 
 scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
-data_base_dir = scratch_user_dir / "bulk_data"
-data_base_dir_flybody = scratch_user_dir / "bulk_data_flybody"
+data_base_dir = scratch_user_dir / "/poseforge/data/bulk_data"
+data_base_dir_flybody = scratch_user_dir / "poseforge/data/bulk_data_flybody"
 
-checkpoints_basedir = Path("/mnt/upramdya_data/VAS/poseforge_checkpoints")
+checkpoints_basedir = Path("/scratch/stimpfli/poseforge/style_transfer_old/checkpoint_backups/")
 
 def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, str, str]:
     """Infer simulations_basedir, output_basedir, and input_video_filename from checkpoint.
@@ -33,7 +33,7 @@ def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, st
     
     if is_flybody:
         sim_base = str(data_base_dir_flybody)
-        out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody")
+        out_base = str(scratch_user_dir / "poseforge/style_transfer/production/tiled_translated_videos/flybody")
         if "grayscale" in dataroot or "gray" in dataroot:
             video_file = "processed_nmf_sim_render_flybody_grayscale.mp4"
             out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody_gray")
