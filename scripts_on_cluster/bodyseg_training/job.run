@@ -37,12 +37,12 @@ python -u $training_cli_path \
     --model-architecture-config.final-upsampler-n-hidden-channels 32 \
     --model-architecture-config.confidence-method entropy \
     --selected-original-class-indices \
-        39 40 \
-        47 48 \
-        55 56 \
-        63 64 \
-        71 72 \
-        79 80 \
+        40 41 \
+        48 49 \
+        56 57 \
+        64 65 \
+        72 73 \
+        80 81 \
     --model-weights-config.feature-extractor-weights \
         "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
     --loss-config.weight-dice 1.0 \

@@ -634,14 +634,35 @@ def visualize_subsegment(
     with h5py.File(processed_data_path, "r") as h5_file:
         ds = h5_file["postprocessed/segmentation_labels"]
         seg_labels_all = ds[...]
-        keys = ds.attrs["keys"].tolist()
-    
-    # background has label 255 set background to len(keys) as not included in keys
-    seg_labels_all[seg_labels_all == 255] = len(keys)
+        keys_attr = ds.attrs["keys"]
+        
+        import json
+        is_new_format = False
+        if isinstance(keys_attr, (str, bytes, np.bytes_, np.str_)):
+            keys_data = keys_attr.decode('utf-8') if isinstance(keys_attr, (bytes, np.bytes_)) else str(keys_attr)
+            try:
+                keys_dict = json.loads(keys_data)
+                is_new_format = True
+            except json.JSONDecodeError:
+                pass
+                
+        if is_new_format:
+            max_num_labels = len(keys_dict)
+            assert "Background" in keys_dict, "Expected 'Background' in new mapping format"
+        else:
+            keys = keys_attr.tolist()
+            if isinstance(keys, list):
+                keys = [k.decode('utf-8') if isinstance(k, bytes) else str(k) for k in keys]
+            else:
+                keys = [str(keys)]
+            
+            # background has label 255 set background to len(keys) as not included in keys
+            seg_labels_all[seg_labels_all == 255] = len(keys)
+            keys.append("Background")
+            assert "c_thorax" in keys[0], "Expected 'c_thorax' to be the first key in segmentation labels keys."
+            max_num_labels = len(keys) + 1 # background is 255
 
     # Define color palette for segmentation labels visualization
-    assert "c_thorax" in keys[0], "Expected 'c_thorax' to be the first key in segmentation labels keys."
-    max_num_labels = len(keys) + 1 # background is 255
     color_palette = get_segmentation_color_palette(max_num_labels)
 
     # Make temp directory for visualizations
@@ -733,7 +754,7 @@ def postprocess_segment(
     max_tilt_angle_deg: float = 30.0,
     mask_morph_closing_size_sec: float = 0.03,
     min_subsegment_duration_sec: float = 0.1,
-    image_crop_size: int = 900,
+    image_crop_size: int = 912,
     visualize: bool = False,
     camera_elevation: float = 30.0,
     max_abs_azimuth: float = 30.0,
@@ -741,6 +762,12 @@ def postprocess_segment(
     n_jobs: int = -1,
     use_flybody: bool = False,
 ):
+    if image_crop_size % 16 != 0:
+        raise ValueError(
+            f"image_crop_size ({image_crop_size}) must be a multiple of 16 to prevent "
+            "FFMPEG from automatically padding the output video."
+        )
+
     if not recording_dir.is_dir():
         raise FileNotFoundError(f"{recording_dir} is not a directory.")
 
@@ -791,7 +818,6 @@ def postprocess_segment(
                 image_crop_size,
                 n_jobs=n_jobs,
                 use_flybody=use_flybody,
-
             )
 
             # Visualize the subsegment if requested
