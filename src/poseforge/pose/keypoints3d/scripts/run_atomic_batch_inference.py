@@ -49,7 +49,7 @@ def _find_unique_file(base_dir: Path, patterns: tuple[str, ...], description: st
     return unique_matches[0]
 
 
-def _resolve_model_artifacts(
+def  _resolve_model_artifacts(
     model_dir: Path,
     *,
     architecture_config_path: Path | None = None,

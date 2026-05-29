@@ -67,6 +67,46 @@ class LossConfig(SerializableDataClass):
 
 
 @dataclass(frozen=True)
+class AugmentationConfig(SerializableDataClass):
+    """Configuration for training-time augmentations targeting sim-to-real
+    transfer. Each augmentation can be independently enabled/disabled."""
+
+    # --- RandomScaleCrop (scale jittering) ---
+    # Enable random scale crop augmentation
+    scale_crop_enabled: bool = False
+    # Range of scale factors (log-uniform sampling). <1 = zoom-in, >1 = zoom-out
+    scale_crop_range: tuple[float, float] = (0.7, 1.3)
+    # Probability of applying scale crop per sample
+    scale_crop_p: float = 0.5
+
+    # --- DomainRandomization (photometric jitter) ---
+    # Enable domain randomization augmentation
+    domain_randomization_enabled: bool = False
+    # Gaussian blur sigma range
+    blur_sigma_range: tuple[float, float] = (0.1, 2.0)
+    # Probability of applying blur per sample
+    blur_p: float = 0.3
+    # Downsample-then-upsample factor range (fraction of original resolution)
+    downsample_factor_range: tuple[float, float] = (0.25, 0.8)
+    # Probability of applying downsample-upsample per sample
+    downsample_p: float = 0.3
+    # Additive Gaussian noise std range (relative to [0, 1] pixel range)
+    noise_std_range: tuple[float, float] = (0.0, 0.05)
+    # Probability of applying sensor noise per sample
+    noise_p: float = 0.4
+    # Multiplicative contrast factor range
+    contrast_range: tuple[float, float] = (0.6, 1.4)
+    # Additive brightness shift range
+    brightness_range: tuple[float, float] = (-0.1, 0.1)
+    # Probability of applying contrast/brightness jitter per sample
+    contrast_p: float = 0.4
+    # Gamma correction exponent range
+    gamma_range: tuple[float, float] = (0.7, 1.5)
+    # Probability of applying gamma correction per sample
+    gamma_p: float = 0.3
+
+
+@dataclass(frozen=True)
 class TrainingDataConfig(SerializableDataClass):
     # Paths to training data (recursively containing atomic batches)
     train_data_dirs: list[str]
