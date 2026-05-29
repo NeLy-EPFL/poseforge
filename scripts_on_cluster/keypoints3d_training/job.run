@@ -20,8 +20,9 @@ conda activate poseforge
 cd $HOME/poseforge
 
 atomic_variants_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
-out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260507_tiled_10noise"
-activation_noise_std=10.0
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260529_tiled_hs8"
+activation_noise_std=0.0
+heatmap_sigma=8.0
 
 training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
 
@@ -36,6 +37,7 @@ python -u $training_cli_path \
     --model-architecture-config.activation-noise-std $activation_noise_std \
     --model-weights-config.feature-extractor-weights \
         "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
+    --loss-config.heatmap-sigma $heatmap_sigma \
     --training-data-config.train-data-dirs \
         "$atomic_variants_base_dir/BO_Gal4_fly1_trial001" \
         "$atomic_variants_base_dir/BO_Gal4_fly1_trial002" \
