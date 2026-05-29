@@ -142,6 +142,11 @@ class OptimizerConfig(SerializableDataClass):
     learning_rate_depth_head: float = 3e-4
     # Weight decay for AdamW optimizer
     weight_decay: float = 1e-5
+    # Number of epochs to keep the feature extractor (encoder) frozen at the
+    # start of training. During these epochs the encoder LR is set to 0 so
+    # only the decoder and heads learn. After this warm-up, the encoder LR is
+    # restored to `learning_rate_encoder`. Set to 0 to disable (default).
+    freeze_encoder_n_epochs: int = 0
 
 
 @dataclass(frozen=True)

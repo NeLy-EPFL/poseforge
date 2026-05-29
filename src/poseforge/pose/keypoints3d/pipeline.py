@@ -109,6 +109,19 @@ class Pose2p5DPipeline:
         # Set up optimizer
         optimizer = self._create_optimizer(optimizer_config)
 
+        # Encoder freezing: set encoder LR to 0 for the first N epochs
+        # so only decoder/heads learn. The encoder param group is index 0
+        # in _create_optimizer(). We store the target LR to restore later.
+        freeze_encoder_n_epochs = optimizer_config.freeze_encoder_n_epochs
+        encoder_target_lr = optimizer_config.learning_rate_encoder
+        if freeze_encoder_n_epochs > 0:
+            optimizer.param_groups[0]["lr"] = 0.0
+            logging.info(
+                f"Encoder frozen for the first {freeze_encoder_n_epochs} epoch(s). "
+                f"Encoder LR will be restored to {encoder_target_lr} at epoch "
+                f"{freeze_encoder_n_epochs}."
+            )
+
         # Set up mixed-point training
         grad_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         self._check_amp_status_for_model_params(
@@ -122,6 +135,14 @@ class Pose2p5DPipeline:
         # Training loop
         self.model.train()
         for epoch_idx in range(n_epochs):
+            # Unfreeze encoder when warm-up period is over
+            if epoch_idx == freeze_encoder_n_epochs and freeze_encoder_n_epochs > 0:
+                optimizer.param_groups[0]["lr"] = encoder_target_lr
+                logging.info(
+                    f"Encoder unfrozen at epoch {epoch_idx}. "
+                    f"Encoder LR set to {encoder_target_lr}."
+                )
+
             logging.info(
                 f"Starting epoch {epoch_idx} out of {n_epochs} at {datetime.now()}"
             )
