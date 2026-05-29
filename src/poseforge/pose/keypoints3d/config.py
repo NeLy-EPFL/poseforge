@@ -31,6 +31,10 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Std dev of multiplicative Gaussian noise applied to ResNet activations during training.
     # Set to 0.0 to disable.
     activation_noise_std: float = 0.0
+    # Spatial dropout probability applied between decoder layers during training.
+    # Drops entire feature map channels (Dropout2d) to prevent the decoder from
+    # overfitting to synthetic-specific spatial patterns. Set to 0.0 to disable.
+    decoder_spatial_dropout_p: float = 0.0
 
 
 @dataclass(frozen=True)
