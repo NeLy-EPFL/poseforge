@@ -35,6 +35,17 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Drops entire feature map channels (Dropout2d) to prevent the decoder from
     # overfitting to synthetic-specific spatial patterns. Set to 0.0 to disable.
     decoder_spatial_dropout_p: float = 0.0
+    # Number of hidden layers inserted in the x-y heatmap head. 0 (default) =
+    # single 3x3 conv mapping decoder features straight to per-keypoint logits
+    # (backward-compatible). N > 0 inserts N (3x3 conv -> GroupNorm -> ReLU)
+    # blocks at width `heatmap_hidden_channels` BEFORE the existing final 3x3
+    # conv. Receptive field of the head grows by 2 heatmap pixels per added
+    # hidden layer; param count grows roughly as N * 9 * C^2.
+    heatmap_n_hidden_layers: int = 0
+    # Width of hidden layers in the heatmap head. Only used when
+    # `heatmap_n_hidden_layers > 0`. Must be a multiple of `groupnorm_n_groups`
+    # and >= `groupnorm_n_groups`.
+    heatmap_hidden_channels: int = 64
 
 
 @dataclass(frozen=True)
