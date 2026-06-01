@@ -15,6 +15,7 @@ from typing import Any
 
 import h5py
 import numpy as np
+import cv2
 import torch
 import yaml
 from tqdm import tqdm
@@ -212,6 +213,96 @@ def _save_keypoints3d_predictions(
             f.attrs[key] = value
 
 
+def _round_up_to_multiple(value: int, multiple: int) -> int:
+    return ((value + multiple - 1) // multiple) * multiple
+
+
+def _frames_tensor_to_uint8_rgb(frames: np.ndarray) -> np.ndarray:
+    """Convert a single atomic-batch frame tensor to uint8 RGB.
+
+    Expected input shape: (n_channels, H, W).
+    """
+    if frames.ndim != 3:
+        raise ValueError(f"Expected a single frame with shape (C, H, W), got {frames.shape}")
+
+    n_channels, height, width = frames.shape
+    if n_channels == 1:
+        rgb = np.repeat(frames, 3, axis=0)
+    elif n_channels == 3:
+        rgb = frames
+    else:
+        raise ValueError(f"Expected 1 or 3 channels, got {n_channels}")
+
+    rgb = np.clip(rgb, 0.0, 1.0)
+    rgb = (rgb * 255.0).astype(np.uint8)
+    return np.transpose(rgb, (1, 2, 0))
+
+
+def _draw_green_keypoints(image_rgb: np.ndarray, keypoints_xy: np.ndarray) -> np.ndarray:
+    """Draw keypoints on an RGB image using green filled circles."""
+    if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+        raise ValueError(f"Expected an RGB image with shape (H, W, 3), got {image_rgb.shape}")
+
+    overlay = image_rgb.copy()
+    height, width = overlay.shape[:2]
+    for keypoint in keypoints_xy:
+        x, y = keypoint[:2]
+        if not np.isfinite(x) or not np.isfinite(y):
+            continue
+        x_int = int(round(float(x)))
+        y_int = int(round(float(y)))
+        if x_int < 0 or x_int >= width or y_int < 0 or y_int >= height:
+            continue
+        cv2.circle(overlay, (x_int, y_int), radius=4, color=(0, 255, 0), thickness=-1)
+    return overlay
+
+
+def _save_keypoints3d_overlay_video(
+    output_path: Path,
+    *,
+    frames: torch.Tensor,
+    pred_xy: np.ndarray,
+    spacing: int = 10,
+    fps: int = 15,
+) -> None:
+    """Write a video overlaying predicted keypoints in green on the input atomic batch frames.
+
+    The video preserves the atomic batch layout by placing each variant side by side.
+    """
+    frames_np = frames.detach().cpu().numpy()
+    if frames_np.ndim != 5:
+        raise ValueError(f"Expected frames with shape (n_variants, n_frames, C, H, W), got {frames_np.shape}")
+
+    n_variants, n_frames, n_channels, n_rows, n_cols = frames_np.shape
+    if pred_xy.shape[:3] != (n_variants, n_frames, pred_xy.shape[2]):
+        raise ValueError(f"Unexpected pred_xy shape {pred_xy.shape} for frames shape {frames_np.shape}")
+
+    total_width = _round_up_to_multiple((n_cols * n_variants) + (n_variants - 1) * spacing, 16)
+    total_height = _round_up_to_multiple(n_rows, 16)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    video_writer = cv2.VideoWriter(str(output_path), fourcc, fps, (total_width, total_height))
+    if not video_writer.isOpened():
+        raise RuntimeError(f"Failed to open video writer for {output_path}")
+
+    try:
+        for frame_idx in range(n_frames):
+            canvas = np.zeros((total_height, total_width, 3), dtype=np.uint8)
+            for variant_idx in range(n_variants):
+                start_col = variant_idx * (n_cols + spacing)
+                end_col = start_col + n_cols
+                variant_frame = _frames_tensor_to_uint8_rgb(frames_np[variant_idx, frame_idx])
+                variant_overlay = _draw_green_keypoints(
+                    variant_frame,
+                    pred_xy[variant_idx, frame_idx],
+                )
+                canvas[:n_rows, start_col:end_col, :] = variant_overlay
+            video_writer.write(canvas)
+    finally:
+        video_writer.release()
+
+
 def run_atomic_batch_inference(
     atomic_batch_dir: Path,
     model_dir: Path,
@@ -319,6 +410,14 @@ def run_atomic_batch_inference(
         conf_xy = pred_dict["conf_xy"].reshape(n_variants, n_frames, -1)
         conf_depth = pred_dict["conf_depth"].reshape(n_variants, n_frames, -1)
 
+        overlay_path = batch_root / f"{batch_stem}_keypoints3d_overlay.mp4"
+        _save_keypoints3d_overlay_video(
+            overlay_path,
+            frames=frames,
+            pred_xy=pred_xy.detach().cpu().numpy(),
+            spacing=frames_serialization_spacing,
+        )
+
         out_path = batch_root / f"{batch_stem}_keypoints3d_pred.h5"
         _save_keypoints3d_predictions(
             out_path,
@@ -329,6 +428,7 @@ def run_atomic_batch_inference(
             keypoint_names=keypoint_names,
             metadata=model_metadata,
         )
+        logging.info(f"Wrote keypoints3d overlay video to {overlay_path}")
         logging.info(f"Wrote keypoints3d predictions to {out_path}")
 
 
