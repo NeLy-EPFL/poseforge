@@ -16,11 +16,30 @@ class SimulatedDataSequence:
         cache_metadata: bool = True,
         use_cached_metadata: bool = True,
         original_image_size: tuple[int, int] | None = None,
+        target_image_size: tuple[int, int] | None = None,
     ):
+        """
+        Args:
+            ...
+            original_image_size: (H, W) source content size for this simulation
+                (i.e. the MuJoCo camera resolution). Used as the calibration of
+                the keypoint and segmentation map coordinate space, and to strip
+                any FFMPEG codec padding from the loaded video frames. Auto-
+                derived from the segmentation labels shape if not provided.
+            target_image_size: If set, frames, segmentation maps, and keypoint
+                xy are returned at this (H, W). Frames are cropped to
+                `original_image_size` (removing codec padding) then resized
+                with INTER_AREA; segmentation maps are resized from
+                `original_image_size` with INTER_NEAREST; keypoint xy are
+                scaled by `target / original` (depth untouched). When set,
+                ``self.frame_size`` reports the target size. When None,
+                behavior is unchanged (frames returned at the raw video size).
+        """
         self.synthetic_video_paths = synthetic_video_paths
         self.simulated_labels_path = simulated_labels_path
         self.sim_name = sim_name
         self.original_image_size = original_image_size
+        self.target_image_size = target_image_size
 
         # Validate input paths
         for path in synthetic_video_paths:
@@ -41,7 +60,7 @@ class SimulatedDataSequence:
             synthetic_video_paths[0], cache_metadata, use_cached_metadata
         )
         self.n_frames = metadata["n_frames"]
-        self.frame_size = metadata["frame_size"]
+        self._video_frame_size = metadata["frame_size"]  # raw video (may be codec-padded)
         self.fps = metadata["fps"]
 
         # If original_image_size was not provided manually, extract it from the segmentation labels
@@ -53,6 +72,19 @@ class SimulatedDataSequence:
         # If there's a mismatch between the original image size and the video frame size,
         # we assume it is due to FFMPEG padding the output video to a multiple of 16.
         # We will pad the segmentation maps to match, and leave keypoints unscaled.
+
+        # When target_image_size is set, all returned frames / seg maps / xy live
+        # in target-pixel space. We need original_image_size to do the rescaling.
+        if self.target_image_size is not None:
+            if self.original_image_size is None:
+                raise ValueError(
+                    "target_image_size was specified but original_image_size could not be "
+                    "determined (no simulated_labels_path and no manual value). Pass "
+                    "original_image_size explicitly."
+                )
+            self.frame_size = tuple(self.target_image_size)
+        else:
+            self.frame_size = self._video_frame_size
 
     def get_sim_data_metadata(self) -> dict:
         metadata = {}
@@ -108,11 +140,28 @@ class SimulatedDataSequence:
         data = np.empty(
             (len(variant_indices), len(frame_indices), *self.frame_size), dtype=np.uint8
         )
+        do_resize = self.target_image_size is not None
+        if do_resize:
+            orig_h, orig_w = self.original_image_size
+            target_h, target_w = self.target_image_size
+
         for i, variant_idx in enumerate(variant_indices):
             video_path = self.synthetic_video_paths[variant_idx]
             frames, fps = read_frames_from_video(video_path, frame_indices)
             for j, frame in enumerate(frames):
-                data[i, j, :, :] = frame[:, :, 0]  # only 1 channel (grayscale)
+                gray = frame[:, :, 0]  # only 1 channel (grayscale)
+                if do_resize:
+                    # Crop to original_image_size (strip FFMPEG codec padding),
+                    # then resize to target_image_size with INTER_AREA (good
+                    # for downsampling).
+                    gray = gray[:orig_h, :orig_w]
+                    if (orig_h, orig_w) != (target_h, target_w):
+                        gray = cv2.resize(
+                            gray,
+                            (target_w, target_h),  # cv2 takes (W, H)
+                            interpolation=cv2.INTER_AREA,
+                        )
+                data[i, j, :, :] = gray
         return data
 
     def read_simulated_labels(
@@ -139,6 +188,16 @@ class SimulatedDataSequence:
                 assert (
                     len(keypoint_pos.shape) == 3 and keypoint_pos.shape[2] == 3
                 ), f"Unexpected keypoint_pos shape: {keypoint_pos.shape}"
+                # Scale xy when an extraction-time resize is in effect. Depth
+                # (index 2) is in mm and must NOT be scaled.
+                if self.target_image_size is not None:
+                    orig_h, orig_w = self.original_image_size
+                    target_h, target_w = self.target_image_size
+                    scale_x = target_w / orig_w
+                    scale_y = target_h / orig_h
+                    keypoint_pos = keypoint_pos.astype(np.float32, copy=True)
+                    keypoint_pos[..., 0] *= scale_x
+                    keypoint_pos[..., 1] *= scale_y
                 labels["keypoint_pos"] = keypoint_pos
 
             if load_mesh_states:
@@ -149,27 +208,49 @@ class SimulatedDataSequence:
 
             if load_body_seg_maps:
                 seg_labels_ds = ds["segmentation_labels"]
-                
+
                 target_frame_size = self.frame_size
                 resized_body_seg_maps = np.empty(
                     (len(frame_indices), *target_frame_size), dtype=np.uint8
                 )
-                
-                # If padding is needed due to FFMPEG
-                pad_bottom = 0
-                pad_right = 0
-                if self.original_image_size is not None:
-                    pad_bottom = max(0, target_frame_size[0] - self.original_image_size[0])
-                    pad_right = max(0, target_frame_size[1] - self.original_image_size[1])
 
-                for i, frame_idx in enumerate(frame_indices):
-                    input_map = seg_labels_ds[frame_idx, :, :]
-                    if pad_bottom > 0 or pad_right > 0:
-                        resized_body_seg_maps[i, :, :] = cv2.copyMakeBorder(
-                            input_map, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=0
-                        )
-                    else:
-                        resized_body_seg_maps[i, :, :] = input_map
+                if self.target_image_size is not None:
+                    # Resize from original_image_size to target_image_size using
+                    # nearest-neighbor (seg maps are class indices).
+                    out_h, out_w = self.target_image_size
+                    orig_h, orig_w = self.original_image_size
+                    same_size = (out_h, out_w) == (orig_h, orig_w)
+                    for i, frame_idx in enumerate(frame_indices):
+                        input_map = seg_labels_ds[frame_idx, :, :]
+                        # Defensively crop in case the stored map is larger than
+                        # the declared original_image_size.
+                        input_map = input_map[:orig_h, :orig_w]
+                        if same_size:
+                            resized_body_seg_maps[i, :, :] = input_map
+                        else:
+                            resized_body_seg_maps[i, :, :] = cv2.resize(
+                                input_map,
+                                (out_w, out_h),  # cv2 takes (W, H)
+                                interpolation=cv2.INTER_NEAREST,
+                            )
+                else:
+                    # Original behavior: optionally pad seg maps when the video
+                    # was FFMPEG-padded above original_image_size.
+                    pad_bottom = 0
+                    pad_right = 0
+                    if self.original_image_size is not None:
+                        pad_bottom = max(0, target_frame_size[0] - self.original_image_size[0])
+                        pad_right = max(0, target_frame_size[1] - self.original_image_size[1])
+
+                    for i, frame_idx in enumerate(frame_indices):
+                        input_map = seg_labels_ds[frame_idx, :, :]
+                        if pad_bottom > 0 or pad_right > 0:
+                            resized_body_seg_maps[i, :, :] = cv2.copyMakeBorder(
+                                input_map, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=0
+                            )
+                        else:
+                            resized_body_seg_maps[i, :, :] = input_map
+
                 labels["body_seg_maps"] = resized_body_seg_maps
 
         return labels
