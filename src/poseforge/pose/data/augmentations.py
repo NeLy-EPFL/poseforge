@@ -261,23 +261,25 @@ class DomainRandomization(nn.Module):
         kernels_1d = kernels_1d / kernels_1d.sum(dim=1, keepdim=True)  # normalize
 
         # Separable 2D blur: horizontal then vertical
+        # Use grouped conv where each group is one channel of one sample.
+        # Input must be (1, N*C, H, W) so N*C is the channel dim for groups.
         C = images.shape[1]
-        # Reshape for grouped convolution: (N*C, 1, H, W)
-        imgs = images.reshape(N * C, 1, images.shape[2], images.shape[3])
+        G = N * C
+        imgs = images.reshape(1, G, images.shape[2], images.shape[3])
 
         # Horizontal kernel: (N*C, 1, 1, kernel_size)
         kh = kernels_1d.unsqueeze(1).unsqueeze(2)  # (N, 1, 1, ks)
-        kh = kh.repeat(1, C, 1, 1).reshape(N * C, 1, 1, kernel_size)
+        kh = kh.repeat(1, C, 1, 1).reshape(G, 1, 1, kernel_size)
 
         # Vertical kernel: (N*C, 1, kernel_size, 1)
         kv = kernels_1d.unsqueeze(1).unsqueeze(3)  # (N, 1, ks, 1)
-        kv = kv.repeat(1, C, 1, 1).reshape(N * C, 1, kernel_size, 1)
+        kv = kv.repeat(1, C, 1, 1).reshape(G, 1, kernel_size, 1)
 
         # Apply as depthwise conv (groups = N*C)
         padded = F.pad(imgs, (radius, radius, 0, 0), mode="reflect")
-        blurred = F.conv2d(padded, kh.flip(-1), groups=N * C)
+        blurred = F.conv2d(padded, kh.flip(-1), groups=G)
         padded = F.pad(blurred, (0, 0, radius, radius), mode="reflect")
-        blurred = F.conv2d(padded, kv.flip(-2), groups=N * C)
+        blurred = F.conv2d(padded, kv.flip(-2), groups=G)
 
         return blurred.reshape(images.shape)
 
