@@ -21,7 +21,12 @@ set -euo pipefail
 
 # ---- Edit this list with your checkpoints ----
 CHECKPOINTS=(
-    "/Volumes/upramdya/data/VAS/poseforge/improve_kpt/trial_20260529_tiled_keypoints3d_freeze/checkpoints/epoch0_step1000.model.pth"
+    "/home/stimpfling/poseforge/production_models/keypoints3d/checkpoints/epoch19_step9167.model.pth"
+    "/mnt/upramdya_data/VAS/poseforge/production/pose_estimation/keypoints3d/trial_20260507_tiled/checkpoints/epoch19_step2039.model.pth"
+    "/mnt/upramdya_data/VAS/poseforge/improve_kpt/trial_20260529_tiled_keypoints3d_drop03/checkpoints/epoch6_step1439.model.pth"
+    "/mnt/upramdya_data/VAS/poseforge/improve_kpt/trial_20260529_tiled_keypoints3d_freeze/checkpoints/epoch17_step1000.model.pth"
+    "/mnt/upramdya_data/VAS/poseforge/improve_kpt/trial_20260529_tiled_keypoints3d_hs8/checkpoints/epoch15_step1439.model.pth"
+    "/mnt/upramdya_data/VAS/poseforge/improve_kpt/trial_20260529_tiled_keypoints3d_nodepth/checkpoints/epoch14_step1000.model.pth"
     # Add more checkpoints here, one per line:
     # "/path/to/another/trial_.../checkpoints/epochN_stepM.model.pth"
 )
