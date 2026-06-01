@@ -6,10 +6,11 @@ from poseforge.style_transfer import parse_hyperparameters_from_checkpoint_path
 
 
 scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
-data_base_dir = scratch_user_dir / "bulk_data"
-data_base_dir_flybody = scratch_user_dir / "bulk_data_flybody"
+data_base_dir = scratch_user_dir / "/poseforge/data/bulk_data"
+data_base_dir_flybody = scratch_user_dir / "poseforge/data/bulk_data_flybody"
 
-checkpoints_basedir = Path("/mnt/upramdya_data/VAS/poseforge_checkpoints")
+checkpoints_basedir = Path("/scratch/stimpfli/poseforge/style_transfer_old/checkpoint_backups/")
+output_basedir = scratch_user_dir / "poseforge/style_transfer/production/tiled_translated_videos"
 
 def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, str, str]:
     """Infer simulations_basedir, output_basedir, and input_video_filename from checkpoint.
@@ -33,45 +34,45 @@ def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, st
     
     if is_flybody:
         sim_base = str(data_base_dir_flybody)
-        out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody")
+        out_base = str(output_basedir / "flybody")
         if "grayscale" in dataroot or "gray" in dataroot:
             video_file = "processed_nmf_sim_render_flybody_grayscale.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody_gray")
+            out_base = str(output_basedir / "flybody_gray")
         elif "base" in dataroot:
             video_file = "processed_nmf_sim_render_flybody_base.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody_base")
+            out_base = str(output_basedir / "flybody_base")
         elif "link" in dataroot:
             video_file = "processed_nmf_sim_render_per_link_color.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody_link")
+            out_base = str(output_basedir / "flybody_link")
         elif "segment_id" in dataroot or "segmentid" in dataroot:
             video_file = "processed_nmf_sim_segment_id.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody_segment")
+            out_base = str(output_basedir / "flybody_segment")
         elif "depth" in dataroot:
             video_file = "processed_nmf_sim_depth.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/flybody_depth")
+            out_base = str(output_basedir / "/flybody_depth")
         else:
             video_file = "processed_nmf_sim_render_flybody_grayscale.mp4"
     else:
         sim_base = str(data_base_dir)
-        out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/standard")
+        out_base = str(output_basedir / "standard")
         if "gray" in dataroot or "grayscale" in dataroot:
             video_file = "processed_nmf_sim_render_grayscale.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/standard_gray")
+            out_base = str(output_basedir / "standard_gray")
         elif "base" in dataroot:
             video_file = "processed_nmf_sim_render_base.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/standard_base")
+            out_base = str(output_basedir / "standard_base")
         elif "link" in dataroot:
             video_file = "processed_nmf_sim_render_per_link_color.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/standard_link")
+            out_base = str(output_basedir / "standard_link")
         elif "segment_id" in dataroot or "segmentid" in dataroot:
             video_file = "processed_nmf_sim_segment_id.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/standard_segment")
+            out_base = str(output_basedir / "standard_segment")
         elif "depth" in dataroot:
             video_file = "processed_nmf_sim_depth.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/standard_depth")
+            out_base = str(output_basedir / "standard_depth")
         elif dataroot.endswith("aymanns2022_pseudocolor_spotlight_dataset"):
             video_file = "processed_nmf_sim_render_per_link_color.mp4"
-            out_base = str(scratch_user_dir / "style_transfer/production/tiled_translated_videos/spotlight")
+            out_base = str(output_basedir / "spotlight")
         else:
             video_file = "processed_nmf_sim_render_base.mp4"
     

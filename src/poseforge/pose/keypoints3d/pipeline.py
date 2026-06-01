@@ -56,10 +56,41 @@ class Pose2p5DPipeline:
         data_config: config.TrainingDataConfig,
         optimizer_config: config.OptimizerConfig,
         artifacts_config: config.TrainingArtifactsConfig,
+        augmentation_config: config.AugmentationConfig | None = None,
         seed: int = 42,
     ):
         # Set seed for reproducibility
         set_random_seed(seed)
+
+        # Set up augmentations
+        scale_crop_aug = None
+        domain_rand_aug = None
+        if augmentation_config is not None:
+            if augmentation_config.scale_crop_enabled:
+                from poseforge.pose.data.augmentations import RandomScaleCrop
+                scale_crop_aug = RandomScaleCrop(
+                    scale_range=augmentation_config.scale_crop_range,
+                    p=augmentation_config.scale_crop_p,
+                )
+                scale_crop_aug.train()
+                logging.info(f"Scale crop augmentation enabled: {scale_crop_aug}")
+            if augmentation_config.domain_randomization_enabled:
+                from poseforge.pose.data.augmentations import DomainRandomization
+                domain_rand_aug = DomainRandomization(
+                    blur_sigma_range=augmentation_config.blur_sigma_range,
+                    blur_p=augmentation_config.blur_p,
+                    downsample_factor_range=augmentation_config.downsample_factor_range,
+                    downsample_p=augmentation_config.downsample_p,
+                    noise_std_range=augmentation_config.noise_std_range,
+                    noise_p=augmentation_config.noise_p,
+                    contrast_range=augmentation_config.contrast_range,
+                    brightness_range=augmentation_config.brightness_range,
+                    contrast_p=augmentation_config.contrast_p,
+                    gamma_range=augmentation_config.gamma_range,
+                    gamma_p=augmentation_config.gamma_p,
+                )
+                domain_rand_aug.train()
+                logging.info(f"Domain randomization enabled: {domain_rand_aug}")
 
         # Set up training and validation data
         train_ds, train_loader = self._init_training_dataset_and_dataloader(data_config)
@@ -78,6 +109,19 @@ class Pose2p5DPipeline:
         # Set up optimizer
         optimizer = self._create_optimizer(optimizer_config)
 
+        # Encoder freezing: set encoder LR to 0 for the first N epochs
+        # so only decoder/heads learn. The encoder param group is index 0
+        # in _create_optimizer(). We store the target LR to restore later.
+        freeze_encoder_n_epochs = optimizer_config.freeze_encoder_n_epochs
+        encoder_target_lr = optimizer_config.learning_rate_encoder
+        if freeze_encoder_n_epochs > 0:
+            optimizer.param_groups[0]["lr"] = 0.0
+            logging.info(
+                f"Encoder frozen for the first {freeze_encoder_n_epochs} epoch(s). "
+                f"Encoder LR will be restored to {encoder_target_lr} at epoch "
+                f"{freeze_encoder_n_epochs}."
+            )
+
         # Set up mixed-point training
         grad_scaler = torch.amp.GradScaler(self.device_type, enabled=self.use_float16)
         self._check_amp_status_for_model_params(
@@ -91,6 +135,14 @@ class Pose2p5DPipeline:
         # Training loop
         self.model.train()
         for epoch_idx in range(n_epochs):
+            # Unfreeze encoder when warm-up period is over
+            if epoch_idx == freeze_encoder_n_epochs and freeze_encoder_n_epochs > 0:
+                optimizer.param_groups[0]["lr"] = encoder_target_lr
+                logging.info(
+                    f"Encoder unfrozen at epoch {epoch_idx}. "
+                    f"Encoder LR set to {encoder_target_lr}."
+                )
+
             logging.info(
                 f"Starting epoch {epoch_idx} out of {n_epochs} at {datetime.now()}"
             )
@@ -105,11 +157,21 @@ class Pose2p5DPipeline:
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
 
+                # Apply training-time augmentations (before forward pass)
+                xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
+                depth_labels = sim_data_collapsed["keypoint_pos"][:, :, 2]
+
+                if scale_crop_aug is not None:
+                    frames_collapsed, xy_labels = scale_crop_aug(
+                        frames_collapsed, xy_labels
+                    )
+
+                if domain_rand_aug is not None:
+                    frames_collapsed = domain_rand_aug(frames_collapsed)
+
                 # Run models
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames_collapsed)
-                    xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                    depth_labels = sim_data_collapsed["keypoint_pos"][:, :, 2]
                     loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,

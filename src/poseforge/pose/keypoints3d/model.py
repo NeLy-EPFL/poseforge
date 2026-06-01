@@ -47,6 +47,7 @@ class Pose2p5DModel(nn.Module):
         groupnorm_n_groups: int = 32,
         pose_head_init_std: float = 1e-3,
         activation_noise_std: float = 0.0,
+        decoder_spatial_dropout_p: float = 0.0,
     ):
         """
         Args:
@@ -77,6 +78,11 @@ class Pose2p5DModel(nn.Module):
                 heatmap/depth head layers that are not followed by ReLU.
             activation_noise_std (float): Standard deviation of multiplicative
                 noise applied to activations during training.
+            decoder_spatial_dropout_p (float): Probability for spatial
+                dropout (Dropout2d) applied between decoder layers during
+                training. Drops entire feature map channels to prevent
+                the decoder from overfitting to synthetic-specific spatial
+                patterns. Set to 0.0 to disable (default).
         """
         super().__init__()
         self.n_keypoints = n_keypoints
@@ -91,6 +97,11 @@ class Pose2p5DModel(nn.Module):
         self.groupnorm_n_groups = groupnorm_n_groups
         self.pose_head_init_std = pose_head_init_std
         self.activation_noise_std = activation_noise_std
+        self.decoder_spatial_dropout_p = decoder_spatial_dropout_p
+
+        # Spatial dropout for decoder (drops entire channels)
+        # nn.Dropout2d is a no-op when p=0.0 or in eval mode
+        self.decoder_dropout = nn.Dropout2d(p=decoder_spatial_dropout_p)
 
         # Check input validity
         if confidence_method not in ["entropy", "peak"]:
@@ -174,6 +185,7 @@ class Pose2p5DModel(nn.Module):
             groupnorm_n_groups=architecture_config.groupnorm_n_groups,
             pose_head_init_std=architecture_config.pose_head_init_std,
             activation_noise_std=architecture_config.activation_noise_std,
+            decoder_spatial_dropout_p=architecture_config.decoder_spatial_dropout_p,
         )
 
         logging.info("Created Pose2p5DModel from architecture config")
@@ -470,11 +482,12 @@ class Pose2p5DModel(nn.Module):
 
         d4 = e4  # this is just the bottleneck
 
-        # Upsample with skip connections
-        d3 = self.dec_layer4(d4, e3)
-        d2 = self.dec_layer3(d3, e2)
-        d1 = self.dec_layer2(d2, e1)
+        # Upsample with skip connections and spatial dropout between layers
+        d3 = self.decoder_dropout(self.dec_layer4(d4, e3))
+        d2 = self.decoder_dropout(self.dec_layer3(d3, e2))
+        d1 = self.decoder_dropout(self.dec_layer2(d2, e1))
         d0 = self.dec_layer1(d1, e0)  # (N, upsample_core_out_channels, 128, 128)
+        # No dropout after the last decoder layer — let the heads see clean features
 
         # Compute x-y heatmaps
         # Compute logits using heatmap head

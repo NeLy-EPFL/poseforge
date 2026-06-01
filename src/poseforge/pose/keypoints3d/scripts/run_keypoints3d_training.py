@@ -39,6 +39,7 @@ def train_keypoints3d_model(
     training_data_config: config.TrainingDataConfig,
     optimizer_config: config.OptimizerConfig,
     training_artifacts_config: config.TrainingArtifactsConfig,
+    augmentation_config: config.AugmentationConfig = config.AugmentationConfig(),
     seed: int = 42,
 ) -> None:
     """Train a 3D keypoint detection model, typically using a pretrained
@@ -55,6 +56,8 @@ def train_keypoints3d_model(
             schedule.
         training_artifacts_config: Configuration for saving training
             artifacts.
+        augmentation_config: Configuration for training-time augmentations
+            (scale crop, domain randomization). Disabled by default.
         seed: Random seed for reproducibility.
     """
     # System setup
@@ -73,6 +76,7 @@ def train_keypoints3d_model(
     training_data_config.save(configs_dir / "data_config.yaml")
     optimizer_config.save(configs_dir / "optimizer_config.yaml")
     training_artifacts_config.save(configs_dir / "artifacts_config.yaml")
+    augmentation_config.save(configs_dir / "augmentation_config.yaml")
 
     # Initialize model and loss function
     pose_model = _setup_model(model_architecture_config, model_weights_config)
@@ -93,6 +97,7 @@ def train_keypoints3d_model(
         data_config=training_data_config,
         optimizer_config=optimizer_config,
         artifacts_config=training_artifacts_config,
+        augmentation_config=augmentation_config,
         seed=seed,
     )
 
