@@ -24,7 +24,7 @@ def find_all_simulation_paths(simulations_basedir: Path) -> list[Path]:
     Looks for directories containing any of the expected video files.
     """
     all_simulation_paths = []
-    for sim_dir in simulations_basedir.rglob("*"):
+    for sim_dir in simulations_basedir.rglob("subsegment_*"):
         if not sim_dir.is_dir():
             continue
         # Check if this directory contains video files

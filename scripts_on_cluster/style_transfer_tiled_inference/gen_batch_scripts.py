@@ -5,12 +5,13 @@ from pathlib import Path
 from poseforge.style_transfer import parse_hyperparameters_from_checkpoint_path
 
 
-scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
-data_base_dir = scratch_user_dir / "/poseforge/data/bulk_data"
-data_base_dir_flybody = scratch_user_dir / "poseforge/data/bulk_data_flybody"
+#scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
+work_user_dir = Path("/work/upramdya/stimpfli")
+data_base_dir = work_user_dir / "/poseforge/data/nmf_rendering"
+data_base_dir_flybody = work_user_dir / "poseforge/data/nmf_rendering_flybody"
 
 checkpoints_basedir = Path("/scratch/stimpfli/poseforge/style_transfer_old/checkpoint_backups/")
-output_basedir = scratch_user_dir / "poseforge/style_transfer/production/tiled_translated_videos"
+output_basedir = work_user_dir / "poseforge/style_transfer/production/tiled_translated_videos"
 
 def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, str, str]:
     """Infer simulations_basedir, output_basedir, and input_video_filename from checkpoint.
