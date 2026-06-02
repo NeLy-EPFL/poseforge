@@ -278,13 +278,23 @@ def process_simulation_tiled(
     debug_mode: bool = False,
     progress_bar: bool = True,
     clear_memory_cache_after: bool = True,
+    no_override: bool = False,
 ) -> None:
     """Run tiled style transfer over all frames in a simulation video.
-    
+
     If randomize_seams is True, each frame gets a random y_phase and x_phase
     sampled uniformly from [0, tile_size/2), giving different seam patterns
     per image while maintaining exact 2x2 tile coverage.
+
+    If no_override is True, skip processing when output_video_path already
+    exists, leaving the existing file (and its parent directory) untouched.
     """
+    if no_override and output_video_path.is_file():
+        logging.info(
+            f"Output already exists, skipping (no_override=True): {output_video_path}"
+        )
+        return
+
     input_frames, fps = read_frames_from_video(input_video_path)
 
     if len(input_frames) == 0:

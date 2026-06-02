@@ -70,6 +70,7 @@ def run_tiled_inference_all_simulations(
     device: str = "cuda",
     memory_cleanup_interval: int = 10,
     verbose: bool = False,
+    no_override: bool = False,
 ) -> None:
     """Run tiled style transfer inference on all NeuroMechFly simulations.
 
@@ -105,6 +106,9 @@ def run_tiled_inference_all_simulations(
         memory_cleanup_interval (int): Interval (in number of simulations
             processed) to perform memory cleanup.
         verbose (bool): Whether to print detailed logs.
+        no_override (bool): If True, skip simulations whose output video
+            already exists, preserving the existing output directory and
+            file untouched.
     """
     checkpoint_path = Path(checkpoint_path)
     simulations_basedir = Path(simulations_basedir)
@@ -153,8 +157,15 @@ def run_tiled_inference_all_simulations(
         assert (
             output_basedir in output_dir.parents
         ), "Output directory is outside the specified output base directory"
-        output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / output_video_filename
+
+        if no_override and output_path.is_file():
+            logging.info(
+                f"Output already exists, skipping (no_override=True): {output_path}"
+            )
+            continue
+
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             process_simulation_tiled(
@@ -168,6 +179,7 @@ def run_tiled_inference_all_simulations(
                 seed=seed,
                 progress_bar=False,
                 clear_memory_cache_after=False,
+                no_override=no_override,
             )
         except Exception as e:
             logging.error(f"Failed to process {input_video_path}: {e}")
