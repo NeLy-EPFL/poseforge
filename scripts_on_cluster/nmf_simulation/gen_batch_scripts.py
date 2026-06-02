@@ -25,19 +25,21 @@ if list(script_output_dir.glob("*.run")):
 script_output_dir.mkdir(exist_ok=True, parents=True)
 log_dir.mkdir(exist_ok=True, parents=True)
 
-# Define paths relevant to data
-data_dir = Path("/work/upramdya/stimpfli/poseforge")
-recorded_trials_dir = data_dir / "data/aymanns2022/trials_flybody/"
+recorded_trials_dir = project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/"
+trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
+
+# Auto-detect whether to use the flybody model based on the input data path.
+# We assume that any kinematic-prior directory whose path contains "flybody"
+# (case-insensitive) was produced for the flybody model. The output base
+# directory is selected accordingly so nmf and flybody renderings don't mix.
 use_flybody = "flybody" in str(recorded_trials_dir).lower()
-output_basedir = data_dir / (
-    "data/nmf_rendering_flybody" if use_flybody else "data/nmf_rendering"
+output_basedir = project_dir / (
+    "bulk_data/nmf_rendering_flybody" if use_flybody else "bulk_data/nmf_rendering"
 )
 print(
     f"Auto-detected use_flybody={use_flybody} from {recorded_trials_dir}; "
     f"writing outputs to {output_basedir}"
 )
-
-trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
 
 # Read template script
 with open(template_path) as f:
