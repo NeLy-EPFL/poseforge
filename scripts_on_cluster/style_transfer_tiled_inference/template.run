@@ -36,6 +36,7 @@ python -u $inference_script_path \
     --simulations-basedir $simulations_basedir \
     --output-basedir $output_basedir \
     --input-video-filename $input_video_filename \
+    --simulation-name-glob "<<<SIMULATION_NAME_GLOB>>>" \
     --weight-type cosine \
     --randomize-seams \
     --device "cuda" \
