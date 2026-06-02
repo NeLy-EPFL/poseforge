@@ -26,8 +26,17 @@ script_output_dir.mkdir(exist_ok=True, parents=True)
 log_dir.mkdir(exist_ok=True, parents=True)
 
 # Define paths relevant to data
-output_basedir = project_dir / "bulk_data/nmf_rendering"
-recorded_trials_dir = project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/"
+data_dir = Path("/work/upramdya/stimpfli/poseforge")
+recorded_trials_dir = data_dir / "data/aymanns2022/trials_flybody/"
+use_flybody = "flybody" in str(recorded_trials_dir).lower()
+output_basedir = data_dir / (
+    "data/nmf_rendering_flybody" if use_flybody else "data/nmf_rendering"
+)
+print(
+    f"Auto-detected use_flybody={use_flybody} from {recorded_trials_dir}; "
+    f"writing outputs to {output_basedir}"
+)
+
 trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
 
 # Read template script
@@ -35,17 +44,19 @@ with open(template_path) as f:
     template_str = f.read()
 
 
-def make_run_script(recorded_trial_path, segment_ids):
+def make_run_script(recorded_trial_path, segment_ids, use_flybody):
     segment_ids_str = [str(_id) for _id in segment_ids]
     job_name = f"{recorded_trial_path.stem}_segs{'-'.join(segment_ids_str)}"
     log_output_file = log_dir / f"{job_name}.out"
     trial_output_dir = output_basedir / recorded_trial_path.stem
+    use_flybody_flag = "--use-flybody" if use_flybody else "--no-use-flybody"
     script_str = template_str \
         .replace("<<<JOB_NAME>>>", job_name) \
         .replace("<<<LOG_OUTPUT_FILE>>>", str(log_output_file)) \
         .replace("<<<RECORDED_TRIAL_PATH>>>", str(recorded_trial_path)) \
         .replace("<<<TRIAL_OUTPUT_DIR>>>", str(trial_output_dir)) \
-        .replace("<<<SEGMENT_IDS>>>", str(" ".join(segment_ids_str)))
+        .replace("<<<SEGMENT_IDS>>>", str(" ".join(segment_ids_str))) \
+        .replace("<<<USE_FLYBODY_FLAG>>>", use_flybody_flag)
 
     script_path = script_output_dir / f"{job_name}.run"
     with open(script_path, "w") as f:
@@ -76,6 +87,6 @@ if __name__ == "__main__":
 
     # Generate scripts
     for recorded_trial_path, segment_ids in job_configs:
-        make_run_script(recorded_trial_path, segment_ids)
+        make_run_script(recorded_trial_path, segment_ids, use_flybody)
 
     print(f"{len(job_configs)} scripts written to {script_output_dir}")
