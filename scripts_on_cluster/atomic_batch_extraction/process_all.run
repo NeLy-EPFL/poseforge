@@ -8,7 +8,7 @@
 #SBATCH --time 24:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
-#SBATCH --output /home/%u/poseforge/scripts_on_cluster/atomic_batch_extraction/process_all.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/atomic_batch_extraction/process_all_256.log
 
 echo "Hello from $(hostname)"
 
@@ -20,9 +20,9 @@ conda activate poseforge
 # Define paths
 project_root="/home/$USER/poseforge"
 extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
-all_trials_basedir="/work/upramdya/alfie/style_transfer/production/tiled_translated_videos/flybody_gray"
-output_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/"
-nmf_sim_rendering_basedir="/scratch/stimpfli/bulk_data_flybody"
+all_trials_basedir="$WORK/stimpfli/poseforge/style_transfer/production/tiled_translated_videos/flybody_gray"
+output_dir="$WORK/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches_256/"
+nmf_sim_rendering_basedir="$WORK/stimpfli/poseforge/data/bulk_data_flybody"
 
 # Setup
 cd $project_root
@@ -36,11 +36,12 @@ for trial_name in $(ls $all_trials_basedir); do
         --atomic-batch-nframes 32 \
         --atomic-batch-nvariants-max 4 \
         --minimum-time-diff-frames 60 \
-        --original-image-size 900 900 \
+        --original-image-size 912 912 \
+        --target-image-size 256 256 \
         --input-basedir $all_trials_basedir/$trial_name \
-        --nmf-sim-rendering-basedir nmf_sim_rendering_basedir \
+        --nmf-sim-rendering-basedir $nmf_sim_rendering_basedir \
         --n_jobs 16 \
-        --output-dir output_dir \
+        --output-dir $output_dir/$trial_name
 done
 
 echo "Extraction ends at $(date)"
