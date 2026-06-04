@@ -48,6 +48,8 @@ class Pose2p5DModel(nn.Module):
         pose_head_init_std: float = 1e-3,
         activation_noise_std: float = 0.0,
         decoder_spatial_dropout_p: float = 0.0,
+        heatmap_n_hidden_layers: int = 0,
+        heatmap_hidden_channels: int = 64,
     ):
         """
         Args:
@@ -83,6 +85,14 @@ class Pose2p5DModel(nn.Module):
                 training. Drops entire feature map channels to prevent
                 the decoder from overfitting to synthetic-specific spatial
                 patterns. Set to 0.0 to disable (default).
+            heatmap_n_hidden_layers (int): Number of hidden (3x3 conv ->
+                GroupNorm -> ReLU) layers inserted in the x-y heatmap head
+                BEFORE the existing final 3x3 conv. 0 = single-conv head
+                (default, backward-compatible). Each added layer grows the
+                head's receptive field by 2 heatmap pixels.
+            heatmap_hidden_channels (int): Width of the hidden layers in
+                the heatmap head (only used when heatmap_n_hidden_layers >
+                0). Must be a divisor multiple of groupnorm_n_groups.
         """
         super().__init__()
         self.n_keypoints = n_keypoints
@@ -98,6 +108,8 @@ class Pose2p5DModel(nn.Module):
         self.pose_head_init_std = pose_head_init_std
         self.activation_noise_std = activation_noise_std
         self.decoder_spatial_dropout_p = decoder_spatial_dropout_p
+        self.heatmap_n_hidden_layers = heatmap_n_hidden_layers
+        self.heatmap_hidden_channels = heatmap_hidden_channels
 
         # Spatial dropout for decoder (drops entire channels)
         # nn.Dropout2d is a no-op when p=0.0 or in eval mode
@@ -120,6 +132,16 @@ class Pose2p5DModel(nn.Module):
                 "upsample_n_hidden_channels and depth_n_hidden_channels, "
                 "and it cannot be greater than either of them."
             )
+        if heatmap_n_hidden_layers > 0 and (
+            (heatmap_hidden_channels % groupnorm_n_groups) != 0
+            or groupnorm_n_groups > heatmap_hidden_channels
+        ):
+            raise ValueError(
+                "When heatmap_n_hidden_layers > 0, heatmap_hidden_channels must be "
+                "a multiple of groupnorm_n_groups and >= groupnorm_n_groups "
+                f"(got heatmap_hidden_channels={heatmap_hidden_channels}, "
+                f"groupnorm_n_groups={groupnorm_n_groups})."
+            )
 
         self.feature_extractor = feature_extractor
 
@@ -139,7 +161,10 @@ class Pose2p5DModel(nn.Module):
 
         # Heatmap head for (x, y) keypoint locations
         self.heatmap_head = self._build_heatmap_head(
-            in_channels=upsample_core_out_channels, out_channels=n_keypoints
+            in_channels=upsample_core_out_channels,
+            out_channels=n_keypoints,
+            n_hidden_layers=heatmap_n_hidden_layers,
+            hidden_channels=heatmap_hidden_channels,
         )
 
         # Depth head for distance from camera
@@ -186,6 +211,8 @@ class Pose2p5DModel(nn.Module):
             pose_head_init_std=architecture_config.pose_head_init_std,
             activation_noise_std=architecture_config.activation_noise_std,
             decoder_spatial_dropout_p=architecture_config.decoder_spatial_dropout_p,
+            heatmap_n_hidden_layers=architecture_config.heatmap_n_hidden_layers,
+            heatmap_hidden_channels=architecture_config.heatmap_hidden_channels,
         )
 
         logging.info("Created Pose2p5DModel from architecture config")
@@ -225,17 +252,56 @@ class Pose2p5DModel(nn.Module):
         )
         logging.info("Set up feature extractor from config")
 
-    def _build_heatmap_head(self, in_channels: int, out_channels: int) -> nn.Sequential:
-        # Use kernel_size=3 to collect some spatial information, but keep the same
-        # feature map size: padding = (k-1)//2, stride=1
-        conv = nn.Conv2d(
-            in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True
+    def _build_heatmap_head(
+        self,
+        in_channels: int,
+        out_channels: int,
+        n_hidden_layers: int = 0,
+        hidden_channels: int = 64,
+    ) -> nn.Module:
+        """Build the x-y heatmap head.
+
+        - ``n_hidden_layers == 0`` (default): a single 3x3 conv mapping
+          decoder features straight to per-keypoint heatmap logits. This is
+          the backward-compatible behavior — the returned module is a single
+          ``nn.Conv2d``.
+        - ``n_hidden_layers > 0``: prepend ``n_hidden_layers`` blocks of
+          ``Conv2d(3x3, no bias) -> GroupNorm -> ReLU`` at width
+          ``hidden_channels`` BEFORE the existing final 3x3 conv. The first
+          hidden block projects ``in_channels -> hidden_channels``; any
+          subsequent hidden block is ``hidden_channels -> hidden_channels``.
+          The final conv (``hidden_channels -> out_channels``) keeps the
+          small-std init since it is not followed by ReLU.
+        """
+        # Final 3x3 conv (always present). Its in_channels depends on whether
+        # we have any hidden layers in front of it.
+        final_in = hidden_channels if n_hidden_layers > 0 else in_channels
+        final_conv = nn.Conv2d(
+            final_in, out_channels, kernel_size=3, stride=1, padding=1, bias=True
         )
-        # Initialize conv layer weights using normal initialization with small std
+        # Initialize final conv weights using normal initialization with small std
         # (this is not followed by ReLU, so Kaiming init is not appropriate here)
-        nn.init.normal_(conv.weight, std=self.pose_head_init_std)
-        nn.init.zeros_(conv.bias)
-        return conv
+        nn.init.normal_(final_conv.weight, std=self.pose_head_init_std)
+        nn.init.zeros_(final_conv.bias)
+
+        if n_hidden_layers == 0:
+            return final_conv
+
+        layers: list[nn.Module] = []
+        c_in = in_channels
+        for _ in range(n_hidden_layers):
+            conv = nn.Conv2d(
+                c_in, hidden_channels, kernel_size=3, stride=1, padding=1, bias=False
+            )
+            # Conv is followed by ReLU -> Kaiming init is appropriate
+            nn.init.kaiming_normal_(conv.weight, mode="fan_out", nonlinearity="relu")
+            groupnorm = nn.GroupNorm(self.groupnorm_n_groups, hidden_channels)
+            nn.init.constant_(groupnorm.weight, 1)
+            nn.init.constant_(groupnorm.bias, 0)
+            layers += [conv, groupnorm, nn.ReLU(inplace=True)]
+            c_in = hidden_channels
+        layers.append(final_conv)
+        return nn.Sequential(*layers)
 
     def _build_depth_head(
         self,

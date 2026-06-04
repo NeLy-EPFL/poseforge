@@ -19,6 +19,7 @@ def extract_atomic_batches(
     nmf_sim_rendering_basedir: Path | str,
     output_dir: Path | str,
     original_image_size: tuple[int, int] | None,
+    target_image_size: tuple[int, int] | None = None,
     n_jobs: int = -1,
     logging_interval: int = 100,
     cache_metadata: bool = True,
@@ -56,9 +57,16 @@ def extract_atomic_batches(
         output_dir (Path | str): The output directory for atomic batches.
         original_image_size (tuple[int, int] | None): The original image
             size (H, W) before the images were downsampled in the style
-            transfer model (i.e. MuJoCo camera resolution). If specified,
-            2D keypoint positions will be scaled to match the output image
-            size.
+            transfer model (i.e. MuJoCo camera resolution). This is the
+            calibration of the keypoint/seg-map coordinate space and is
+            used to strip any FFMPEG codec padding from the videos.
+        target_image_size (tuple[int, int] | None): If set, the extracted
+            atomic batches will be at this (H, W). Frames are cropped to
+            ``original_image_size`` then resized; segmentation maps are
+            resized with nearest-neighbor; keypoint xy are scaled by
+            target/original (depth left untouched). When None (default),
+            no resize: the saved batches stay at the source resolution
+            (existing behavior).
         n_jobs (int, optional): The number of jobs to run in parallel. 0 =
             run in a plain loop; -1 = use all available cores. Defaults to
             -1.
@@ -115,11 +123,12 @@ def extract_atomic_batches(
             simulated_labels_path,
             sim_name=f"{exp_trial}/{segment}/{subsegment}",
             original_image_size=original_image_size,
+            target_image_size=target_image_size,
             cache_metadata=cache_metadata,
             use_cached_metadata=use_cached_metadata,
         )
 
-    simulated_data_sequences = Parallel(n_jobs=-1)(
+    simulated_data_sequences = Parallel(n_jobs=n_jobs)(
         delayed(build_sim_data_seq)(sim_path)
         for sim_path in tqdm(input_simulation_paths, disable=None)
     )

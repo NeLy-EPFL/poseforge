@@ -5,12 +5,13 @@ from pathlib import Path
 from poseforge.style_transfer import parse_hyperparameters_from_checkpoint_path
 
 
-scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
-data_base_dir = scratch_user_dir / "/poseforge/data/bulk_data"
-data_base_dir_flybody = scratch_user_dir / "poseforge/data/bulk_data_flybody"
+#scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
+work_user_dir = Path("/work/upramdya/stimpfli")
+data_base_dir = work_user_dir / "/poseforge/data/nmf_rendering"
+data_base_dir_flybody = work_user_dir / "poseforge/data/nmf_rendering_flybody"
 
 checkpoints_basedir = Path("/scratch/stimpfli/poseforge/style_transfer_old/checkpoint_backups/")
-output_basedir = scratch_user_dir / "poseforge/style_transfer/production/tiled_translated_videos"
+output_basedir = work_user_dir / "poseforge/style_transfer/production/tiled_translated_videos"
 
 def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, str, str]:
     """Infer simulations_basedir, output_basedir, and input_video_filename from checkpoint.
@@ -110,14 +111,18 @@ with open(template_path) as f:
     template_str = f.read()
 
 
-def make_run_script(model_name: str, epoch: int) -> None:
-    """Generate a batch script for a model+epoch, auto-detecting data config."""
+FLY_IDS = [1, 2, 3, 4, 5]
+
+
+def make_run_script(model_name: str, epoch: int, fly_id: int) -> None:
+    """Generate a batch script for one (model+epoch, fly) pair, auto-detecting data config."""
     checkpoint_path = checkpoints_basedir / model_name / model_name / f"{epoch}_net_G.pth"
-    
+
     # Auto-detect data configuration from checkpoint
     sim_base, out_base, video_file = infer_data_config_from_checkpoint(str(checkpoint_path))
-    
-    job_name = f"tiled_inference_{model_name}_epoch{epoch}"
+
+    job_name = f"tiled_inference_{model_name}_epoch{epoch}_fly{fly_id}"
+    simulation_name_glob = f"BO_Gal4_fly{fly_id}_*"
 
     script_str = template_str \
         .replace("<<<NAME>>>", job_name) \
@@ -125,7 +130,8 @@ def make_run_script(model_name: str, epoch: int) -> None:
         .replace("<<<CHECKPOINT_PATH>>>", str(checkpoint_path)) \
         .replace("<<<SIMULATIONS_BASEDIR>>>", sim_base) \
         .replace("<<<OUTPUT_BASEDIR>>>", out_base) \
-        .replace("<<<INPUT_VIDEO_FILENAME>>>", video_file)
+        .replace("<<<INPUT_VIDEO_FILENAME>>>", video_file) \
+        .replace("<<<SIMULATION_NAME_GLOB>>>", simulation_name_glob)
 
     script_path = script_output_dir / f"{job_name}.run"
     with open(script_path, "w") as f:
@@ -161,8 +167,9 @@ if __name__ == "__main__":
     #     ("20260425_082208_lamG01_bs4_ngf32_gray", 740)
     # ]
 
-    # Make job scripts
+    # Make job scripts: one per (checkpoint, fly) pair
     for checkpoint_path, model_name in jobs:
-        make_run_script(checkpoint_path, model_name)
+        for fly_id in FLY_IDS:
+            make_run_script(checkpoint_path, model_name, fly_id)
 
-    print(f"{len(jobs)} scripts written to {script_output_dir}")
+    print(f"{len(jobs) * len(FLY_IDS)} scripts written to {script_output_dir}")

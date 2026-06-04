@@ -1,3 +1,4 @@
+import fnmatch
 import torch
 import logging
 import sys
@@ -24,7 +25,7 @@ def find_all_simulation_paths(simulations_basedir: Path) -> list[Path]:
     Looks for directories containing any of the expected video files.
     """
     all_simulation_paths = []
-    for sim_dir in simulations_basedir.rglob("*"):
+    for sim_dir in simulations_basedir.rglob("subsegment_*"):
         if not sim_dir.is_dir():
             continue
         # Check if this directory contains video files
@@ -70,6 +71,8 @@ def run_tiled_inference_all_simulations(
     device: str = "cuda",
     memory_cleanup_interval: int = 10,
     verbose: bool = False,
+    no_override: bool = False,
+    simulation_name_glob: str | None = None,
 ) -> None:
     """Run tiled style transfer inference on all NeuroMechFly simulations.
 
@@ -105,6 +108,14 @@ def run_tiled_inference_all_simulations(
         memory_cleanup_interval (int): Interval (in number of simulations
             processed) to perform memory cleanup.
         verbose (bool): Whether to print detailed logs.
+        no_override (bool): If True, skip simulations whose output video
+            already exists, preserving the existing output directory and
+            file untouched.
+        simulation_name_glob (str | None): If set, only process simulations
+            whose top-level directory (the first path component under
+            simulations_basedir, e.g. "BO_Gal4_fly1_trial001") matches this
+            fnmatch pattern. Use e.g. "BO_Gal4_fly1_*" to restrict to one
+            fly. If None, all discovered simulations are processed.
     """
     checkpoint_path = Path(checkpoint_path)
     simulations_basedir = Path(simulations_basedir)
@@ -124,6 +135,12 @@ def run_tiled_inference_all_simulations(
 
     # Index simulations to process
     all_simulation_paths = find_all_simulation_paths(simulations_basedir)
+    if simulation_name_glob:
+        all_simulation_paths = [
+            p for p in all_simulation_paths
+            if fnmatch.fnmatch(p.relative_to(simulations_basedir).parts[0], simulation_name_glob)
+        ]
+        print(f"Filtered by glob {simulation_name_glob!r}: {len(all_simulation_paths)} simulations remain")
     print(f"Total number of simulations to process: {len(all_simulation_paths)}")
     if len(all_simulation_paths) == 0:
         print(f"No simulations found under {simulations_basedir}")
@@ -153,8 +170,15 @@ def run_tiled_inference_all_simulations(
         assert (
             output_basedir in output_dir.parents
         ), "Output directory is outside the specified output base directory"
-        output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / output_video_filename
+
+        if no_override and output_path.is_file():
+            logging.info(
+                f"Output already exists, skipping (no_override=True): {output_path}"
+            )
+            continue
+
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             process_simulation_tiled(
@@ -168,6 +192,7 @@ def run_tiled_inference_all_simulations(
                 seed=seed,
                 progress_bar=False,
                 clear_memory_cache_after=False,
+                no_override=no_override,
             )
         except Exception as e:
             logging.error(f"Failed to process {input_video_path}: {e}")

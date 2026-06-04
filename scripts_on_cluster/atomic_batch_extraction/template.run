@@ -1,0 +1,40 @@
+#!/bin/bash -l
+
+#SBATCH --job-name <<<JOB_NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 250GB
+#SBATCH --time 12:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output <<<LOG_OUTPUT_FILE>>>
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# Define paths
+project_root="/home/$USER/poseforge"
+extraction_cli_path="src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py"
+
+# Setup
+cd $project_root
+
+echo "Extraction starting at $(date)"
+
+python -u $extraction_cli_path \
+    --atomic-batch-nframes <<<ATOMIC_BATCH_NFRAMES>>> \
+    --atomic-batch-nvariants-max <<<ATOMIC_BATCH_NVARIANTS_MAX>>> \
+    --minimum-time-diff-frames <<<MINIMUM_TIME_DIFF_FRAMES>>> \
+    --original-image-size <<<ORIGINAL_IMAGE_SIZE>>> \
+    <<<TARGET_IMAGE_SIZE_FLAG>>> \
+    --input-basedir <<<INPUT_BASEDIR>>> \
+    --nmf-sim-rendering-basedir <<<NMF_SIM_RENDERING_BASEDIR>>> \
+    --n_jobs <<<N_JOBS>>> \
+    --output-dir <<<OUTPUT_DIR>>>
+
+echo "Extraction ends at $(date)"

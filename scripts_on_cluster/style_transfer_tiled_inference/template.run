@@ -3,10 +3,10 @@
 #SBATCH --job-name cut_<<<NAME>>>
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 8
-#SBATCH --mem 32GB
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
 #SBATCH --time 24:00:00
-#SBATCH --partition=l40s
+#SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
 #SBATCH --output <<<STDOUT_STDERR_FILE>>>
@@ -36,10 +36,13 @@ python -u $inference_script_path \
     --simulations-basedir $simulations_basedir \
     --output-basedir $output_basedir \
     --input-video-filename $input_video_filename \
+    --simulation-name-glob "<<<SIMULATION_NAME_GLOB>>>" \
     --weight-type cosine \
     --randomize-seams \
     --device "cuda" \
     --memory-cleanup-interval 10 \
+    --patch_batch_size 1024 \
+    --no-no-override \
     --verbose
 
 echo "Tiled inference ends at $(date)"

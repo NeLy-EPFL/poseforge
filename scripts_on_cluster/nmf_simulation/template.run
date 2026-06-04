@@ -32,10 +32,10 @@ cd $project_root
 echo "Simulation starting at $(date)"
 
 python -u $simulation_cli_path \
-    --recorded_trial_path <<<RECORDED_TRIAL_PATH>>> \
-    --trial_output_dir <<<TRIAL_OUTPUT_DIR>>> \
+    --recorded-trial-path <<<RECORDED_TRIAL_PATH>>> \
+    --trial-output-dir <<<TRIAL_OUTPUT_DIR>>> \
     --segment-ids <<<SEGMENT_IDS>>> \
-    --input_timestep 0.01 \
-    --sim_timestep 0.0001
+    --input-timestep 0.01 \
+    --sim-timestep 0.0001
 
 echo "Simulation ends at $(date)"
