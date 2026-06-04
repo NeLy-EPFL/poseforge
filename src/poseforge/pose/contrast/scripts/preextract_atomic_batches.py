@@ -128,7 +128,7 @@ def extract_atomic_batches(
             use_cached_metadata=use_cached_metadata,
         )
 
-    simulated_data_sequences = Parallel(n_jobs=-1)(
+    simulated_data_sequences = Parallel(n_jobs=n_jobs)(
         delayed(build_sim_data_seq)(sim_path)
         for sim_path in tqdm(input_simulation_paths, disable=None)
     )
