@@ -26,21 +26,11 @@ script_output_dir.mkdir(exist_ok=True, parents=True)
 log_dir.mkdir(exist_ok=True, parents=True)
 
 # Define paths relevant to data
-recorded_trials_dir = project_dir / "bulk_data/kinematic_prior/aymanns2022/trials/"
+data_dir = Path("/work/upramdya/stimpfli/poseforge")
+output_basedir = data_dir / "data/nmf_rendering"
+recorded_trials_dir = data_dir / "data/aymanns2022/trials/"
+use_flybody = "flybody" in str(recorded_trials_dir)
 trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
-
-# Auto-detect whether to use the flybody model based on the input data path.
-# We assume that any kinematic-prior directory whose path contains "flybody"
-# (case-insensitive) was produced for the flybody model. The output base
-# directory is selected accordingly so nmf and flybody renderings don't mix.
-use_flybody = "flybody" in str(recorded_trials_dir).lower()
-output_basedir = project_dir / (
-    "bulk_data/nmf_rendering_flybody" if use_flybody else "bulk_data/nmf_rendering"
-)
-print(
-    f"Auto-detected use_flybody={use_flybody} from {recorded_trials_dir}; "
-    f"writing outputs to {output_basedir}"
-)
 
 # Read template script
 with open(template_path) as f:
@@ -59,7 +49,7 @@ def make_run_script(recorded_trial_path, segment_ids, use_flybody):
         .replace("<<<RECORDED_TRIAL_PATH>>>", str(recorded_trial_path)) \
         .replace("<<<TRIAL_OUTPUT_DIR>>>", str(trial_output_dir)) \
         .replace("<<<SEGMENT_IDS>>>", str(" ".join(segment_ids_str))) \
-        .replace("<<<USE_FLYBODY_FLAG>>>", use_flybody_flag)
+        .replace("<<<USE_FLYBODY_FLAG>>>", str(use_flybody_flag))
 
     script_path = script_output_dir / f"{job_name}.run"
     with open(script_path, "w") as f:
@@ -81,6 +71,8 @@ if __name__ == "__main__":
             filtered_frac_threshold=0.5,
         )
         num_segments = len(kinematic_recording_segments)
+        if num_segments > 25:
+            num_segments = 25
         num_segments_total += num_segments
         for start_idx in range(0, num_segments, max_segs_per_run):
             end_idx_exclusive = min(num_segments, start_idx + max_segs_per_run)

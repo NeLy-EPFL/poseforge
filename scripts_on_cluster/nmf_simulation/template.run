@@ -15,7 +15,7 @@ echo "Hello from $(hostname)"
 # Set up environment and package
 . ~/spack/share/spack/setup-env.sh
 spack load ffmpeg
-conda activate poseforge
+conda activate poseforge-flygymv2
 
 # Set up FlyGym rendering for headless machines
 export MUJOCO_GL="egl"
