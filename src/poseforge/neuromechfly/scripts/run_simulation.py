@@ -86,6 +86,7 @@ def simulate_using_kinematic_prior(
     max_sim_steps_per_segment: int | None = None,
     use_flybody: bool = False,
     visual_paths: list[Path] | None = None,
+    calibration_path: str | None = None,
 ) -> None:
     """CLI to run replay kinematic motion priors from Aymanns et al. 2022
     in NeuroMechFly.
@@ -117,6 +118,11 @@ def simulate_using_kinematic_prior(
         use_flybody (bool): Whether to use the flybody model to simulate the kinematics
         visual_paths (list[Path] | None): List of paths to visual config
             YAML files. If None, selected dynamically based on `use_flybody`.
+        calibration_path (str | None): Path to a poseforge_camera.npz produced
+            by spotlight-tools' get_postprocess_cameramatrix_equivalent.py. When
+            set, the tracking camera's fovy and z-offset are taken from the
+            calibration so the rendered px/mm at the sample matches the
+            experimental Spotlight setup.
     """
     recorded_trial_path = Path(recorded_trial_path)
     trial_output_dir = Path(trial_output_dir)
@@ -169,6 +175,7 @@ def simulate_using_kinematic_prior(
             render_depth=True,
             max_sim_steps=max_sim_steps_per_segment,
             use_flybody=use_flybody,
+            calibration_path=calibration_path,
         )
         is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
@@ -180,11 +187,12 @@ def simulate_using_kinematic_prior(
 
 def run_sequentially_for_testing(
         input_basedir: str,
-        output_basedir: Path = Path("bulk_data/nmf_rendering_new/"), 
+        output_basedir: Path = Path("bulk_data/nmf_rendering_new/"),
         max_segments_per_trial: int | None = None,
         max_sim_steps_per_segment: int | None = None,
         use_flybody: bool = False,
         visual_paths: list[Path] | None = None,
+        calibration_path: str | None = None,
 ):
     """Run everything sequentially (for debugging)"""
     # Configs
@@ -217,6 +225,7 @@ def run_sequentially_for_testing(
             max_sim_steps_per_segment=max_sim_steps_per_segment,
             use_flybody=use_flybody,
             visual_paths=visual_paths,
+            calibration_path=calibration_path,
         )
         
 
