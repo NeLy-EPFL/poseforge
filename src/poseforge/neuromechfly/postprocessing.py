@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.ndimage as ndimage
@@ -52,15 +54,73 @@ def get_rotation_angle_and_matrix(forward_vector: np.ndarray) -> np.ndarray:
     return -orientation, rotation_matrix
 
 
-def rotate_image(image: np.ndarray, rotation_angle, preserve=False) -> np.ndarray:
+def estimate_background_cval(
+    frames: list[np.ndarray],
+    n_sample_frames: int = 5,
+    grayscale_atol: int = 2,
+) -> float:
+    """Estimate a background fill value from corner pixels of a few frames.
+
+    The fly is centered in the rendered frames, so the four image corners are
+    (with overwhelming probability) background. We sample the corners of a few
+    frames spread across the subsegment and take the median, giving an O(1)
+    background estimate that is robust to the occasional corner touching a leg.
+
+    For multi-channel images, all channels must be approximately equal
+    (within `grayscale_atol`) — otherwise the resulting `cval` scalar cannot
+    represent the background faithfully. In that case a warning is issued and
+    0.0 is returned (matching the typical black backdrop).
+
+    Args:
+        frames: List of frames (H, W) or (H, W, C). All must share a shape.
+        n_sample_frames: Number of frames to sample (evenly spaced).
+        grayscale_atol: Max allowed per-pixel channel spread to still be
+            considered grayscale-compatible.
+
+    Returns:
+        Scalar background value usable as `cval` in `scipy.ndimage.rotate`.
+    """
+    if len(frames) == 0:
+        return 0.0
+    step = max(1, len(frames) // n_sample_frames)
+    sampled = frames[::step][:n_sample_frames]
+
+    corner_pixels = np.array(
+        [f[r, c] for f in sampled for r, c in [(0, 0), (0, -1), (-1, 0), (-1, -1)]]
+    )
+
+    if corner_pixels.ndim == 2 and corner_pixels.shape[1] > 1:
+        # Multi-channel: require approximately equal channels to collapse to scalar
+        per_pixel_spread = corner_pixels.max(axis=1) - corner_pixels.min(axis=1)
+        if np.any(per_pixel_spread > grayscale_atol):
+            warnings.warn(
+                "Background corners are not grayscale-compatible (max channel "
+                f"spread = {int(per_pixel_spread.max())} > atol = {grayscale_atol}). "
+                "Falling back to cval=0 for rotation padding; rotated corners "
+                "may not match the true background color.",
+                stacklevel=2,
+            )
+            return 0.0
+
+    return float(np.median(corner_pixels))
+
+
+def rotate_image(
+    image: np.ndarray, rotation_angle, preserve=False, cval: float = 0.0
+) -> np.ndarray:
     if preserve:
         return ndimage.rotate(
             image, np.rad2deg(rotation_angle), reshape=False, order=0, mode="nearest"
         )
     else:
         return ndimage.rotate(
-        image, np.rad2deg(rotation_angle), reshape=False, order=1, mode="reflect"
-    )
+            image,
+            np.rad2deg(rotation_angle),
+            reshape=False,
+            order=1,
+            mode="constant",
+            cval=cval,
+        )
 
 
 def center_square_crop_image(image: np.ndarray, side_length) -> np.ndarray:
@@ -192,7 +252,7 @@ def process_single_frame(
     h5_file_path: Path,
     frame_idx: int,
     crop_size: int,
-
+    cvals: list[float],
 ):
     # Open the h5 file within the worker process
     with h5py.File(h5_file_path, "r") as h5_file:
@@ -209,10 +269,12 @@ def process_single_frame(
 
         # Rotate and center-crop image
         rendered_images_transformed = []
-        for img in rendered_images:
+        for img, cval in zip(rendered_images, cvals):
             # note: rotate_image calls scipy.ndimage.rotate which expects angle in
-            # degrees and rotates counter-clockwise, hence the negative sign
-            rotated_img = rotate_image(img, -rotation_angle)
+            # degrees and rotates counter-clockwise, hence the negative sign.
+            # cval is the per-color-coding background fill so rotated-in corners
+            # match the rendered backdrop instead of mirroring the fly's body.
+            rotated_img = rotate_image(img, -rotation_angle, cval=cval)
             img_transformed, start_col, start_row = center_square_crop_image(
                 rotated_img, crop_size
             )
@@ -274,6 +336,15 @@ def process_subsegment(
 
     processed_subsegment_dir.mkdir(parents=True, exist_ok=True)
 
+    # Estimate background fill once per color coding (sampled from a handful of
+    # frames in this subsegment) so that scipy.ndimage.rotate can use a constant
+    # background-colored padding instead of reflecting the fly's body into the
+    # exposed corners.
+    cvals_per_color_coding = [
+        estimate_background_cval(frames)
+        for frames in subsegment_frames_by_color_coding
+    ]
+
     # Process frames in parallel
     # Prepare arguments for each frame
     frame_args = []
@@ -288,6 +359,7 @@ def process_subsegment(
                 segment_h5_file_path,
                 frame_idx_start + i_frame_within_subsegment,
                 crop_size,
+                cvals_per_color_coding,
             )
         )
     # Parallel execution with joblib
