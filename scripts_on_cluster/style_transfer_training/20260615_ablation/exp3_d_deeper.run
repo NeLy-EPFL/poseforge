@@ -15,7 +15,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /scratch/%u/style_transfer/20260615_ablation/outputs/exp3_nlD4_%j.out
+#SBATCH --output /work/upramdya/%u/poseforgestyle_transfer/20260615_ablation/outputs/%x_%j.out
 
 set -euo pipefail
 
@@ -29,16 +29,14 @@ spack load ffmpeg
 conda activate poseforge
 
 # -----------------------------------------------------------------------------
-# Project / data paths (edit as needed)
-# -----------------------------------------------------------------------------
 PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
-DATASET_PATH="/home/stimpfli/datasets/classical/aymanns2022_pseudocolor_spotlight_dataset_flybody_grayscale"
+DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/aymanns2022_pseudocolor_spotlight_dataset_gray"
 
 # Base output directories (shared across all four ablation experiments so a
 # single TensorBoard root sees all runs side by side).
 CAMPAIGN_TAG="20260615_ablation"
-OUTPUT_BASE="/scratch/$USER/style_transfer/${CAMPAIGN_TAG}"
+OUTPUT_BASE="$WORK/$USER/poseforgestyle_transfer/${CAMPAIGN_TAG}"
 CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
 LOG_BASEDIR="${OUTPUT_BASE}/logs"
 WANDB_BASEDIR="${OUTPUT_BASE}/wandb"
@@ -47,7 +45,7 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
-RUN_NAME="exp3_lamG01_bs4_ngf48_nlD4"
+RUN_NAME="$SLURM_JOB_NAME"
 
 # Architecture / loss
 NGF=48
