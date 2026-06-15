@@ -66,12 +66,10 @@ def train_joint_segpose_model(
     model.load_weights_from_config(model_weights_config)
     logging.info("Set up JointSegPoseModel (shared backbone + pose head + bodyseg head)")
 
-    print("============== Full Joint Model Summary ===============")
-    summary(
-        model,
-        input_size=(3, *training_data_config.input_image_size),
-        device="cpu",
-    )
+    # torchsummary cannot introspect modules that return dicts, so we only
+    # summarize the shared feature extractor (which returns a tensor). The
+    # downstream pose and bodyseg heads each return a dict — see their
+    # individual training scripts if you want to inspect them in isolation.
     print("=========== Shared Feature Extractor Summary ===========")
     summary(
         model.feature_extractor,
