@@ -11,12 +11,12 @@
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
-#SBATCH --mem 64GB
+#SBATCH --mem 92BG
 #SBATCH --time 24:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /scratch/%u/style_transfer/20260615_ablation/outputs/%x_%j.out
+#SBATCH --output /scratch/%u/style_transfer/20260615_ablation/outputs/exp4_adamSG2_%j.out
 
 set -euo pipefail
 
@@ -48,7 +48,7 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
-RUN_NAME="$SLURM_JOB_NAME"
+RUN_NAME="exp4_lamG01_bs4_ngf48_adamSG2"
 
 # Architecture / loss
 NGF=48
