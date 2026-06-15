@@ -12,11 +12,19 @@ min_duration_frames = 10
 filter_size = 5
 filtered_frac_threshold = 0.5
 
+# Define paths relevant to data
+data_dir = Path("/work/upramdya/stimpfli/poseforge")
+recorded_trials_dir = data_dir / "data/aymanns2022/trials/"
+use_flybody = "flybody" in str(recorded_trials_dir)
+trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
+biomech_model = "flybody" if use_flybody else "nmf"
+output_basedir = data_dir / f"data/{biomech_model}_rendering"
+
 # Define paths relevant to execution
 project_dir = Path("~/poseforge").expanduser()
 template_path = project_dir / "scripts_on_cluster/nmf_simulation/template.run"
-script_output_dir = project_dir / "scripts_on_cluster/nmf_simulation/batch_scripts"
-log_dir = project_dir / "scripts_on_cluster/nmf_simulation/logs"
+script_output_dir = project_dir / f"scripts_on_cluster/nmf_simulation/batch_scripts_{biomech_model}"
+log_dir = project_dir / f"scripts_on_cluster/nmf_simulation/logs_{biomech_model}"
 if list(script_output_dir.glob("*.run")):
     raise RuntimeError(
         "Batch scripts already found in the output directory. Empty them manually to "
@@ -24,13 +32,6 @@ if list(script_output_dir.glob("*.run")):
     )
 script_output_dir.mkdir(exist_ok=True, parents=True)
 log_dir.mkdir(exist_ok=True, parents=True)
-
-# Define paths relevant to data
-data_dir = Path("/work/upramdya/stimpfli/poseforge")
-output_basedir = data_dir / "data/nmf_rendering"
-recorded_trials_dir = data_dir / "data/aymanns2022/trials/"
-use_flybody = "flybody" in str(recorded_trials_dir)
-trial_data_files = sorted(list(recorded_trials_dir.glob("*.pkl")))
 
 # Read template script
 with open(template_path) as f:
@@ -49,7 +50,8 @@ def make_run_script(recorded_trial_path, segment_ids, use_flybody):
         .replace("<<<RECORDED_TRIAL_PATH>>>", str(recorded_trial_path)) \
         .replace("<<<TRIAL_OUTPUT_DIR>>>", str(trial_output_dir)) \
         .replace("<<<SEGMENT_IDS>>>", str(" ".join(segment_ids_str))) \
-        .replace("<<<USE_FLYBODY_FLAG>>>", str(use_flybody_flag))
+        .replace("<<<USE_FLYBODY_FLAG>>>", str(use_flybody_flag)) \
+        .replace("<<<BIOMECH_MODEL>>>", str(biomech_model))
 
     script_path = script_output_dir / f"{job_name}.run"
     with open(script_path, "w") as f:

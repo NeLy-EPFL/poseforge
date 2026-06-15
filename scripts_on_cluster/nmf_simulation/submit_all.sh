@@ -1,6 +1,8 @@
 #!/bin/bash
 
-scripts_dir="./batch_scripts"
+model=$1
+
+scripts_dir="./batch_scripts_$model"
 
 files=($(ls $scripts_dir/*.run | sort))
 file_count=${#files[@]}
