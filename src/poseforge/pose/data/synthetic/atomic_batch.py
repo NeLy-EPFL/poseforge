@@ -14,6 +14,11 @@ from poseforge.util.sys import get_hardware_availability
 # Emit the BODY SEGMENTATION RESIZE WARNING only once per process to avoid
 # flooding the logs when many atomic batches need on-the-fly mask resizing.
 _BODY_SEGMENTATION_RESIZE_WARNING_EMITTED = False
+# One-shot warnings for atomic batches that contain more variants/frames than
+# the loader was configured to consume — the extras are silently discarded
+# otherwise, which previously caused surprising effective-batch blow-ups.
+_EXTRA_VARIANTS_WARNING_EMITTED = False
+_EXTRA_FRAMES_WARNING_EMITTED = False
 
 
 class AtomicBatchDataset(Dataset):
@@ -27,6 +32,7 @@ class AtomicBatchDataset(Dataset):
         load_dof_angles: bool = False,
         load_keypoint_positions: bool = False,
         load_body_segment_maps: bool = False,
+        n_samples: int | None = None,
     ):
         # Find all .h5 and .mp4 files in the provided directories
         all_h5_files = set()
@@ -70,6 +76,7 @@ class AtomicBatchDataset(Dataset):
         self.image_size = image_size
         self.n_channels = n_channels
         self.frames_serialization_spacing = frames_serialization_spacing
+        self.n_samples = n_samples
         self.label_keys = []
         if load_dof_angles:
             self.label_keys.append("dof_angles")
@@ -97,6 +104,33 @@ class AtomicBatchDataset(Dataset):
 
         # Load labels data
         sim_data = self.load_atomic_batch_sim_data(h5_path, self.label_keys)
+
+        # Crop trailing frames if the on-disk atomic batch contains more than
+        # the loader was configured to consume. Without this, the dataloader
+        # silently delivers an effective batch of
+        # n_variants * n_frames_in_file per item — exactly the OOM trap we
+        # want to avoid.
+        if self.n_samples is not None:
+            n_frames_in_file = frames.shape[1]
+            if n_frames_in_file > self.n_samples:
+                global _EXTRA_FRAMES_WARNING_EMITTED
+                if not _EXTRA_FRAMES_WARNING_EMITTED:
+                    logging.warning(
+                        f"Atomic batch {mp4_path.name} contains "
+                        f"{n_frames_in_file} frames but n_samples={self.n_samples}; "
+                        f"cropping to the first {self.n_samples} frames. "
+                        "Regenerate atomic batches with matching n_samples to "
+                        "stop wasting decode time on dropped frames."
+                    )
+                    _EXTRA_FRAMES_WARNING_EMITTED = True
+                frames = frames[:, : self.n_samples]
+                sim_data = {k: v[: self.n_samples] for k, v in sim_data.items()}
+            elif n_frames_in_file < self.n_samples:
+                raise ValueError(
+                    f"Atomic batch {mp4_path.name} contains only "
+                    f"{n_frames_in_file} frames but n_samples={self.n_samples} "
+                    "were requested."
+                )
 
         if "body_seg_maps" in sim_data:
             body_seg_maps = sim_data["body_seg_maps"]
@@ -213,6 +247,22 @@ with the same target size from the start.
         assert (
             n_variants * n_cols + (n_variants - 1) * spacing <= n_cols_total
         ), "Error: width of concatenated video does not match expectation"
+
+        # Detect over-supply of variants in the on-disk video. The width is
+        # n_actual_variants * n_cols + (n_actual_variants - 1) * spacing, so
+        # invert that to recover the stored count and warn once if some are
+        # being silently discarded.
+        actual_n_variants = (n_cols_total + spacing) // (n_cols + spacing)
+        if actual_n_variants > n_variants:
+            global _EXTRA_VARIANTS_WARNING_EMITTED
+            if not _EXTRA_VARIANTS_WARNING_EMITTED:
+                logging.warning(
+                    f"Atomic batch {video_path.name} contains "
+                    f"{actual_n_variants} variants but n_variants={n_variants}; "
+                    f"only the first {n_variants} will be used. "
+                    "Set --atomic-batch-n-variants higher to use them all."
+                )
+                _EXTRA_VARIANTS_WARNING_EMITTED = True
 
         atomic_batch = np.zeros(
             (n_variants, n_frames, n_channels, n_rows, n_cols), dtype=np.float32
@@ -452,6 +502,7 @@ def init_atomic_dataset_and_dataloader(
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,
         load_body_segment_maps=load_body_segment_maps,
+        n_samples=atomic_batch_n_samples,
     )
 
     # Check if batch size is valid
