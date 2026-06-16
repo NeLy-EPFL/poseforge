@@ -157,9 +157,13 @@ class Pose2p5DPipeline:
                     atomic_batches_frames, atomic_batches_sim_data, device=self.device
                 )
 
-                # Apply training-time augmentations (before forward pass)
-                xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                depth_labels = sim_data_collapsed["keypoint_pos"][:, :, 2]
+                # Apply training-time augmentations (before forward pass).
+                # Slice labels to the keypoints the model actually predicts.
+                keypoint_pos = self._select_predicted_keypoints(
+                    sim_data_collapsed["keypoint_pos"]
+                )
+                xy_labels = keypoint_pos[:, :, :2]
+                depth_labels = keypoint_pos[:, :, 2]
 
                 if scale_crop_aug is not None:
                     frames_collapsed, xy_labels = scale_crop_aug(
@@ -277,6 +281,15 @@ class Pose2p5DPipeline:
 
         writer.close()
 
+    def _select_predicted_keypoints(self, keypoint_pos: torch.Tensor) -> torch.Tensor:
+        """Slice full keypoint labels (..., n_keypoints, 3) down to the subset
+        the model predicts (``model.included_keypoint_indices``), preserving
+        order. A no-op when the model predicts all keypoints."""
+        idx = self.model.included_keypoint_indices_t
+        if idx.numel() == keypoint_pos.shape[1]:
+            return keypoint_pos
+        return keypoint_pos.index_select(1, idx.to(keypoint_pos.device))
+
     def validate(
         self, validation_data_loader: DataLoader, max_batches: int | None = None
     ):
@@ -324,8 +337,11 @@ class Pose2p5DPipeline:
                 # Run model
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
                     pred_dict = self.model(frames_collapsed)
-                    xy_labels = sim_data_collapsed["keypoint_pos"][:, :, :2]
-                    depth_labels_adjusted = sim_data_collapsed["keypoint_pos"][:, :, 2]
+                    keypoint_pos = self._select_predicted_keypoints(
+                        sim_data_collapsed["keypoint_pos"]
+                    )
+                    xy_labels = keypoint_pos[:, :, :2]
+                    depth_labels_adjusted = keypoint_pos[:, :, 2]
                     loss_dict = self.loss_func(
                         pred_dict,
                         xy_labels=xy_labels,
