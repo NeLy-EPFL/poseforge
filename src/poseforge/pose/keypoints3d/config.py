@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 from poseforge.util import SerializableDataClass
 
@@ -46,6 +49,18 @@ class ModelArchitectureConfig(SerializableDataClass):
     # `heatmap_n_hidden_layers > 0`. Must be a multiple of `groupnorm_n_groups`
     # and >= `groupnorm_n_groups`.
     heatmap_hidden_channels: int = 64
+
+    @classmethod
+    def load(cls, path: Path | str):
+        # Joint segpose configs store {"pose": {...}, "bodyseg": {...}}.
+        # Detect and pick the pose slice so existing inference paths stay unchanged.
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"File does not exist: {path}")
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict) and "pose" in data and "bodyseg" in data:
+            data = data["pose"]
+        return cls(**data)
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,102 @@
+#!/bin/bash -l
+
+#SBATCH --job-name joint-segpose
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
+#SBATCH --time 72:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/joint_segpose_training/output_20260615_tiled_joint.log
+
+echo "Hello from $(hostname)"
+
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+cd $HOME/poseforge
+
+atomic_batch_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/joint_segpose/output_20260615_tiled_joint"
+
+# Per-head activation noise (shared backbone -> noise std on the encoded
+# feature maps is applied INSIDE each task model from its own activations,
+# so we keep the same values used in the single-task jobs)
+pose_activation_noise_std=0.0
+bodyseg_activation_noise_std=0.5
+heatmap_sigma=8.0
+
+feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
+contrastive_pretraining_epoch="epoch007"
+contrastive_pretraining_local_step="step000500"
+
+training_cli_path="src/poseforge/pose/joint_segpose/scripts/run_joint_training.py"
+
+echo "Training starting at $(date)"
+
+python -u $training_cli_path \
+    --n-epochs 50 \
+    --seed 42 \
+    --model-architecture-config.pose.activation-noise-std $pose_activation_noise_std \
+    --model-architecture-config.bodyseg.n-classes 13 \
+    --model-architecture-config.bodyseg.activation-noise-std $bodyseg_activation_noise_std \
+    --model-architecture-config.bodyseg.final-upsampler-n-hidden-channels 32 \
+    --model-architecture-config.bodyseg.confidence-method entropy \
+    --selected-original-class-indices \
+        40 41 \
+        48 49 \
+        56 57 \
+        64 65 \
+        72 73 \
+        80 81 \
+    --model-weights-config.feature-extractor-weights \
+        "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
+    --loss-config.pose.heatmap-sigma $heatmap_sigma \
+    --loss-config.bodyseg.weight-dice 1.0 \
+    --loss-config.bodyseg.weight-ce 1.0 \
+    --loss-config.weight-pose 1.0 \
+    --loss-config.weight-bodyseg 1.0 \
+    --training-data-config.train-data-dirs \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly1_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly2_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly3_trial005" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial001" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial002" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial003" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial004" \
+        "$atomic_batch_base_dir/BO_Gal4_fly4_trial005" \
+    --training-data-config.val-data-dirs \
+        "$atomic_batch_base_dir/BO_Gal4_fly5_trial001" \
+    --training-data-config.input-image-size 912 912 \
+    --training-data-config.atomic-batch-n-samples 32 \
+    --training-data-config.atomic-batch-n-variants 2 \
+    --training-data-config.train-batch-size 32 \
+    --training-data-config.val-batch-size 32 \
+    --training-data-config.num-workers 8 \
+    --optimizer-config.learning-rate-encoder 3e-5 \
+    --optimizer-config.learning-rate-deconv 3e-4 \
+    --optimizer-config.learning-rate-heatmap-head 3e-4 \
+    --optimizer-config.learning-rate-depth-head 3e-4 \
+    --optimizer-config.learning-rate-segmentation-head 3e-4 \
+    --optimizer-config.weight-decay 1e-5 \
+    --training-artifacts-config.output-basedir "$out_dir" \
+    --training-artifacts-config.logging-interval 10 \
+    --training-artifacts-config.checkpoint-interval 1000 \
+    --training-artifacts-config.validation-interval 1000 \
+    --training-artifacts-config.n-batches-per-validation 100
+
+echo "Training ends at $(date)"

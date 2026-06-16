@@ -3,8 +3,8 @@
 #SBATCH --job-name <<<JOB_NAME>>>
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 18
-#SBATCH --mem 96GB
+#SBATCH --cpus-per-task 20
+#SBATCH --mem 135GB
 #SBATCH --time 10:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
@@ -15,7 +15,7 @@ echo "Hello from $(hostname)"
 # Set up environment and package
 . ~/spack/share/spack/setup-env.sh
 spack load ffmpeg
-conda activate poseforge
+conda activate poseforge-flygymv2
 
 # Set up FlyGym rendering for headless machines
 export MUJOCO_GL="egl"
@@ -24,6 +24,9 @@ export PYOPENGL_PLATFORM="egl"
 # Define paths
 project_root="/home/$USER/poseforge"
 simulation_cli_path="src/poseforge/neuromechfly/scripts/run_simulation.py"
+
+# camera calibration path
+calibration_path="$project_root/src/poseforge/neuromechfly/visuals/spotlight_cam_mat.npz"
 
 # Setup
 cd $project_root
@@ -36,6 +39,8 @@ python -u $simulation_cli_path \
     --trial-output-dir <<<TRIAL_OUTPUT_DIR>>> \
     --segment-ids <<<SEGMENT_IDS>>> \
     --input-timestep 0.01 \
-    --sim-timestep 0.0001
+    --sim-timestep 0.0001 \
+    <<<USE_FLYBODY_FLAG>>> \
+    --calibration_path "$calibration_path"
 
 echo "Simulation ends at $(date)"

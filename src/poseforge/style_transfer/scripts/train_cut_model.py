@@ -2,6 +2,8 @@
 Adapted from https://github.com/taesungp/contrastive-unpaired-translation/blob/master/train.py
 """
 
+import copy
+import random
 import time
 import torch
 import numpy as np
@@ -9,6 +11,7 @@ import wandb
 import json
 from argparse import Namespace
 from pathlib import Path
+from torchvision.utils import make_grid
 from cut.options.train_options import TrainOptions
 from cut.data import create_dataset
 from cut.models import create_model
@@ -16,6 +19,11 @@ from cut.util.visualizer import Visualizer
 from cut.util import util
 
 from poseforge.util import set_random_seed
+
+
+VAL_EVERY_N_EPOCHS = 10
+VAL_MAX_SAMPLES = 16
+VAL_SEED = 12345
 
 
 def save_options(
@@ -80,6 +88,20 @@ if __name__ == "__main__":
     # Create a model given opt.model and other options
     model = create_model(opt)
     print(f"The number of training images = {dataset_size}")
+
+    # Validation loader: reads testA/testB with the same preprocessing as
+    # training, in deterministic alphabetical order. max_dataset_size is left
+    # unbounded so that the alphabetical sort runs on the full file list; we
+    # then take the first VAL_MAX_SAMPLES as a single batch.
+    val_opt = copy.copy(opt)
+    val_opt.phase = "test"
+    val_opt.serial_batches = True
+    val_opt.no_flip = True
+    val_opt.batch_size = VAL_MAX_SAMPLES
+    val_opt.max_dataset_size = float("inf")
+    val_opt.num_threads = 0
+    val_opt.isTrain = False
+    val_dataset = create_dataset(val_opt)
 
     # Create a visualizer that display/save images and plots
     visualizer = Visualizer(opt)
@@ -201,6 +223,45 @@ if __name__ == "__main__":
         )
         # Update learning rates at the end of every epoch
         model.update_learning_rate()
+
+        # Validation pass on testA: deterministic image order, same
+        # preprocessing as training, identical crops across epochs and runs.
+        # The global RNG state is snapshotted and restored so training's
+        # random sequence is unaffected.
+        if epoch % VAL_EVERY_N_EPOCHS == 0:
+            py_rng_state = random.getstate()
+            np_rng_state = np.random.get_state()
+            torch_rng_state = torch.get_rng_state()
+            random.seed(VAL_SEED)
+            np.random.seed(VAL_SEED)
+            torch.manual_seed(VAL_SEED)
+
+            try:
+                model.netG.eval()
+                with torch.no_grad():
+                    val_batch = next(iter(val_dataset))
+                    real_A = val_batch["A"].to(model.device)
+                    fake_B = model.netG(real_A).cpu()
+                model.netG.train()
+                pairs = []
+                for source, fake in zip(real_A.cpu(), fake_B):
+                    pairs.append(source)
+                    pairs.append(fake)
+                val_grid = make_grid(
+                    pairs, nrow=2, padding=4,
+                    normalize=True, value_range=(-1, 1),
+                )
+                if visualizer.writer is not None:
+                    visualizer.writer.add_image("validation/grid", val_grid, epoch)
+                if opt.wandb_project:
+                    wandb.log(
+                        {"validation/grid": wandb.Image(val_grid)},
+                        step=total_iters,
+                    )
+            finally:
+                random.setstate(py_rng_state)
+                np.random.set_state(np_rng_state)
+                torch.set_rng_state(torch_rng_state)
 
     # Close TensorBoard writer when training finishes
     if hasattr(visualizer, "close"):

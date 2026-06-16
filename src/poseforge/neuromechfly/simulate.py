@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from flygym.compose import Fly, KinematicPose, ActuatorType
 from flygym.compose.fly import FlybodyFly
-from flygym.assets.model.flybody.anatomy_flybody import (
+from flygym.flybody.anatomy_flybody import (
     FlybodySkeleton,
     FlybodyJointPreset,
     FlybodyAxisOrder,
@@ -40,7 +40,12 @@ class SpotlightArena(FlatGroundWorld):
         name: str = "spotlight_arena",
         size: tuple[float, float] = (100, 100),
         friction: tuple[float, float, float] = (1, 0.005, 0.0001),
+        background_rgb: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
+        # Stash this before super().__init__() because BaseWorld.__init__
+        # calls self._add_skybox() — which we override below to pick up the
+        # requested colour rather than the white flygym default.
+        self._background_rgb = tuple(background_rgb)
         super().__init__(name)
         self.ground_geom.remove() # remove the ground with texture add transparent floor
 
@@ -54,6 +59,11 @@ class SpotlightArena(FlatGroundWorld):
             conaffinity=0,
             rgba=(1, 1, 1, 0),
         )
+        # Keep ground_geoms in sync with the replaced ground_geom; otherwise
+        # add_fly() builds <pair> contacts pointing at the removed geom,
+        # which dm_control surfaces as "Attribute 'geom2' of element <pair>
+        # is required" during XML compile.
+        self.ground_geoms = [self.ground_geom]
         self.friction = friction
 
         # # Make lights non-shadow-casting to make segments look more uniform
@@ -63,6 +73,21 @@ class SpotlightArena(FlatGroundWorld):
 
     def get_spawn_position(self, rel_pos, rel_angle):
         return rel_pos, rel_angle
+
+    def _add_skybox(self):
+        # Override the flygym default (white gradient skybox) so the rendered
+        # background matches the dark experimental Spotlight recordings.
+        r, g, b = self._background_rgb
+        self.mjcf_root.asset.add(
+            "texture",
+            name="skybox",
+            type="skybox",
+            builtin="flat",
+            rgb1=(r, g, b),
+            rgb2=(r, g, b),
+            width=10,
+            height=10,
+        )
 
 
 class FlyForRendering(Fly):
@@ -170,7 +195,10 @@ class SingleFlySimulationForRendering(Simulation):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert len(self.world.fly_lookup) == 1, "Expecting exactly one fly in the simulation."
-        assert len(self.world.fly_lookup["nmf"].cameraname_to_mjcfcamera)
+        # Lookup key depends on whether use_flybody is set ("flybody" vs "nmf"),
+        # so derive it from the lookup rather than hard-coding.
+        self._fly_name = next(iter(self.world.fly_lookup))
+        assert len(self.world.fly_lookup[self._fly_name].cameraname_to_mjcfcamera)
         self._map_internal_meshstatesensor_ids()
         self._map_internal_cardinalsensor_ids()
         self._map_internal_material_ids()
@@ -264,7 +292,8 @@ def get_skeleton(use_flybody: bool):
         skeleton = Skeleton(axis_order=axis_order, joint_preset=articulated_joints)
     return skeleton
 
-def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose, use_flybody):
+def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose, use_flybody,
+                      cam_pos_offset_z_mm: float = -67.0, cam_fovy_deg: float = 5.0):
 
     # This controlls how strongly the actuators try to track the target joint angles
     actuator_gain = 150.0  # in uN*mm/rad (torque applied per angular discrepancy)
@@ -306,7 +335,11 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
 
     fly.mjcf_root.root.option.timestep = sim_timestep
 
-    assert fly.name == "nmf", "Expecting fly name to be 'nmf' for consistency with sensors and data recording."
+    expected_fly_name = "flybody" if use_flybody else "nmf"
+    assert fly.name == expected_fly_name, (
+        f"Expecting fly name to be '{expected_fly_name}' (use_flybody={use_flybody}) "
+        f"for consistency with sensors and data recording; got '{fly.name}'."
+    )
 
     materials_lookups = []
     for visual_path in visual_paths:
@@ -314,9 +347,13 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         materials_lookups.append(lookup)
         fly.colorize(visual_path)
 
-    cam_offset = (0, 0, -67) #set to 67 for nice size (spotlight like)
+    # Defaults (-67 mm, 5 deg) are the hand-picked legacy values; when a
+    # spotlight calibration artifact is supplied, the caller threads its
+    # derived pos_offset_z_mm and fovy_deg in here so the rendered px/mm at
+    # the sample plane matches the experimental camera.
+    cam_offset = (0, 0, float(cam_pos_offset_z_mm))
     cam_rot = Rotation3D(format="euler", values=(0, np.pi, -np.pi / 2))
-    tracking_cam = fly.add_tracking_camera(pos_offset=cam_offset, rotation=cam_rot, fovy=5)
+    tracking_cam = fly.add_tracking_camera(pos_offset=cam_offset, rotation=cam_rot, fovy=float(cam_fovy_deg))
     fly.add_leg_adhesion()
 
     spawn_rot = Rotation3D(format="quat", values=[1, 0, 0, 0])  # no rotation
@@ -373,7 +410,9 @@ def run_neuromechfly_simulation(
     max_sim_steps=None,
     render_depth=False,
     use_flybody=False,
-):  
+    cam_pos_offset_z_mm: float = -67.0,
+    cam_fovy_deg: float = 5.0,
+):
 
     if use_flybody:
         axis_order = FlybodyAxisOrder.YAW_ROLL_PITCH
@@ -393,6 +432,7 @@ def run_neuromechfly_simulation(
 
     sim, renderers, cam, materials_lookups = set_up_simulation(
         render_window_size, render_play_speed, render_fps, sim_timestep, visual_paths, start_pose, use_flybody,
+        cam_pos_offset_z_mm=cam_pos_offset_z_mm, cam_fovy_deg=cam_fovy_deg,
     )
 
     if render_depth:
@@ -435,19 +475,20 @@ def run_neuromechfly_simulation(
     # list[ndarray of shape (3,)], fly base position in world coordinates
     fly_base_pos_hist = []
 
-    sensorized_body_segments = sim.world.fly_lookup["nmf"].sensorized_body_segments
+    fly_name = sim._fly_name
+    sensorized_body_segments = sim.world.fly_lookup[fly_name].sensorized_body_segments
     base_pose_idx = sensorized_body_segments.index("c_thorax")  # used to track fly base position and flipping
 
     sim.warmup()
     # Simulation loop
-    sim.set_leg_adhesion_states("nmf", 0.5*np.ones(6, dtype=bool))
+    sim.set_leg_adhesion_states(fly_name, 0.5*np.ones(6, dtype=bool))
     for sim_frame_id in trange(trajectories_interp.shape[0], disable=None):
         # Stop if we have reached the desired number of simulation steps (for testing)
         if max_sim_steps is not None and sim_frame_id >= max_sim_steps:
             break
 
         # Step physics simulation
-        sim.set_actuator_inputs("nmf",
+        sim.set_actuator_inputs(fly_name,
                                 actuator_type,
                                 trajectories_interp[sim_frame_id])
         sim.step()
@@ -455,7 +496,7 @@ def run_neuromechfly_simulation(
         curr_time = sim.time
         if curr_time >= renderers[0]._last_render_time_sec + renderers[0]._secs_between_renders:
             for i, renderer in enumerate(renderers):
-                sim.colorize("nmf", materials_lookups[i])  # update fly's visual appearance to match the renderer's visual path/color coding
+                sim.colorize(fly_name, materials_lookups[i])  # update fly's visual appearance to match the renderer's visual path/color coding
                 ret = renderer.render_as_needed(sim.mj_data)
                 assert ret, "Expect rendering to be needed but render_as_needed() returned False."
             if render_depth:
@@ -469,10 +510,10 @@ def run_neuromechfly_simulation(
         timestamps_hist.append(sim.time)
 
         # Store joint angles
-        joints_angles_hist.append(sim.get_joint_angles("nmf"))
+        joints_angles_hist.append(sim.get_joint_angles(fly_name))
 
         # Store mesh states (from sensors added to each body segment)
-        state_sensor_data = sim.get_mesh_state_info("nmf")
+        state_sensor_data = sim.get_mesh_state_info(fly_name)
         body_segment_state_hists["pos_atparent"].append(state_sensor_data)
         # for sensor_type, sensor_info in body_segment_sensor_lookup.items():
         #     num_sensors = len(sensor_info["segments_list"])
@@ -482,13 +523,13 @@ def run_neuromechfly_simulation(
         #     body_segment_state_hists[sensor_type].append(sensor_readings)
 
         # Store global body segment states (from MjData)
-        pos_global = sim.get_body_positions("nmf")
-        quat_global = sim.get_body_rotations("nmf")
+        pos_global = sim.get_body_positions(fly_name)
+        quat_global = sim.get_body_rotations(fly_name)
         body_segment_state_hists["pos_global"].append(pos_global)
         body_segment_state_hists["quat_global"].append(quat_global)
 
         # Store forward vector
-        cardinal_vectors = sim.get_cardinal_vectors("nmf")
+        cardinal_vectors = sim.get_cardinal_vectors(fly_name)
         cardinal_vectors_hist.append(cardinal_vectors)  # forward/left/up vectors in world coordinates
 
         # Store camera matrix
@@ -518,15 +559,15 @@ def run_neuromechfly_simulation(
         return renderers, None
 
     all_dofs = ["-".join([j.parent.name, j.child.name, j.axis.name.lower()])
-                            for j in sim.world.fly_lookup["nmf"].get_actuated_jointdofs_order(actuator_type)]
+                            for j in sim.world.fly_lookup[fly_name].get_actuated_jointdofs_order(actuator_type)]
 
-    all_bodies = [b.name for b in sim.world.fly_lookup["nmf"].bodyseg_to_mjcfbody]
+    all_bodies = [b.name for b in sim.world.fly_lookup[fly_name].bodyseg_to_mjcfbody]
     all_world_geoms = [sim.mj_model.geom(i).name for i in range(sim.mj_model.ngeom)]
 
     import json
     
     # Process segmentation maps to explicitly set background to 0 and shift others by 1
-    seg_maps = np.array(segmentid_renderer.frames["nmf/trackcam"])
+    seg_maps = np.array(segmentid_renderer.frames[f"{fly_name}/trackcam"])
     # 255 is the skybox in uint8
     valid_mask = (seg_maps != 255)
     seg_maps[valid_mask] = seg_maps[valid_mask] + 1
@@ -741,6 +782,7 @@ def simulate_one_segment(
     max_sim_steps: int | None = None,
     render_depth: bool = False,
     use_flybody: bool = False,
+    calibration_path: str | Path | None = None,
 ) -> tuple[bool, list[str]]:
     """Simulate a single segment of kinematic recording in FlyGym. Note
     that no result will be saved if simulation fails before
@@ -803,6 +845,26 @@ def simulate_one_segment(
             "Padding causes shape mismatches with the unpadded segmentation maps."
         )
 
+    cam_pos_offset_z_mm = -67.0
+    cam_fovy_deg = 5.0
+    if calibration_path is not None:
+        from poseforge.neuromechfly.camera_calibration import load_camera_config
+        cfg = load_camera_config(calibration_path)
+        cam_pos_offset_z_mm = cfg.pos_offset_z_mm
+        cam_fovy_deg = cfg.fovy_deg
+        print(
+            f"[camera] using calibration {Path(calibration_path).name}: "
+            f"fovy={cam_fovy_deg:.4f} deg, pos_offset_z={cam_pos_offset_z_mm:.3f} mm "
+            f"(target {cfg.pixel_per_mm_at_sample:.2f} px/mm at sample, "
+            f"render_size={cfg.render_size})"
+        )
+        if cfg.render_size != render_window_size[0] or cfg.render_size != render_window_size[1]:
+            print(
+                f"[camera] WARNING: calibration render_size={cfg.render_size} does not match "
+                f"render_window_size={render_window_size}; the px/mm match assumes the renders "
+                f"are at the same resolution as the postprocessed experimental crop."
+            )
+
     if use_flybody:
         axis_order = FlybodyAxisOrder.YAW_ROLL_PITCH
         articulated_joints = FlybodyJointPreset.LEGS_ONLY
@@ -835,6 +897,8 @@ def simulate_one_segment(
         max_sim_steps=max_sim_steps,
         render_depth=render_depth,
         use_flybody=use_flybody,
+        cam_pos_offset_z_mm=cam_pos_offset_z_mm,
+        cam_fovy_deg=cam_fovy_deg,
     )
 
     # Do nothing if simulation failed before the minimum required duration is reached

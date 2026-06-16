@@ -1,15 +1,21 @@
 #!/bin/bash -l
 
-#SBATCH --job-name cut_single
+# Ablation experiment 3 of 4 (single-knob change from single.run baseline):
+#   n_layers_D: 3 -> 4
+# Targets: local texture discontinuities (issue 2) by widening the PatchGAN
+# discriminator's receptive field from ~70 to ~142 pixels so it penalizes
+# inconsistency across larger image regions.
+
+#SBATCH --job-name cut_exp3_nlD4
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
-#SBATCH --mem 92GB
+#SBATCH --mem 92BG
 #SBATCH --time 24:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /scratch/%u/style_transfer/20260425_random_center_patches_10lr/outputs/%x_%j.out
+#SBATCH --output /work/upramdya/%u/poseforgestyle_transfer/20260615_ablation/outputs/%x_%j.out
 
 set -euo pipefail
 
@@ -23,15 +29,14 @@ spack load ffmpeg
 conda activate poseforge
 
 # -----------------------------------------------------------------------------
-# Project / data paths (edit as needed)
-# -----------------------------------------------------------------------------
 PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
-DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/flybody/aymanns2022_pseudocolor_spotlight_dataset_flybody_grayscale"
+DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/aymanns2022_pseudocolor_spotlight_dataset_gray"
 
-# Base output directories
-CAMPAIGN_TAG="20260615_random_center_patches_10lr_explore"
-OUTPUT_BASE="/$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
+# Base output directories (shared across all four ablation experiments so a
+# single TensorBoard root sees all runs side by side).
+CAMPAIGN_TAG="20260615_ablation"
+OUTPUT_BASE="$WORK/$USER/poseforgestyle_transfer/${CAMPAIGN_TAG}"
 CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
 LOG_BASEDIR="${OUTPUT_BASE}/logs"
 WANDB_BASEDIR="${OUTPUT_BASE}/wandb"
@@ -40,24 +45,25 @@ OUT_BASEDIR="${OUTPUT_BASE}/outputs"
 # -----------------------------------------------------------------------------
 # Exposed model/training hyperparameters
 # -----------------------------------------------------------------------------
-RUN_NAME="$SBATCH_JOB_NAME"
+RUN_NAME="$SLURM_JOB_NAME"
 
 # Architecture / loss
 NGF=48
 NETG="stylegan2"
 LAMBDA_GAN=0.1
+N_LAYERS_D=4
 PREPROCESS="random_center_patch"
-CENTER_OFFSET=500
-LOAD_SIZE=912
+CENTER_OFFSET=200
+LOAD_SIZE=900
 LR_POLICY="linear"
 
-# Optimization / schedule
+# Optimization / schedule (sized for the 24h SBATCH budget)
 BATCH_SIZE=4
 LR=0.001
 START_EPOCH="latest"
-N_EPOCHS=500
-N_EPOCHS_DECAY=500
-FINETUNE_LOAD_SIZE=912
+N_EPOCHS=50
+N_EPOCHS_DECAY=70
+FINETUNE_LOAD_SIZE=900
 
 # Runtime / logging
 CUT_MODE="CUT"
@@ -76,7 +82,6 @@ LOG_DIR="${LOG_BASEDIR}/${BASE_RUN_NAME}"
 WANDB_DIR="${WANDB_BASEDIR}/${BASE_RUN_NAME}"
 
 mkdir -p "$CHECKPOINT_DIR" "$LOG_DIR" "$WANDB_DIR" "$OUT_BASEDIR"
-# Optional: expose WANDB_DIR to training process
 export WANDB_DIR
 
 # -----------------------------------------------------------------------------
@@ -102,6 +107,8 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --lr "$LR" \
     --ngf "$NGF" \
     --netG "$NETG" \
+    --netD n_layers \
+    --n_layers_D "$N_LAYERS_D" \
     --batch_size "$BATCH_SIZE" \
     --lambda_GAN "$LAMBDA_GAN" \
     --save_epoch_freq "$SAVE_EPOCH_FREQ" \

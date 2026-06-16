@@ -239,6 +239,10 @@ class Pose2p5DModel(nn.Module):
             if not checkpoint_path.is_file():
                 raise ValueError(f"Model weights path {checkpoint_path} is not a file")
             weights = torch.load(checkpoint_path, map_location="cpu")
+            # A joint segpose checkpoint stores {"pose": ..., "bodyseg": ...};
+            # transparently pick the pose slice so this inference path stays unchanged.
+            if isinstance(weights, dict) and "pose" in weights and "bodyseg" in weights:
+                weights = weights["pose"]
             self.load_state_dict(weights)
             logging.info(
                 f"Loaded Pose2p5DModel weights (inc. feature extractor) from config"
