@@ -1,18 +1,26 @@
+import os
 import h5py
 import numpy as np
 import pandas as pd
 import logging
 import imageio.v2 as imageio
+import tyro
 from shutil import copyfile
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from tqdm import tqdm
 from pathlib import Path
 from pvio.io import read_frames_from_video, check_num_frames
 
 
-def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path, video_filename:str) -> dict[Path, int]:
+def list_nmf_simulations_and_num_frames(
+    nmf_rendering_dir: Path, video_filename: str, num_workers: int
+) -> dict[Path, int]:
     print("Indexing frames from NeuroMechFly simulation videos:")
-    num_frames_dict = {}
+    # Collect all candidate video files first, then count frames in parallel
+    # (each check_num_frames opens the video, which is I/O bound).
+    video_files = []
     for traj_dir in nmf_rendering_dir.iterdir():
         if not traj_dir.is_dir():
             continue
@@ -24,12 +32,23 @@ def list_nmf_simulations_and_num_frames(nmf_rendering_dir: Path, video_filename:
                     "subsegment_"
                 ):
                     continue
-                video_file = subseg_dir /  video_filename
+                video_file = subseg_dir / video_filename
                 if not video_file.is_file():
                     logging.warning(f"Expected video file {video_file} does not exist.")
-                num_frames = check_num_frames(video_file)
-                num_frames_dict[video_file] = num_frames
-                print(f"  {video_file}: {num_frames} frames")
+                video_files.append(video_file)
+
+    num_frames_dict = {}
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_video = {
+            executor.submit(check_num_frames, vf): vf for vf in video_files
+        }
+        for future in tqdm(
+            as_completed(future_to_video), total=len(future_to_video), disable=None
+        ):
+            video_file = future_to_video[future]
+            num_frames_dict[video_file] = future.result()
+    for video_file, num_frames in num_frames_dict.items():
+        print(f"  {video_file}: {num_frames} frames")
     return num_frames_dict
 
 
@@ -49,7 +68,57 @@ def list_spotlight_recordings_and_num_frames(
     return num_frames_dict
 
 
-def extract_nmf_simulation_frames_from_specs(frame_specs: list[tuple[Path, int, Path]]):
+def _extract_one_nmf_video(
+    video_path: Path, specs: list[tuple[int, Path]]
+) -> int:
+    """Extract every selected frame (and mask) for a single NMF video.
+
+    Runs in a worker process; everything it touches is independent of the
+    other videos. Returns the number of frames written.
+    """
+    frame_indices = [frame_idx for frame_idx, _ in specs]
+    frames, fps = read_frames_from_video(video_path, frame_indices)
+    frames_dict = {idx: frame for idx, frame in zip(frame_indices, frames)}
+
+    # Load the matching foreground masks from the simulation h5 once per
+    # video. "postprocessed/segmentation_labels" is integer-labelled with
+    # 0=background, so we binarize to a uint8 silhouette mask aligned with
+    # the rendered video frames. Read all needed frames in a single sorted,
+    # de-duplicated fancy-index call instead of one slice per frame.
+    h5_path = video_path.parent / "processed_simulation_data.h5"
+    masks_dict = {}
+    if h5_path.is_file():
+        unique_sorted = sorted(set(frame_indices))
+        with h5py.File(h5_path, "r") as h5_file:
+            seg_dataset = h5_file["postprocessed/segmentation_labels"]
+            segs = np.asarray(seg_dataset[unique_sorted])
+        for frame_idx, seg in zip(unique_sorted, segs):
+            masks_dict[frame_idx] = (seg != 0).astype(np.uint8) * 255
+    else:
+        logging.warning(
+            f"Expected segmentation h5 file {h5_path} does not exist; "
+            "masks will not be extracted for this video."
+        )
+
+    trial, segment_id, subsegment_id = str(video_path.parent).split("/")[-3:]
+    for frame_idx, output_dir in specs:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"{trial}_{segment_id}_{subsegment_id}_frame_{frame_idx:06d}"
+        output_path = output_dir / f"{stem}.jpg"
+        imageio.imwrite(output_path, frames_dict[frame_idx])
+
+        if frame_idx in masks_dict:
+            # Mirror the trainA/ vs testA/ layout with trainA_mask/ vs testA_mask/.
+            mask_dir = output_dir.parent / f"{output_dir.name}_mask"
+            mask_dir.mkdir(parents=True, exist_ok=True)
+            mask_path = mask_dir / f"{stem}.png"
+            imageio.imwrite(mask_path, masks_dict[frame_idx])
+    return len(specs)
+
+
+def extract_nmf_simulation_frames_from_specs(
+    frame_specs: list[tuple[Path, int, Path]], num_workers: int
+):
     """Extract frames from NeuroMechFly simulation videos based on spec
     list (defined below).
 
@@ -57,6 +126,7 @@ def extract_nmf_simulation_frames_from_specs(frame_specs: list[tuple[Path, int, 
         frame_specs (list[tuple[Path, int, Path]]): A list of tuples, each
             containing (i) the video path, (ii) frame index, and (iii)
             directory under which the frame should be stored.
+        num_workers (int): Number of worker processes to fan videos out to.
     """
     # Sort selected frames by video and frame idx within video
     specs_by_video = defaultdict(list)  # video_path -> list of (frame_idx, output_dir)
@@ -65,48 +135,24 @@ def extract_nmf_simulation_frames_from_specs(frame_specs: list[tuple[Path, int, 
     for key, val in specs_by_video.items():
         specs_by_video[key] = sorted(val, key=lambda x: x[0])
 
-    # Extract frames
+    # Extract frames. Each video is fully independent, and the work (video
+    # decode + JPEG/PNG encode) is CPU bound, so fan the videos out across
+    # worker processes.
     print("Extracting frames from NeuroMechFly simulation videos...")
-    for video_path, specs in tqdm(specs_by_video.items(), disable=None):
-        frame_indices = [frame_idx for frame_idx, _ in specs]
-        frames, fps = read_frames_from_video(video_path, frame_indices)
-        frames_dict = {idx: frame for idx, frame in zip(frame_indices, frames)}
-
-        # Load the matching foreground masks from the simulation h5 once per
-        # video. "postprocessed/segmentation_labels" is integer-labelled with
-        # 0=background, so we binarize to a uint8 silhouette mask aligned with
-        # the rendered video frames.
-        h5_path = video_path.parent / "processed_simulation_data.h5"
-        masks_dict = {}
-        if h5_path.is_file():
-            with h5py.File(h5_path, "r") as h5_file:
-                seg_dataset = h5_file["postprocessed/segmentation_labels"]
-                for frame_idx in frame_indices:
-                    seg = np.asarray(seg_dataset[frame_idx])
-                    masks_dict[frame_idx] = ((seg != 0).astype(np.uint8) * 255)
-        else:
-            logging.warning(
-                f"Expected segmentation h5 file {h5_path} does not exist; "
-                "masks will not be extracted for this video."
-            )
-
-        for frame_idx, output_dir in specs:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            trial, segment_id, subsegment_id = str(video_path.parent).split("/")[-3:]
-            stem = f"{trial}_{segment_id}_{subsegment_id}_frame_{frame_idx:06d}"
-            output_path = output_dir / f"{stem}.jpg"
-            imageio.imwrite(output_path, frames_dict[frame_idx])
-
-            if frame_idx in masks_dict:
-                # Mirror the trainA/ vs testA/ layout with trainA_mask/ vs testA_mask/.
-                mask_dir = output_dir.parent / f"{output_dir.name}_mask"
-                mask_dir.mkdir(parents=True, exist_ok=True)
-                mask_path = mask_dir / f"{stem}.png"
-                imageio.imwrite(mask_path, masks_dict[frame_idx])
+    items = list(specs_by_video.items())
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = [
+            executor.submit(_extract_one_nmf_video, video_path, specs)
+            for video_path, specs in items
+        ]
+        for future in tqdm(
+            as_completed(futures), total=len(futures), disable=None
+        ):
+            future.result()
 
 
 def extract_spotlight_recording_frames_from_specs(
-    frame_specs: list[tuple[Path, int, Path]],
+    frame_specs: list[tuple[Path, int, Path]], num_workers: int
 ):
     """Extract frames from Spotlight recordings based on spec list (defined
     below).
@@ -115,6 +161,7 @@ def extract_spotlight_recording_frames_from_specs(
         frame_specs (list[tuple[Path, int, Path]]): A list of tuples, each
             containing (i) the video path, (ii) frame index, and (iii)
             directory under which the frame should be stored.
+        num_workers (int): Number of I/O worker threads for the file copies.
     """
     # Sort selected frames by video and frame idx within video
     specs_by_subsegment = defaultdict(
@@ -125,9 +172,11 @@ def extract_spotlight_recording_frames_from_specs(
     for key, val in specs_by_subsegment.items():
         specs_by_subsegment[key] = sorted(val, key=lambda x: x[0])
 
-    # Extract frames
+    # Build the full list of (src, dst) copy jobs, then run them in a thread
+    # pool (pure file I/O, so threads are enough and avoid pickling overhead).
     print("Extracting frames from Spotlight recordings...")
-    for trial_dir, specs in tqdm(specs_by_subsegment.items(), disable=None):
+    copy_jobs = []  # list of (input_path, output_path)
+    for trial_dir, specs in specs_by_subsegment.items():
         dataframe = pd.read_csv(trial_dir / "predicted_flip_labels.csv")
         dataframe = dataframe[dataframe["predicted_label"] == "not flipped"]
         for frame_idx_among_selection, out_dir in specs:
@@ -136,26 +185,50 @@ def extract_spotlight_recording_frames_from_specs(
             input_path = trial_dir / "all" / image_filename
             output_path = out_dir / f"{trial_dir.name}_{image_filename}"
             out_dir.mkdir(parents=True, exist_ok=True)
-            copyfile(input_path, output_path)
+            copy_jobs.append((input_path, output_path))
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [
+            executor.submit(copyfile, src, dst) for src, dst in copy_jobs
+        ]
+        for future in tqdm(
+            as_completed(futures), total=len(futures), disable=None
+        ):
+            future.result()
 
 
-if __name__ == "__main__":
-    # Define data paths
-    # Simulated images (generated by poseforge/neuromechfly/scripts/run_simulation.py)
-    nmf_rendering_dir = Path("/scratch/stimpfli/poseforge/data/bulk_data")
-    # Recorded images (from Spotlight)
-    spotlight_recordings_dir = Path(
+@dataclass
+class Config:
+    """Command-line configuration for dataset extraction."""
+
+    # Directory of NeuroMechFly simulation renderings (the simulated data),
+    # generated by poseforge/neuromechfly/scripts/run_simulation.py.
+    nmf_rendering_dir: Path = Path("/scratch/stimpfli/poseforge/data/bulk_data")
+    # Directory of recorded Spotlight images.
+    spotlight_recordings_dir: Path = Path(
         "/scratch/stimpfli/poseforge/behavior_images/spotlight_aligned_and_cropped"
     )
-    # Output directory for extracted training images
-    output_dir = Path(
+    # Output directory for the extracted training images.
+    output_dir: Path = Path(
         "/scratch/stimpfli/poseforge/clean_datasets/datasets/aymanns2022_pseudocolor_spotlight_dataset_gray"
     )
-    video_filename = "processed_nmf_sim_render_grayscale.mp4"
+    # Name of the rendered video file inside each NMF subsegment directory.
+    video_filename: str = "processed_nmf_sim_render_grayscale.mp4"
+    # Number of parallel workers (processes for decode/encode, threads for I/O).
+    num_workers: int = os.cpu_count() or 1
+    # Random seed for reproducible frame selection.
+    random_seed: int = 42
+
+
+def main(config: Config):
+    nmf_rendering_dir = config.nmf_rendering_dir
+    spotlight_recordings_dir = config.spotlight_recordings_dir
+    output_dir = config.output_dir
+    video_filename = config.video_filename
+    num_workers = config.num_workers
 
     # Fix random state for reproducibility
-    random_seed = 42
-    np.random.seed(random_seed)
+    np.random.seed(config.random_seed)
 
     # Define number of frames to extract
     num_frames_config = {
@@ -165,7 +238,9 @@ if __name__ == "__main__":
 
     # Index number of frames in each trial/recording
     # NMF simulation
-    nmf_num_frames = list_nmf_simulations_and_num_frames(nmf_rendering_dir, video_filename)
+    nmf_num_frames = list_nmf_simulations_and_num_frames(
+        nmf_rendering_dir, video_filename, num_workers
+    )
     print("NMF Simulation Video Frames:")
     for video, num_frames in nmf_num_frames.items():
         print(f"  {video}: {num_frames} frames")
@@ -230,7 +305,7 @@ if __name__ == "__main__":
         for path, frame_idx in selected_frame_specs[dataset_type]["nmf_simulation"]:
             img_out_dir = output_dir / f"{dataset_type_}A"
             nmf_specs.append((path, frame_idx, img_out_dir))
-    extract_nmf_simulation_frames_from_specs(nmf_specs)
+    extract_nmf_simulation_frames_from_specs(nmf_specs, num_workers)
 
     # Spotlight recordings
     spotlight_specs = []
@@ -241,4 +316,8 @@ if __name__ == "__main__":
         ]:
             img_out_dir = output_dir / f"{dataset_type_}B"
             spotlight_specs.append((path, frame_idx, img_out_dir))
-    extract_spotlight_recording_frames_from_specs(spotlight_specs)
+    extract_spotlight_recording_frames_from_specs(spotlight_specs, num_workers)
+
+
+if __name__ == "__main__":
+    main(tyro.cli(Config))
