@@ -23,7 +23,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /work/upramdya/%u/poseforgestyle_transfer/20260615_ablation/outputs/%x_%j.out
+#SBATCH --output /work/upramdya/%u/poseforge/style_transfer/20260615_ablation/outputs/%x_%j.out
 
 set -euo pipefail
 
@@ -39,12 +39,12 @@ conda activate poseforge
 # -----------------------------------------------------------------------------
 PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
-DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/aymanns2022_pseudocolor_spotlight_dataset_gray"
+DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_pseudocolor_spotlight_dataset_gray"
 
 # Base output directories (shared across all four ablation experiments so a
 # single TensorBoard root sees all runs side by side).
 CAMPAIGN_TAG="20260615_ablation"
-OUTPUT_BASE="$WORK/$USER/poseforgestyle_transfer/${CAMPAIGN_TAG}"
+OUTPUT_BASE="$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
 CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
 LOG_BASEDIR="${OUTPUT_BASE}/logs"
 WANDB_BASEDIR="${OUTPUT_BASE}/wandb"
