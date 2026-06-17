@@ -85,6 +85,18 @@ if __name__ == "__main__":
     dataset = create_dataset(opt)
     dataset_size = len(dataset)
 
+    # If the mask-aware edge loss is enabled, refuse to start without masks --
+    # silently running with a missing mask directory would let the loss be a
+    # no-op and waste a 24h training slot.
+    if getattr(opt, "lambda_edge", 0.0) > 0.0:
+        underlying_dataset = dataset.dataset
+        assert getattr(underlying_dataset, "has_mask_A", False), (
+            f"--lambda_edge={opt.lambda_edge} requires per-frame masks for "
+            f"domain A, but no '{opt.phase}A_mask/' directory was found under "
+            f"{opt.dataroot}. Re-extract the dataset with the updated "
+            "extract_dataset.py (which now also writes silhouette masks)."
+        )
+
     # Create a model given opt.model and other options
     model = create_model(opt)
     print(f"The number of training images = {dataset_size}")
