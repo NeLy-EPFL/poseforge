@@ -1,13 +1,10 @@
 #!/bin/bash -l
 
-# Ablation experiment 4 of 4 (single-knob change from single.run baseline):
-#   Adam betas: (0.5, 0.999) -> (0.0, 0.99)
-# Targets: training instability (issue 1). These are the StyleGAN2 community's
-# standard Adam settings. With high LR + a StyleGAN2 generator, the default
-# 0.5/0.999 betas let Adam's second-moment buffer adapt too slowly to gradient
-# magnitude shifts, which can drive the epoch-to-epoch style drift you saw.
+# Ablation experiment 0 (control baseline):
+#   BATCH_SIZE: 4
+# Targets: establishing a baseline for the ablation study.
 
-#SBATCH --job-name cut_exp4_adamSG2
+#SBATCH --job-name cut_exp0_control
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
@@ -34,7 +31,7 @@ PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
 DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_pseudocolor_spotlight_dataset_gray"
 
-# Base output directories (shared across all four ablation experiments so a
+# Base output directories (shared across all ablation experiments so a
 # single TensorBoard root sees all runs side by side).
 CAMPAIGN_TAG="20260615_ablation"
 OUTPUT_BASE="$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
@@ -60,8 +57,6 @@ LR_POLICY="linear"
 # Optimization / schedule (sized for the 24h SBATCH budget)
 BATCH_SIZE=4
 LR=0.001
-BETA1=0.0
-BETA2=0.99
 START_EPOCH="latest"
 N_EPOCHS=50
 N_EPOCHS_DECAY=70
@@ -107,8 +102,6 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --n_epochs "$N_EPOCHS" \
     --n_epochs_decay "$N_EPOCHS_DECAY" \
     --lr "$LR" \
-    --beta1 "$BETA1" \
-    --beta2 "$BETA2" \
     --ngf "$NGF" \
     --netG "$NETG" \
     --batch_size "$BATCH_SIZE" \

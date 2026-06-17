@@ -14,7 +14,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /work/upramdya/%u/poseforgestyle_transfer/20260615_ablation/outputs/%x_%j.out
+#SBATCH --output /work/upramdya/%u/poseforge/style_transfer/20260615_ablation/outputs/%x_%j.out
 
 set -euo pipefail
 
