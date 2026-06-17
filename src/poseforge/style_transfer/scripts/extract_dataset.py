@@ -1,3 +1,4 @@
+import h5py
 import numpy as np
 import pandas as pd
 import logging
@@ -70,14 +71,38 @@ def extract_nmf_simulation_frames_from_specs(frame_specs: list[tuple[Path, int, 
         frame_indices = [frame_idx for frame_idx, _ in specs]
         frames, fps = read_frames_from_video(video_path, frame_indices)
         frames_dict = {idx: frame for idx, frame in zip(frame_indices, frames)}
+
+        # Load the matching foreground masks from the simulation h5 once per
+        # video. "postprocessed/segmentation_labels" is integer-labelled with
+        # 0=background, so we binarize to a uint8 silhouette mask aligned with
+        # the rendered video frames.
+        h5_path = video_path.parent / "processed_simulation_data.h5"
+        masks_dict = {}
+        if h5_path.is_file():
+            with h5py.File(h5_path, "r") as h5_file:
+                seg_dataset = h5_file["postprocessed/segmentation_labels"]
+                for frame_idx in frame_indices:
+                    seg = np.asarray(seg_dataset[frame_idx])
+                    masks_dict[frame_idx] = ((seg != 0).astype(np.uint8) * 255)
+        else:
+            logging.warning(
+                f"Expected segmentation h5 file {h5_path} does not exist; "
+                "masks will not be extracted for this video."
+            )
+
         for frame_idx, output_dir in specs:
             output_dir.mkdir(parents=True, exist_ok=True)
             trial, segment_id, subsegment_id = str(video_path.parent).split("/")[-3:]
-            output_path = (
-                output_dir
-                / f"{trial}_{segment_id}_{subsegment_id}_frame_{frame_idx:06d}.jpg"
-            )
+            stem = f"{trial}_{segment_id}_{subsegment_id}_frame_{frame_idx:06d}"
+            output_path = output_dir / f"{stem}.jpg"
             imageio.imwrite(output_path, frames_dict[frame_idx])
+
+            if frame_idx in masks_dict:
+                # Mirror the trainA/ vs testA/ layout with trainA_mask/ vs testA_mask/.
+                mask_dir = output_dir.parent / f"{output_dir.name}_mask"
+                mask_dir.mkdir(parents=True, exist_ok=True)
+                mask_path = mask_dir / f"{stem}.png"
+                imageio.imwrite(mask_path, masks_dict[frame_idx])
 
 
 def extract_spotlight_recording_frames_from_specs(
