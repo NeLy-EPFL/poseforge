@@ -14,12 +14,61 @@ from pathlib import Path
 from pvio.io import read_frames_from_video, check_num_frames
 
 
+def _count_usable_nmf_frames(video_file: Path) -> tuple[Path, int, str]:
+    """Return (video_file, num_usable_frames, status_tag) for one subsegment.
+
+    A subsegment is "usable" only if it has BOTH a rendered video AND a
+    matching `postprocessed/segmentation_labels` dataset in
+    processed_simulation_data.h5. num_usable_frames is capped to the shorter
+    of the two so we never index past either array. Failures return 0 frames
+    with a tag explaining why; the caller logs and skips the subsegment so
+    the downstream random pool only contains valid (video, frame_idx) tuples.
+    """
+    if not video_file.is_file():
+        return (video_file, 0, "missing video")
+    h5_path = video_file.parent / "processed_simulation_data.h5"
+    if not h5_path.is_file():
+        return (video_file, 0, "missing simulation h5 (no mask available)")
+    try:
+        with h5py.File(h5_path, "r") as h5_file:
+            if "postprocessed/segmentation_labels" not in h5_file:
+                return (video_file, 0, "h5 has no postprocessed/segmentation_labels")
+            num_seg_frames = int(
+                h5_file["postprocessed/segmentation_labels"].shape[0]
+            )
+    except (OSError, KeyError) as exc:
+        return (video_file, 0, f"failed to read h5: {exc}")
+    try:
+        num_video_frames = check_num_frames(video_file)
+    except Exception as exc:  # noqa: BLE001
+        return (video_file, 0, f"failed to read video: {exc}")
+    num_usable = min(num_video_frames, num_seg_frames)
+    if num_usable <= 0:
+        return (video_file, 0, "no usable frames")
+    if num_seg_frames != num_video_frames:
+        status = (
+            f"capped to {num_usable} (video has {num_video_frames}, "
+            f"h5 segmentation has {num_seg_frames})"
+        )
+    else:
+        status = "ok"
+    return (video_file, num_usable, status)
+
+
 def list_nmf_simulations_and_num_frames(
     nmf_rendering_dir: Path, video_filename: str, num_workers: int
 ) -> dict[Path, int]:
+    """Index NMF subsegments that have BOTH a rendered video AND matching
+    foreground silhouettes in processed_simulation_data.h5.
+
+    Subsegments that fail either check are reported as warnings and excluded
+    from the returned pool. Because the random selection downstream draws
+    only from this pool, requested frames are "replaced by another" implicitly
+    -- the pool never contains an entry without a usable mask.
+    """
     print("Indexing frames from NeuroMechFly simulation videos:")
-    # Collect all candidate video files first, then count frames in parallel
-    # (each check_num_frames opens the video, which is I/O bound).
+    # Collect all candidate video files first, then validate (video frame
+    # count + h5 segmentation length) in parallel.
     video_files = []
     for traj_dir in nmf_rendering_dir.iterdir():
         if not traj_dir.is_dir():
@@ -32,23 +81,34 @@ def list_nmf_simulations_and_num_frames(
                     "subsegment_"
                 ):
                     continue
-                video_file = subseg_dir / video_filename
-                if not video_file.is_file():
-                    logging.warning(f"Expected video file {video_file} does not exist.")
-                video_files.append(video_file)
+                video_files.append(subseg_dir / video_filename)
 
-    num_frames_dict = {}
+    num_frames_dict: dict[Path, int] = {}
+    skipped: list[tuple[Path, str]] = []
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_video = {
-            executor.submit(check_num_frames, vf): vf for vf in video_files
+            executor.submit(_count_usable_nmf_frames, vf): vf for vf in video_files
         }
         for future in tqdm(
             as_completed(future_to_video), total=len(future_to_video), disable=None
         ):
-            video_file = future_to_video[future]
-            num_frames_dict[video_file] = future.result()
+            video_file, num_usable, status = future.result()
+            if num_usable <= 0:
+                skipped.append((video_file, status))
+                continue
+            if status != "ok":
+                logging.warning(f"{video_file}: {status}")
+            num_frames_dict[video_file] = num_usable
+
     for video_file, num_frames in num_frames_dict.items():
-        print(f"  {video_file}: {num_frames} frames")
+        print(f"  {video_file}: {num_frames} usable frames")
+    for video_file, status in skipped:
+        logging.warning(f"Skipping {video_file.parent}: {status}")
+    if skipped:
+        print(
+            f"Excluded {len(skipped)} subsegment(s) from the NMF pool due to "
+            "missing or invalid video/mask data."
+        )
     return num_frames_dict
 
 
@@ -70,11 +130,14 @@ def list_spotlight_recordings_and_num_frames(
 
 def _extract_one_nmf_video(
     video_path: Path, specs: list[tuple[int, Path]]
-) -> int:
+) -> tuple[int, int]:
     """Extract every selected frame (and mask) for a single NMF video.
 
     Runs in a worker process; everything it touches is independent of the
-    other videos. Returns the number of frames written.
+    other videos. Returns (num_pairs_written, num_pairs_skipped). A "pair" is
+    an aligned (image, mask) -- if we cannot produce one, we write neither,
+    so the dataset class can safely assume that every entry in trainA/ has a
+    matching entry in trainA_mask/.
     """
     frame_indices = [frame_idx for frame_idx, _ in specs]
     frames, fps = read_frames_from_video(video_path, frame_indices)
@@ -86,34 +149,52 @@ def _extract_one_nmf_video(
     # the rendered video frames. Read all needed frames in a single sorted,
     # de-duplicated fancy-index call instead of one slice per frame.
     h5_path = video_path.parent / "processed_simulation_data.h5"
-    masks_dict = {}
+    masks_dict: dict[int, np.ndarray] = {}
     if h5_path.is_file():
         unique_sorted = sorted(set(frame_indices))
-        with h5py.File(h5_path, "r") as h5_file:
-            seg_dataset = h5_file["postprocessed/segmentation_labels"]
-            segs = np.asarray(seg_dataset[unique_sorted])
-        for frame_idx, seg in zip(unique_sorted, segs):
-            masks_dict[frame_idx] = (seg != 0).astype(np.uint8) * 255
+        try:
+            with h5py.File(h5_path, "r") as h5_file:
+                seg_dataset = h5_file["postprocessed/segmentation_labels"]
+                segs = np.asarray(seg_dataset[unique_sorted])
+            for frame_idx, seg in zip(unique_sorted, segs):
+                masks_dict[frame_idx] = (seg != 0).astype(np.uint8) * 255
+        except (OSError, KeyError, IndexError, ValueError) as exc:
+            logging.warning(
+                f"Failed to read masks from {h5_path} ({exc}); all frames "
+                "from this video will be skipped to preserve the image-mask "
+                "pairing invariant."
+            )
     else:
         logging.warning(
-            f"Expected segmentation h5 file {h5_path} does not exist; "
-            "masks will not be extracted for this video."
+            f"Expected segmentation h5 file {h5_path} does not exist; all "
+            "frames from this video will be skipped to preserve the "
+            "image-mask pairing invariant."
         )
 
     trial, segment_id, subsegment_id = str(video_path.parent).split("/")[-3:]
+    num_written = 0
+    num_skipped = 0
     for frame_idx, output_dir in specs:
+        if frame_idx not in masks_dict:
+            # No matching mask: do NOT write the image either. The downstream
+            # dataset class assumes "image present iff mask present" -- this
+            # invariant is what previously broke when the h5 was missing.
+            logging.warning(
+                f"Skipping {video_path} frame {frame_idx}: no mask available."
+            )
+            num_skipped += 1
+            continue
         output_dir.mkdir(parents=True, exist_ok=True)
         stem = f"{trial}_{segment_id}_{subsegment_id}_frame_{frame_idx:06d}"
         output_path = output_dir / f"{stem}.jpg"
         imageio.imwrite(output_path, frames_dict[frame_idx])
 
-        if frame_idx in masks_dict:
-            # Mirror the trainA/ vs testA/ layout with trainA_mask/ vs testA_mask/.
-            mask_dir = output_dir.parent / f"{output_dir.name}_mask"
-            mask_dir.mkdir(parents=True, exist_ok=True)
-            mask_path = mask_dir / f"{stem}.png"
-            imageio.imwrite(mask_path, masks_dict[frame_idx])
-    return len(specs)
+        mask_dir = output_dir.parent / f"{output_dir.name}_mask"
+        mask_dir.mkdir(parents=True, exist_ok=True)
+        mask_path = mask_dir / f"{stem}.png"
+        imageio.imwrite(mask_path, masks_dict[frame_idx])
+        num_written += 1
+    return num_written, num_skipped
 
 
 def extract_nmf_simulation_frames_from_specs(
@@ -140,6 +221,8 @@ def extract_nmf_simulation_frames_from_specs(
     # worker processes.
     print("Extracting frames from NeuroMechFly simulation videos...")
     items = list(specs_by_video.items())
+    total_written = 0
+    total_skipped = 0
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = [
             executor.submit(_extract_one_nmf_video, video_path, specs)
@@ -148,7 +231,22 @@ def extract_nmf_simulation_frames_from_specs(
         for future in tqdm(
             as_completed(futures), total=len(futures), disable=None
         ):
-            future.result()
+            num_written, num_skipped = future.result()
+            total_written += num_written
+            total_skipped += num_skipped
+    print(
+        f"NMF extraction: wrote {total_written} image+mask pairs"
+        + (f", skipped {total_skipped} due to mask failures" if total_skipped else "")
+        + "."
+    )
+    if total_skipped:
+        logging.warning(
+            f"{total_skipped} NMF frame(s) were skipped at extraction time even "
+            "though the upstream listing marked them usable. The output dataset "
+            "is short by that many frames; re-run with a different --random_seed "
+            "to draw replacements from the same pool, or investigate the warnings "
+            "above to find the responsible video(s)."
+        )
 
 
 def extract_spotlight_recording_frames_from_specs(
