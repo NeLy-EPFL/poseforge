@@ -53,7 +53,7 @@ PREPROCESS="random_center_patch"
 CENTER_OFFSET=200
 LOAD_SIZE=900
 LR_POLICY="linear"
-NCE_LAYERS="12,16"
+NCE_LAYERS="4,5,6"
 
 # Optimization / schedule (sized for the 24h SBATCH budget)
 BATCH_SIZE=4
