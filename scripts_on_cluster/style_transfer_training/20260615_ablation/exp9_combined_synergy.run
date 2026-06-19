@@ -1,0 +1,134 @@
+#!/bin/bash -l
+
+# Ablation experiment 9 (combining exp 1-6):
+#   BATCH_SIZE: 16 (from exp1)
+#   LAMBDA_GAN: 0.3 (from exp2)
+#   N_LAYERS_D: 4 (from exp3)
+#   Adam betas: (0.0, 0.99) (from exp4)
+#   center_patch_distribution: gaussian, sigma = 400 (from exp5)
+#   lambda_edge: 1.0 (from exp6)
+# Targets: Test for synergistic effects of all previous individual improvements.
+
+#SBATCH --job-name cut_exp9_combined
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /work/upramdya/%u/poseforge/style_transfer/20260615_ablation/outputs/%x_%j.out
+
+set -euo pipefail
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment setup
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
+DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_pseudocolor_spotlight_dataset_gray"
+
+# Base output directories
+CAMPAIGN_TAG="20260615_ablation"
+OUTPUT_BASE="$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
+CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
+LOG_BASEDIR="${OUTPUT_BASE}/logs"
+WANDB_BASEDIR="${OUTPUT_BASE}/wandb"
+OUT_BASEDIR="${OUTPUT_BASE}/outputs"
+
+# -----------------------------------------------------------------------------
+# Exposed model/training hyperparameters
+# -----------------------------------------------------------------------------
+RUN_NAME="$SLURM_JOB_NAME"
+
+# Architecture / loss
+NGF=48
+NETG="stylegan2"
+LAMBDA_GAN=0.3
+LAMBDA_EDGE=1.0
+N_LAYERS_D=4
+PREPROCESS="random_center_patch"
+CENTER_OFFSET=400
+CENTER_DISTRIBUTION="gaussian"
+LOAD_SIZE=900
+LR_POLICY="linear"
+
+# Optimization / schedule
+BATCH_SIZE=16
+LR=0.001
+BETA1=0.0
+BETA2=0.99
+START_EPOCH="latest"
+N_EPOCHS=50
+N_EPOCHS_DECAY=70
+FINETUNE_LOAD_SIZE=900
+
+# Runtime / logging
+CUT_MODE="CUT"
+SAVE_EPOCH_FREQ=1
+NUM_THREADS=16
+WANDB_PROJECT="poseforge-image-style-transfer"
+
+# -----------------------------------------------------------------------------
+# Run name logic
+# -----------------------------------------------------------------------------
+RUN_ID=$(date +"%Y%m%d_%H%M%S")
+BASE_RUN_NAME="${RUN_ID}_${RUN_NAME}"
+
+CHECKPOINT_DIR="${CHECKPOINT_BASEDIR}/${BASE_RUN_NAME}"
+LOG_DIR="${LOG_BASEDIR}/${BASE_RUN_NAME}"
+WANDB_DIR="${WANDB_BASEDIR}/${BASE_RUN_NAME}"
+
+mkdir -p "$CHECKPOINT_DIR" "$LOG_DIR" "$WANDB_DIR" "$OUT_BASEDIR"
+export WANDB_DIR
+
+# -----------------------------------------------------------------------------
+# Train
+# -----------------------------------------------------------------------------
+cd "$PROJECT_ROOT"
+
+echo "Training starting at $(date)"
+echo "Run name: $BASE_RUN_NAME"
+echo "Checkpoints: $CHECKPOINT_DIR"
+echo "Logs: $LOG_DIR"
+echo "WandB: $WANDB_DIR"
+
+python -u "$TRAINING_SCRIPT_PATH" \
+    --dataroot "$DATASET_PATH" \
+    --name "$BASE_RUN_NAME" \
+    --CUT_mode "$CUT_MODE" \
+    --checkpoints_dir "$CHECKPOINT_DIR" \
+    --tensorboard_log_dir "$LOG_DIR" \
+    --epoch "$START_EPOCH" \
+    --n_epochs "$N_EPOCHS" \
+    --n_epochs_decay "$N_EPOCHS_DECAY" \
+    --lr "$LR" \
+    --beta1 "$BETA1" \
+    --beta2 "$BETA2" \
+    --ngf "$NGF" \
+    --netG "$NETG" \
+    --netD n_layers \
+    --n_layers_D "$N_LAYERS_D" \
+    --batch_size "$BATCH_SIZE" \
+    --lambda_GAN "$LAMBDA_GAN" \
+    --lambda_edge "$LAMBDA_EDGE" \
+    --save_epoch_freq "$SAVE_EPOCH_FREQ" \
+    --num_threads "$NUM_THREADS" \
+    --preprocess "$PREPROCESS" \
+    --crop_size 256 \
+    --load_size "$LOAD_SIZE" \
+    --finetune_load_size "$FINETUNE_LOAD_SIZE" \
+    --lr_policy "$LR_POLICY" \
+    --center_patch_offset "$CENTER_OFFSET" \
+    --center_patch_distribution "$CENTER_DISTRIBUTION" \
+    #--wandb_project "$WANDB_PROJECT" \
+
+echo "Training ends at $(date)"
