@@ -88,6 +88,11 @@ def run_keypoints3d_inference(
         model_weights=model_checkpoint_path)
     model = Pose2p5DModel.create_architecture_from_config(architecture_config_path)
     model.load_weights_from_config(model_weights)
+    # Name only the keypoints the model actually predicts (it may exclude some
+    # of the full canonical set). Indices are into the full canonical list.
+    keypoint_names = [
+        keypoint_segments_canonical[i] for i in model.included_keypoint_indices
+    ]
     pipeline = Pose2p5DPipeline(model, device="cuda", use_float16=True)
     print("========== Model Summary ==========")
     summary(pipeline.model, input_size=(3, *inference_image_size), device="cuda")
@@ -157,7 +162,7 @@ def run_keypoints3d_inference(
                 dtype=np.float16,
                 compression="gzip",
             )
-            world_xyz_ds.attrs["keypoints"] = keypoint_segments_canonical
+            world_xyz_ds.attrs["keypoints"] = keypoint_names
             world_xyz_ds.attrs["units"] = "mm"
 
             camera_xy_stack = np.stack([res[1] for res in sorted_results])
@@ -167,7 +172,7 @@ def run_keypoints3d_inference(
                 dtype=np.float16,
                 compression="gzip",
             )
-            camera_xy_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_xy_ds.attrs["keypoints"] = keypoint_names
             camera_xy_ds.attrs["units"] = "pixels"
             camera_xy_ds.attrs["image_size"] = list(inference_image_size)
 
@@ -178,7 +183,7 @@ def run_keypoints3d_inference(
                 dtype=np.float16,
                 compression="gzip",
             )
-            camera_depth_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_depth_ds.attrs["keypoints"] = keypoint_names
             camera_depth_ds.attrs["units"] = "mm"
 
             camera_xy_conf_stack = np.stack([res[3] for res in sorted_results])
@@ -188,7 +193,7 @@ def run_keypoints3d_inference(
                 dtype=np.float16,
                 compression="gzip",
             )
-            camera_xy_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_xy_conf_ds.attrs["keypoints"] = keypoint_names
             camera_xy_conf_ds.attrs["method"] = model.confidence_method
 
             camera_depth_conf_stack = np.stack([res[4] for res in sorted_results])
@@ -198,7 +203,7 @@ def run_keypoints3d_inference(
                 dtype=np.float16,
                 compression="gzip",
             )
-            camera_depth_conf_ds.attrs["keypoints"] = keypoint_segments_canonical
+            camera_depth_conf_ds.attrs["keypoints"] = keypoint_names
             camera_depth_conf_ds.attrs["method"] = model.confidence_method
 
         print(f"Wrote results to {output_dir / 'keypoints3d.h5'}")

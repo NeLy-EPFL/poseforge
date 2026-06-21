@@ -50,6 +50,7 @@ class Pose2p5DModel(nn.Module):
         decoder_spatial_dropout_p: float = 0.0,
         heatmap_n_hidden_layers: int = 0,
         heatmap_hidden_channels: int = 64,
+        excluded_keypoint_indices: tuple[int, ...] = (),
     ):
         """
         Args:
@@ -93,9 +94,45 @@ class Pose2p5DModel(nn.Module):
             heatmap_hidden_channels (int): Width of the hidden layers in
                 the heatmap head (only used when heatmap_n_hidden_layers >
                 0). Must be a divisor multiple of groupnorm_n_groups.
+            excluded_keypoint_indices (tuple[int, ...]): Indices (into the
+                full set of ``n_keypoints`` label keypoints) that the model
+                should NOT predict. The prediction heads are sized to emit
+                only the remaining (kept) keypoints, in their original
+                relative order, so these keypoints are removed from the model
+                entirely rather than left unsupervised. Empty (default) =
+                predict all ``n_keypoints`` keypoints.
         """
         super().__init__()
+        # ``n_keypoints`` is the size of the full label set (e.g. 32 canonical
+        # keypoints). ``excluded_keypoint_indices`` are dropped, so the model
+        # actually predicts ``n_predicted_keypoints`` keypoints, namely the
+        # ``included_keypoint_indices`` (kept in original relative order).
         self.n_keypoints = n_keypoints
+        self.excluded_keypoint_indices = tuple(sorted(set(excluded_keypoint_indices)))
+        if any(i < 0 or i >= n_keypoints for i in self.excluded_keypoint_indices):
+            raise ValueError(
+                f"excluded_keypoint_indices {self.excluded_keypoint_indices} contains "
+                f"indices out of range for n_keypoints={n_keypoints}."
+            )
+        self.included_keypoint_indices = tuple(
+            i for i in range(n_keypoints) if i not in set(self.excluded_keypoint_indices)
+        )
+        self.n_predicted_keypoints = len(self.included_keypoint_indices)
+        if self.n_predicted_keypoints == 0:
+            raise ValueError("All keypoints are excluded; nothing left to predict.")
+        # Long tensor of the kept indices, used to slice the (full) keypoint
+        # labels down to the predicted subset. Non-persistent: it is derived
+        # from config and need not live in the checkpoint.
+        self.register_buffer(
+            "included_keypoint_indices_t",
+            torch.tensor(self.included_keypoint_indices, dtype=torch.long),
+            persistent=False,
+        )
+        if self.excluded_keypoint_indices:
+            logging.info(
+                f"Model predicts {self.n_predicted_keypoints}/{n_keypoints} keypoints; "
+                f"excluding indices {self.excluded_keypoint_indices}."
+            )
         self.depth_n_bins = depth_n_bins
         self.depth_min = depth_min
         self.depth_max = depth_max
@@ -159,10 +196,11 @@ class Pose2p5DModel(nn.Module):
         # last layer (dec_layer1): # 64ch 64x64 -> upsample_core_out_channels, 128x128
         self.dec_layer1 = DecoderBlock(64, 64, upsample_core_out_channels)
 
-        # Heatmap head for (x, y) keypoint locations
+        # Heatmap head for (x, y) keypoint locations. Sized to the predicted
+        # (kept) keypoints only.
         self.heatmap_head = self._build_heatmap_head(
             in_channels=upsample_core_out_channels,
-            out_channels=n_keypoints,
+            out_channels=self.n_predicted_keypoints,
             n_hidden_layers=heatmap_n_hidden_layers,
             hidden_channels=heatmap_hidden_channels,
         )
@@ -171,7 +209,7 @@ class Pose2p5DModel(nn.Module):
         self.depth_head = self._build_depth_head(
             in_channels=upsample_core_out_channels,
             hidden_channels=depth_hidden_channels,
-            n_keypoints=n_keypoints,
+            n_keypoints=self.n_predicted_keypoints,
             depth_n_bins=depth_n_bins,
         )
 
@@ -213,6 +251,7 @@ class Pose2p5DModel(nn.Module):
             decoder_spatial_dropout_p=architecture_config.decoder_spatial_dropout_p,
             heatmap_n_hidden_layers=architecture_config.heatmap_n_hidden_layers,
             heatmap_hidden_channels=architecture_config.heatmap_hidden_channels,
+            excluded_keypoint_indices=architecture_config.excluded_keypoint_indices,
         )
 
         logging.info("Created Pose2p5DModel from architecture config")
@@ -620,12 +659,13 @@ class Pose2p5DModel(nn.Module):
             assert d0.shape == (batch_size, self.upsample_core_out_channels, e0.shape[2], e0.shape[3]), \
                 f"d0 shape mismatch: expected (*,{self.upsample_core_out_channels}, {e0.shape[2]}, {e0.shape[3]}), got {d0.shape}"
 
-            # Check output shapes
-            assert heatmaps.shape == (batch_size, self.n_keypoints, *heatmap_size), \
+            # Check output shapes (the model emits only the predicted/kept keypoints)
+            n_pred = self.n_predicted_keypoints
+            assert heatmaps.shape == (batch_size, n_pred, *heatmap_size), \
                 f"heatmaps shape mismatch"
-            assert xy_px_in.shape == (batch_size, self.n_keypoints, 2), \
+            assert xy_px_in.shape == (batch_size, n_pred, 2), \
                 f"xy_px_in shape mismatch"
-            assert xy_conf.shape == (batch_size, self.n_keypoints), \
+            assert xy_conf.shape == (batch_size, n_pred), \
                 f"xy_conf shape mismatch"
 
             # Check strides are positive
@@ -633,11 +673,11 @@ class Pose2p5DModel(nn.Module):
             assert stride > 0, f"stride (original-image) should be positive, got {stride}"
 
             depth_n_bins = self.depth_n_bins
-            assert depth_logits.shape == (batch_size, self.n_keypoints, depth_n_bins), \
+            assert depth_logits.shape == (batch_size, n_pred, depth_n_bins), \
                 f"depth_logits shape mismatch"
-            assert depth_pos.shape == (batch_size, self.n_keypoints), \
+            assert depth_pos.shape == (batch_size, n_pred), \
                 f"depth_pos shape mismatch"
-            assert depth_conf.shape == (batch_size, self.n_keypoints), \
+            assert depth_conf.shape == (batch_size, n_pred), \
                 f"depth_conf shape mismatch"
 
             self._first_time_forward = False

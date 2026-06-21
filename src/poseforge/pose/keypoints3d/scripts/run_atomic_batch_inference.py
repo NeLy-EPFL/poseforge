@@ -149,6 +149,7 @@ def _build_keypoints3d_model_and_pipeline(
     architecture_config = keypoints3d_config.ModelArchitectureConfig.load(
         architecture_config_path
     )
+    # n_keypoints is the FULL label-set size; it must match the canonical list.
     if architecture_config.n_keypoints != len(keypoint_segments_canonical):
         raise ValueError(
             f"keypoints3d model expects {architecture_config.n_keypoints} keypoints, "
@@ -160,7 +161,12 @@ def _build_keypoints3d_model_and_pipeline(
         keypoints3d_config.ModelWeightsConfig(model_weights=checkpoint_path)
     )
     pipeline = Pose2p5DPipeline(model, device=device, use_float16=True)
-    return model, pipeline, list(keypoint_segments_canonical)
+    # The model may predict only a subset of the canonical keypoints; name that
+    # subset (in original relative order) to match the prediction channels.
+    keypoint_names = [
+        keypoint_segments_canonical[i] for i in model.included_keypoint_indices
+    ]
+    return model, pipeline, keypoint_names
 
 
 def _save_keypoints3d_predictions(

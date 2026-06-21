@@ -1,13 +1,20 @@
 #!/bin/bash -l
 
-# Ablation experiment 4 of 4 (single-knob change from single.run baseline):
-#   Adam betas: (0.5, 0.999) -> (0.0, 0.99)
-# Targets: training instability (issue 1). These are the StyleGAN2 community's
-# standard Adam settings. With high LR + a StyleGAN2 generator, the default
-# 0.5/0.999 betas let Adam's second-moment buffer adapt too slowly to gradient
-# magnitude shifts, which can drive the epoch-to-epoch style drift you saw.
+# Ablation experiment 6 (single-knob change from single.run baseline):
+#   --lambda_edge: 0.0 -> 1.0  (mask-aware background edge loss enabled)
+#
+# Targets: hallucination of background structures (issue: generator inventing
+# detail outside the fly body). The loss penalizes Sobel gradient in fake_B at
+# pixels where the simulation silhouette mask says "background". Body interior
+# (legs, head, abdomen) is left unconstrained so internal style transfer is
+# unaffected.
+#
+# WARNING: this experiment makes the model domain-specific. Domain A must be
+# the NMF simulation (it requires per-frame silhouette masks under trainA_mask/
+# and testA_mask/, produced by the updated extract_dataset.py). --direction
+# BtoA is rejected at startup. Re-extract the dataset before submitting.
 
-#SBATCH --job-name cut_exp4_adamSG2
+#SBATCH --job-name cut_exp6_edge_lam1
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
@@ -52,6 +59,7 @@ RUN_NAME="$SLURM_JOB_NAME"
 NGF=48
 NETG="stylegan2"
 LAMBDA_GAN=0.1
+LAMBDA_EDGE=1.0
 PREPROCESS="random_center_patch"
 CENTER_OFFSET=200
 LOAD_SIZE=900
@@ -60,8 +68,6 @@ LR_POLICY="linear"
 # Optimization / schedule (sized for the 24h SBATCH budget)
 BATCH_SIZE=4
 LR=0.001
-BETA1=0.0
-BETA2=0.99
 START_EPOCH="latest"
 N_EPOCHS=50
 N_EPOCHS_DECAY=70
@@ -107,12 +113,11 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --n_epochs "$N_EPOCHS" \
     --n_epochs_decay "$N_EPOCHS_DECAY" \
     --lr "$LR" \
-    --beta1 "$BETA1" \
-    --beta2 "$BETA2" \
     --ngf "$NGF" \
     --netG "$NETG" \
     --batch_size "$BATCH_SIZE" \
     --lambda_GAN "$LAMBDA_GAN" \
+    --lambda_edge "$LAMBDA_EDGE" \
     --save_epoch_freq "$SAVE_EPOCH_FREQ" \
     --num_threads "$NUM_THREADS" \
     --preprocess "$PREPROCESS" \

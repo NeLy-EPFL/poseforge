@@ -1,0 +1,83 @@
+#!/bin/bash -l
+
+#SBATCH --job-name keypoints3d
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 90GB
+#SBATCH --time 72:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/keypoints3d_training/output_20260507_tiled_10noise.log
+
+
+echo "Hello from $(hostname)"
+
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+cd $HOME/poseforge
+
+atomic_variants_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260529_tiled_hs8"
+activation_noise_std=0.0
+heatmap_sigma=8.0
+# Keypoint indices to remove from the model entirely (the prediction heads are
+# sized to emit only the kept keypoints, and labels are sliced to match).
+# Indices are into the full 32-keypoint canonical set. Space-separated, e.g.
+# "5 6 7". Leave empty to predict all keypoints.
+# Current set drops coxa + trochanterfemur of all 6 legs, plus rh tibia/tarsus1.
+excluded_keypoint_indices="0 1 5 6 10 11 15 16 20 21 25 26 27 28"
+
+training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
+
+feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
+contrastive_pretraining_epoch="epoch007"
+contrastive_pretraining_local_step="step000500"
+
+echo "Training starting at $(date)"
+
+python -u $training_cli_path \
+    --n-epochs 30 \
+    --model-architecture-config.activation-noise-std $activation_noise_std \
+    --model-weights-config.feature-extractor-weights \
+        "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
+    --loss-config.heatmap-sigma $heatmap_sigma \
+    --model-architecture-config.excluded-keypoint-indices $excluded_keypoint_indices \
+    --training-data-config.train-data-dirs \
+        "$atomic_variants_base_dir/BO_Gal4_fly1_trial001" \
+        "$atomic_variants_base_dir/BO_Gal4_fly1_trial002" \
+        "$atomic_variants_base_dir/BO_Gal4_fly1_trial003" \
+        "$atomic_variants_base_dir/BO_Gal4_fly1_trial004" \
+        "$atomic_variants_base_dir/BO_Gal4_fly1_trial005" \
+        "$atomic_variants_base_dir/BO_Gal4_fly2_trial001" \
+        "$atomic_variants_base_dir/BO_Gal4_fly2_trial002" \
+        "$atomic_variants_base_dir/BO_Gal4_fly2_trial003" \
+        "$atomic_variants_base_dir/BO_Gal4_fly2_trial004" \
+        "$atomic_variants_base_dir/BO_Gal4_fly2_trial005" \
+        "$atomic_variants_base_dir/BO_Gal4_fly3_trial001" \
+        "$atomic_variants_base_dir/BO_Gal4_fly3_trial002" \
+        "$atomic_variants_base_dir/BO_Gal4_fly3_trial003" \
+        "$atomic_variants_base_dir/BO_Gal4_fly3_trial004" \
+        "$atomic_variants_base_dir/BO_Gal4_fly3_trial005" \
+        "$atomic_variants_base_dir/BO_Gal4_fly4_trial001" \
+        "$atomic_variants_base_dir/BO_Gal4_fly4_trial002" \
+        "$atomic_variants_base_dir/BO_Gal4_fly4_trial003" \
+        "$atomic_variants_base_dir/BO_Gal4_fly4_trial004" \
+        "$atomic_variants_base_dir/BO_Gal4_fly4_trial005" \
+    --training-data-config.val-data-dirs \
+        "$atomic_variants_base_dir/BO_Gal4_fly5_trial001" \
+    --training-data-config.input-image-size 912 912 \
+    --training-data-config.atomic-batch-n-samples 32 \
+    --training-data-config.atomic-batch-n-variants 2 \
+    --training-data-config.train-batch-size 32 \
+    --training-data-config.val-batch-size 32 \
+    --training-data-config.num-workers 8 \
+    --training-artifacts-config.output-basedir "$out_dir" \
+    --training-artifacts-config.logging-interval 10 \
+    --training-artifacts-config.checkpoint-interval 1000 \
+    --training-artifacts-config.validation-interval 1000 \
+    --training-artifacts-config.n-batches-per-validation 150 \
+
+echo "Training ends at $(date)"

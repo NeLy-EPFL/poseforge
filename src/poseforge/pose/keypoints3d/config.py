@@ -49,6 +49,14 @@ class ModelArchitectureConfig(SerializableDataClass):
     # `heatmap_n_hidden_layers > 0`. Must be a multiple of `groupnorm_n_groups`
     # and >= `groupnorm_n_groups`.
     heatmap_hidden_channels: int = 64
+    # Indices (into the full set of `n_keypoints` label keypoints) that the
+    # model should NOT predict. The prediction heads are sized to emit only
+    # the remaining (kept) keypoints, in their original relative order, so the
+    # excluded keypoints are removed from the model entirely (not merely left
+    # unsupervised). The training labels are sliced to the same kept subset.
+    # `n_keypoints` stays the FULL label-set size (e.g. 32 canonical
+    # keypoints). Empty (default) = predict all keypoints.
+    excluded_keypoint_indices: tuple[int, ...] = ()
 
     @classmethod
     def load(cls, path: Path | str):

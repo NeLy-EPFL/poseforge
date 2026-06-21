@@ -1,13 +1,15 @@
 #!/bin/bash -l
 
-# Ablation experiment 4 of 4 (single-knob change from single.run baseline):
-#   Adam betas: (0.5, 0.999) -> (0.0, 0.99)
-# Targets: training instability (issue 1). These are the StyleGAN2 community's
-# standard Adam settings. With high LR + a StyleGAN2 generator, the default
-# 0.5/0.999 betas let Adam's second-moment buffer adapt too slowly to gradient
-# magnitude shifts, which can drive the epoch-to-epoch style drift you saw.
+# Ablation experiment 9 (combining exp 1-6):
+#   BATCH_SIZE: 16 (from exp1)
+#   LAMBDA_GAN: 0.3 (from exp2)
+#   N_LAYERS_D: 4 (from exp3)
+#   Adam betas: (0.0, 0.99) (from exp4)
+#   center_patch_distribution: gaussian, sigma = 400 (from exp5)
+#   lambda_edge: 1.0 (from exp6)
+# Targets: Test for synergistic effects of all previous individual improvements.
 
-#SBATCH --job-name cut_exp4_adamSG2
+#SBATCH --job-name cut_exp9_combined
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
@@ -34,8 +36,7 @@ PROJECT_ROOT="/home/$USER/poseforge"
 TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
 DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_pseudocolor_spotlight_dataset_gray"
 
-# Base output directories (shared across all four ablation experiments so a
-# single TensorBoard root sees all runs side by side).
+# Base output directories
 CAMPAIGN_TAG="20260615_ablation"
 OUTPUT_BASE="$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
 CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
@@ -51,14 +52,17 @@ RUN_NAME="$SLURM_JOB_NAME"
 # Architecture / loss
 NGF=48
 NETG="stylegan2"
-LAMBDA_GAN=0.1
+LAMBDA_GAN=0.3
+LAMBDA_EDGE=1.0
+N_LAYERS_D=4
 PREPROCESS="random_center_patch"
-CENTER_OFFSET=200
+CENTER_OFFSET=400
+CENTER_DISTRIBUTION="gaussian"
 LOAD_SIZE=900
 LR_POLICY="linear"
 
-# Optimization / schedule (sized for the 24h SBATCH budget)
-BATCH_SIZE=4
+# Optimization / schedule
+BATCH_SIZE=16
 LR=0.001
 BETA1=0.0
 BETA2=0.99
@@ -74,7 +78,7 @@ NUM_THREADS=16
 WANDB_PROJECT="poseforge-image-style-transfer"
 
 # -----------------------------------------------------------------------------
-# Run name logic (same style as gen_batch_scripts.py)
+# Run name logic
 # -----------------------------------------------------------------------------
 RUN_ID=$(date +"%Y%m%d_%H%M%S")
 BASE_RUN_NAME="${RUN_ID}_${RUN_NAME}"
@@ -111,8 +115,11 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --beta2 "$BETA2" \
     --ngf "$NGF" \
     --netG "$NETG" \
+    --netD n_layers \
+    --n_layers_D "$N_LAYERS_D" \
     --batch_size "$BATCH_SIZE" \
     --lambda_GAN "$LAMBDA_GAN" \
+    --lambda_edge "$LAMBDA_EDGE" \
     --save_epoch_freq "$SAVE_EPOCH_FREQ" \
     --num_threads "$NUM_THREADS" \
     --preprocess "$PREPROCESS" \
@@ -121,6 +128,7 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --finetune_load_size "$FINETUNE_LOAD_SIZE" \
     --lr_policy "$LR_POLICY" \
     --center_patch_offset "$CENTER_OFFSET" \
+    --center_patch_distribution "$CENTER_DISTRIBUTION" \
     #--wandb_project "$WANDB_PROJECT" \
 
 echo "Training ends at $(date)"
