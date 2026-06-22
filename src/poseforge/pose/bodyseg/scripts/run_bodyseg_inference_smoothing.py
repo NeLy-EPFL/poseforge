@@ -123,6 +123,18 @@ def make_save_predictions_smoothing(window_size, std):
         ds_conf.attrs["scale"] = 100
         ds_conf.attrs["method"] = pipeline.model.confidence_method
 
+        frame_ids = [
+            int(p.stem.split("_")[1])
+            for p in video_obj.phy_frame_id_to_path.values()
+        ]
+        f.create_dataset(
+            "frame_ids",
+            data=frame_ids,
+            dtype="int",
+            compression="gzip",
+            shuffle=True,
+        )
+
     return save_predictions_smoothing
 
 
@@ -192,14 +204,12 @@ if __name__ == "__main__":
         )
     epoch, step = int(match.group(1)), int(match.group(2))
 
-    contrastive_checkpoint_path = prod_config.get("common", {}).get("feature_extractor_checkpoint") or \
-                                  prod_config["bodyseg"].get("contrastive_checkpoint")
-
     model_dir = checkpoint_path.parent.parent
     batch_size = prod_config["bodyseg"]["batch_size"]
     n_workers = prod_config.get("common", {}).get("n_workers", prod_config["bodyseg"].get("n_workers", 16))
     inference_image_size = tuple(prod_config.get("common", {}).get("inference_image_size") or \
                                  prod_config["bodyseg"]["inference_image_size"])
+    class_labels = prod_config.get("common", {}).get("class_labels")
     output_buffer_log_interval = prod_config["bodyseg"]["output_buffer_log_interval"]
 
     if args.output_basedir is None:
@@ -213,11 +223,11 @@ if __name__ == "__main__":
         input_basedir=args.aligned_data_dir,
         model_dir=model_dir,
         model_checkpoint_path=checkpoint_path,
-        contrastive_checkpoint_path=contrastive_checkpoint_path,
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,
         inference_image_size=inference_image_size,
+        class_labels=class_labels,
         output_buffer_log_interval=output_buffer_log_interval,
         glob_pattern=args.glob_pattern,
         output_filename="bodyseg_pred_smoothing.h5",

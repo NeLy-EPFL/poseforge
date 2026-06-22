@@ -136,6 +136,7 @@ def run_bodyseg_inference_generic(
     buckets_and_sizes = {
         i: n_frames for i, n_frames in enumerate(dataloader.dataset.n_frames_by_video)
     }
+
     output_buffer = OutputBuffer(
         buckets_and_expected_sizes=buckets_and_sizes,
         closing_func=save_predictions,
@@ -175,19 +176,18 @@ def test_bodyseg_model(
     input_basedir: Path,
     model_dir: Path,
     model_checkpoint_path: Path,
-    contrastive_checkpoint_path: Path | None = None,
     output_basedir: Path | None = None,
     batch_size: int = 512,
     n_workers: int = 16,
     inference_image_size: tuple[int, int] = (256, 256),
     output_buffer_log_interval: int = 10,
     glob_pattern: str = "fly*",
+    **kwargs,
 ):
     run_bodyseg_inference_generic(
         input_basedir=input_basedir,
         model_dir=model_dir,
         model_checkpoint_path=model_checkpoint_path,
-        contrastive_checkpoint_path=contrastive_checkpoint_path,
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,
@@ -195,6 +195,7 @@ def test_bodyseg_model(
         output_buffer_log_interval=output_buffer_log_interval,
         glob_pattern=glob_pattern,
         output_filename="bodyseg_pred.h5",
+        **kwargs,
     )
 
 
