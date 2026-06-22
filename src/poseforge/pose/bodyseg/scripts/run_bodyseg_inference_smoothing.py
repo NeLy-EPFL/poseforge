@@ -83,7 +83,7 @@ class BatchSmoother:
         return data_items
 
 
-def make_save_predictions_smoothing():
+def make_save_predictions_smoothing(class_labels=None):
     """Create a save_predictions closure for the smoothed and raw outputs."""
     def save_predictions_smoothing(f, pipeline, data_items, video_obj):
         # Save smoothed predictions as the primary datasets
@@ -95,7 +95,7 @@ def make_save_predictions_smoothing():
             compression="gzip",
             shuffle=True,
         )
-        ds.attrs["class_labels"] = pipeline.class_labels
+        ds.attrs["class_labels"] = class_labels if class_labels is not None else pipeline.class_labels
 
         confidence_smoothed = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
         ds_conf = f.create_dataset(
@@ -117,7 +117,7 @@ def make_save_predictions_smoothing():
             compression="gzip",
             shuffle=True,
         )
-        ds_raw.attrs["class_labels"] = pipeline.class_labels
+        ds_raw.attrs["class_labels"] = class_labels if class_labels is not None else pipeline.class_labels
 
         confs_raw = torch.stack([x[3] for x in data_items], dim=0).cpu().numpy()
         ds_conf_raw = f.create_dataset(
@@ -239,5 +239,5 @@ if __name__ == "__main__":
         glob_pattern=args.glob_pattern,
         output_filename="bodyseg_pred_smoothing.h5",
         process_batch_func=BatchSmoother(args.window_size, args.std),
-        save_predictions_func=make_save_predictions_smoothing(),
+        save_predictions_func=make_save_predictions_smoothing(class_labels),
     )

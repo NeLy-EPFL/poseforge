@@ -60,18 +60,19 @@ def process_batch_tta(pipeline, batch):
     return data_items
 
 
-def save_predictions_tta(f, pipeline, data_items, video_obj):
-    """Save both TTA stabilized and raw predictions into the H5 file."""
-    # Save TTA results
-    pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
-    ds = f.create_dataset(
-        "pred_segmap",
+def make_save_predictions_tta(class_labels=None):
+    def save_predictions_tta(f, pipeline, data_items, video_obj):
+        """Save both TTA stabilized and raw predictions into the H5 file."""
+        # Save TTA results
+        pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
+        ds = f.create_dataset(
+            "pred_segmap",
         data=pred_segmaps,
         dtype="uint8",
         compression="gzip",
         shuffle=True,
-    )
-    ds.attrs["class_labels"] = pipeline.class_labels
+        )
+        ds.attrs["class_labels"] = class_labels if class_labels is not None else pipeline.class_labels
 
     confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
     ds = f.create_dataset(
@@ -92,8 +93,8 @@ def save_predictions_tta(f, pipeline, data_items, video_obj):
         dtype="uint8",
         compression="gzip",
         shuffle=True,
-    )
-    ds_raw.attrs["class_labels"] = pipeline.class_labels
+        )
+        ds_raw.attrs["class_labels"] = class_labels if class_labels is not None else pipeline.class_labels
 
     confs_raw = torch.stack([x[3] for x in data_items], dim=0).cpu().numpy()
     ds_conf_raw = f.create_dataset(
@@ -110,13 +111,14 @@ def save_predictions_tta(f, pipeline, data_items, video_obj):
         int(p.stem.split("_")[1])
         for p in video_obj.phy_frame_id_to_path.values()
     ]
-    f.create_dataset(
-        "frame_ids",
-        data=frame_ids,
-        dtype="int",
-        compression="gzip",
-        shuffle=True,
-    )
+        f.create_dataset(
+            "frame_ids",
+            data=frame_ids,
+            dtype="int",
+            compression="gzip",
+            shuffle=True,
+        )
+    return save_predictions_tta
 
 
 if __name__ == "__main__":
@@ -162,5 +164,5 @@ if __name__ == "__main__":
         glob_pattern=glob_pattern,
         output_filename="bodyseg_pred_tta.h5",
         process_batch_func=process_batch_tta,
-        save_predictions_func=save_predictions_tta,
+        save_predictions_func=make_save_predictions_tta(class_labels),
     )
