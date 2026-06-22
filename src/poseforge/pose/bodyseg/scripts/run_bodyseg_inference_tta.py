@@ -61,56 +61,56 @@ def process_batch_tta(pipeline, batch):
 
 
 def make_save_predictions_tta(class_labels=None):
-    """Create a save_predictions closure for the TTA stabilized and raw outputs."""
     def save_predictions_tta(f, pipeline, data_items, video_obj):
-        # Save TTA results as the primary datasets
+        """Save both TTA stabilized and raw predictions into the H5 file."""
+        # Save TTA results
         pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
         ds = f.create_dataset(
             "pred_segmap",
-            data=pred_segmaps,
-            dtype="uint8",
-            compression="gzip",
-            shuffle=True,
+        data=pred_segmaps,
+        dtype="uint8",
+        compression="gzip",
+        shuffle=True,
         )
         ds.attrs["class_labels"] = class_labels if class_labels is not None else pipeline.class_labels
 
-        confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-        ds_conf = f.create_dataset(
-            "pred_confidence",
-            data=confs,
-            dtype="uint8",
-            compression="gzip",
-            shuffle=True,
-        )
-        ds_conf.attrs["scale"] = 100
-        ds_conf.attrs["method"] = pipeline.model.confidence_method
+    confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
+    ds = f.create_dataset(
+        "pred_confidence",
+        data=confs,
+        dtype="uint8",
+        compression="gzip",
+        shuffle=True,
+    )
+    ds.attrs["scale"] = 100
+    ds.attrs["method"] = pipeline.model.confidence_method
 
-        # Save raw (intermediate) results
-        pred_segmaps_raw = torch.stack([x[2] for x in data_items], dim=0).cpu().numpy()
-        ds_raw = f.create_dataset(
-            "pred_segmap_raw",
-            data=pred_segmaps_raw,
-            dtype="uint8",
-            compression="gzip",
-            shuffle=True,
+    # Save raw (intermediate) results
+    pred_segmaps_raw = torch.stack([x[2] for x in data_items], dim=0).cpu().numpy()
+    ds_raw = f.create_dataset(
+        "pred_segmap_raw",
+        data=pred_segmaps_raw,
+        dtype="uint8",
+        compression="gzip",
+        shuffle=True,
         )
         ds_raw.attrs["class_labels"] = class_labels if class_labels is not None else pipeline.class_labels
 
-        confs_raw = torch.stack([x[3] for x in data_items], dim=0).cpu().numpy()
-        ds_conf_raw = f.create_dataset(
-            "pred_confidence_raw",
-            data=confs_raw,
-            dtype="uint8",
-            compression="gzip",
-            shuffle=True,
-        )
-        ds_conf_raw.attrs["scale"] = 100
-        ds_conf_raw.attrs["method"] = pipeline.model.confidence_method
+    confs_raw = torch.stack([x[3] for x in data_items], dim=0).cpu().numpy()
+    ds_conf_raw = f.create_dataset(
+        "pred_confidence_raw",
+        data=confs_raw,
+        dtype="uint8",
+        compression="gzip",
+        shuffle=True,
+    )
+    ds_conf_raw.attrs["scale"] = 100
+    ds_conf_raw.attrs["method"] = pipeline.model.confidence_method
 
-        frame_ids = [
-            int(p.stem.split("_")[1])
-            for p in video_obj.phy_frame_id_to_path.values()
-        ]
+    frame_ids = [
+        int(p.stem.split("_")[1])
+        for p in video_obj.phy_frame_id_to_path.values()
+    ]
         f.create_dataset(
             "frame_ids",
             data=frame_ids,
@@ -118,7 +118,6 @@ def make_save_predictions_tta(class_labels=None):
             compression="gzip",
             shuffle=True,
         )
-
     return save_predictions_tta
 
 
