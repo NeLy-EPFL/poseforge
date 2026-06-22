@@ -36,6 +36,7 @@ python -u $training_cli_path \
     --model-architecture-config.activation-noise-std $activation_noise_std \
     --model-architecture-config.final-upsampler-n-hidden-channels 32 \
     --model-architecture-config.confidence-method entropy \
+    --model-architecture-config.use-prev-mask-prior \
     --selected-original-class-indices \
         40 41 \
         48 49 \

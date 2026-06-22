@@ -32,6 +32,7 @@ class AtomicBatchDataset(Dataset):
         load_dof_angles: bool = False,
         load_keypoint_positions: bool = False,
         load_body_segment_maps: bool = False,
+        load_prev_body_segment_maps: bool = False,
         n_samples: int | None = None,
     ):
         # Find all .h5 and .mp4 files in the provided directories
@@ -84,6 +85,8 @@ class AtomicBatchDataset(Dataset):
             self.label_keys.append("keypoint_pos")
         if load_body_segment_maps:
             self.label_keys.append("body_seg_maps")
+        if load_prev_body_segment_maps:
+            self.label_keys.append("body_seg_maps_prev")
 
     def __len__(self):
         return len(self.atomic_batches)
@@ -303,7 +306,7 @@ with the same target size from the start.
             for key, value in sim_data.items():
                 # these files will be accessed very frequently during training, so we
                 # use lzf (faster than gzip) and no shuffling to optimize for speed
-                compression = "lzf" if key == "body_seg_maps" else None
+                compression = "lzf" if key in ("body_seg_maps", "body_seg_maps_prev") else None
                 f.create_dataset(key, data=value, compression=compression)
             f.attrs["n_frames"] = next(iter(sim_data.values())).shape[0]
             if metadata is not None:
@@ -448,6 +451,7 @@ def init_atomic_dataset_and_dataloader(
     load_dof_angles: bool = False,
     load_keypoint_positions: bool = False,
     load_body_segment_maps: bool = False,
+    load_prev_body_segment_maps: bool = False,
     shuffle: bool = False,
     n_workers: int | None = None,
     n_channels: int = 3,
@@ -475,6 +479,8 @@ def init_atomic_dataset_and_dataloader(
             positions. Defaults to False.
         load_body_segment_maps (bool, optional): Whether to load body
             segment maps. Defaults to False.
+        load_prev_body_segment_maps (bool, optional): Whether to load previous
+            body segment maps. Defaults to False.
         shuffle (bool, optional): Whether to shuffle the data. Defaults to
             False.
         n_workers (int | None, optional): Number of worker threads for
@@ -502,6 +508,7 @@ def init_atomic_dataset_and_dataloader(
         load_dof_angles=load_dof_angles,
         load_keypoint_positions=load_keypoint_positions,
         load_body_segment_maps=load_body_segment_maps,
+        load_prev_body_segment_maps=load_prev_body_segment_maps,
         n_samples=atomic_batch_n_samples,
     )
 

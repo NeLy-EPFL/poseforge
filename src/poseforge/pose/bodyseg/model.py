@@ -16,6 +16,7 @@ class BodySegmentationModel(nn.Module):
         final_upsampler_n_hidden_channels: int,
         confidence_method: str = "entropy",
         activation_noise_std: float = 0.0,
+        use_prev_mask_prior: bool = False,
     ):
         """
         Args:
@@ -36,6 +37,7 @@ class BodySegmentationModel(nn.Module):
         self.final_upsampler_n_hidden_channels = final_upsampler_n_hidden_channels
         self.confidence_method = confidence_method
         self.activation_noise_std = activation_noise_std
+        self.use_prev_mask_prior = use_prev_mask_prior
 
         if confidence_method not in ["entropy", "peak"]:
             raise ValueError(
@@ -60,8 +62,18 @@ class BodySegmentationModel(nn.Module):
         )
 
         # Final classification layer
+        if self.use_prev_mask_prior:
+            self.mask_prior_conv = nn.Sequential(
+                nn.Conv2d(self.n_classes, 16, kernel_size=3, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True)
+            )
+            classifier_in_channels = self.final_upsampler_n_hidden_channels + 16
+        else:
+            classifier_in_channels = self.final_upsampler_n_hidden_channels
+
         self.classifier = nn.Conv2d(
-            self.final_upsampler_n_hidden_channels, self.n_classes, kernel_size=1
+            classifier_in_channels, self.n_classes, kernel_size=1
         )
 
         self._first_time_forward = True
@@ -110,6 +122,7 @@ class BodySegmentationModel(nn.Module):
             final_upsampler_n_hidden_channels=architecture_config.final_upsampler_n_hidden_channels,
             confidence_method=architecture_config.confidence_method,
             activation_noise_std=architecture_config.activation_noise_std,
+            use_prev_mask_prior=getattr(architecture_config, "use_prev_mask_prior", False),
         )
 
         logging.info("Created BodySegmentationModel from architecture config")
@@ -153,7 +166,7 @@ class BodySegmentationModel(nn.Module):
         )
         logging.info("Set up feature extractor from config")
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, prev_mask_indices: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         """
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, 3, height, width).
@@ -214,7 +227,23 @@ class BodySegmentationModel(nn.Module):
 
         # Final upsampling and classification
         upsampled = self.final_upsampler(d0)
-        segmentation_logits = self.classifier(upsampled)
+        
+        if self.use_prev_mask_prior:
+            if prev_mask_indices is None:
+                raise ValueError("prev_mask_indices must be provided when use_prev_mask_prior is True")
+            
+            # Pad prev_mask_indices the same way x was padded
+            if orig_size != padded_size:
+                pad_height = padded_size[0] - orig_size[0]
+                pad_width = padded_size[1] - orig_size[1]
+                prev_mask_indices = F.pad(prev_mask_indices, (0, pad_width, 0, pad_height), mode="constant", value=0)
+
+            prev_mask_1hot = F.one_hot(prev_mask_indices.long(), num_classes=self.n_classes).permute(0, 3, 1, 2).float()
+            mask_features = self.mask_prior_conv(prev_mask_1hot)
+            combined_features = torch.cat([upsampled, mask_features], dim=1)
+            segmentation_logits = self.classifier(combined_features)
+        else:
+            segmentation_logits = self.classifier(upsampled)
         
         # Crop back to original input size if input was padded
         if orig_size != padded_size:

@@ -213,6 +213,9 @@ class SimulatedDataSequence:
                 resized_body_seg_maps = np.empty(
                     (len(frame_indices), *target_frame_size), dtype=np.uint8
                 )
+                resized_body_seg_maps_prev = np.empty(
+                    (len(frame_indices), *target_frame_size), dtype=np.uint8
+                )
 
                 if self.target_image_size is not None:
                     # Resize from original_image_size to target_image_size using
@@ -222,14 +225,24 @@ class SimulatedDataSequence:
                     same_size = (out_h, out_w) == (orig_h, orig_w)
                     for i, frame_idx in enumerate(frame_indices):
                         input_map = seg_labels_ds[frame_idx, :, :]
+                        input_map_prev = seg_labels_ds[max(0, frame_idx - 1), :, :]
+                        
                         # Defensively crop in case the stored map is larger than
                         # the declared original_image_size.
                         input_map = input_map[:orig_h, :orig_w]
+                        input_map_prev = input_map_prev[:orig_h, :orig_w]
+                        
                         if same_size:
                             resized_body_seg_maps[i, :, :] = input_map
+                            resized_body_seg_maps_prev[i, :, :] = input_map_prev
                         else:
                             resized_body_seg_maps[i, :, :] = cv2.resize(
                                 input_map,
+                                (out_w, out_h),  # cv2 takes (W, H)
+                                interpolation=cv2.INTER_NEAREST,
+                            )
+                            resized_body_seg_maps_prev[i, :, :] = cv2.resize(
+                                input_map_prev,
                                 (out_w, out_h),  # cv2 takes (W, H)
                                 interpolation=cv2.INTER_NEAREST,
                             )
@@ -244,14 +257,20 @@ class SimulatedDataSequence:
 
                     for i, frame_idx in enumerate(frame_indices):
                         input_map = seg_labels_ds[frame_idx, :, :]
+                        input_map_prev = seg_labels_ds[max(0, frame_idx - 1), :, :]
                         if pad_bottom > 0 or pad_right > 0:
                             resized_body_seg_maps[i, :, :] = cv2.copyMakeBorder(
                                 input_map, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=0
                             )
+                            resized_body_seg_maps_prev[i, :, :] = cv2.copyMakeBorder(
+                                input_map_prev, 0, pad_bottom, 0, pad_right, cv2.BORDER_CONSTANT, value=0
+                            )
                         else:
                             resized_body_seg_maps[i, :, :] = input_map
+                            resized_body_seg_maps_prev[i, :, :] = input_map_prev
 
                 labels["body_seg_maps"] = resized_body_seg_maps
+                labels["body_seg_maps_prev"] = resized_body_seg_maps_prev
 
         return labels
 

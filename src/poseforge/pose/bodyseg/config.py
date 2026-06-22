@@ -19,6 +19,8 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Std dev of multiplicative Gaussian noise applied to ResNet activations during training.
     # Set to 0.0 to disable.
     activation_noise_std: float = 0.0
+    # Whether to use the previous segmentation mask as a prior for the current frame
+    use_prev_mask_prior: bool = False
 
     @classmethod
     def load(cls, path: Path | str):
