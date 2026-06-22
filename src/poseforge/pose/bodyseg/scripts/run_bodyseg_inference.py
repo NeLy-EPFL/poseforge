@@ -90,45 +90,48 @@ def run_bodyseg_inference_generic(
         exp_trial_name = "_".join(input_video_path.parts[-3:])
         out_dir = output_basedir / exp_trial_name
         out_dir.mkdir(parents=True, exist_ok=True)
-        with h5py.File(out_dir / f"bodyseg_pred.h5", "w") as f:
-            pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset(
-                "pred_segmap",
-                data=pred_segmaps,
-                dtype="uint8",
-                compression="gzip",
-                shuffle=True,
-            )
-            if class_labels is not None:
-                ds.attrs["class_labels"] = class_labels
+        with h5py.File(out_dir / output_filename, "w") as f:
+            if save_predictions_func is not None:
+                save_predictions_func(f, pipeline, data_items, video_obj)
             else:
-                ds.attrs["class_labels"] = pipeline.class_labels
-            confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-            ds = f.create_dataset(
-                "pred_confidence",
-                data=confs,
-                dtype="uint8",
-                compression="gzip",
-                shuffle=True,
-            )
-            # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
-            ds.attrs["scale"] = 100
-            ds.attrs["method"] = model.confidence_method
-            frame_ids = [
-                int(p.stem.split("_")[1])
-                for p in video_obj.phy_frame_id_to_path.values()
-            ]
-            # These are the actual, raw frame IDs from the original video assigned by
-            # the Spotlight recording software. They may not be contiguous because
-            # frames where the fly is upside down or too close to the edge, etc. are
-            # already removed.
-            f.create_dataset(
-                "frame_ids",
-                data=frame_ids,
-                dtype="int",
-                compression="gzip",
-                shuffle=True,
-            )
+                pred_segmaps = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
+                ds = f.create_dataset(
+                    "pred_segmap",
+                    data=pred_segmaps,
+                    dtype="uint8",
+                    compression="gzip",
+                    shuffle=True,
+                )
+                if class_labels is not None:
+                    ds.attrs["class_labels"] = class_labels
+                else:
+                    ds.attrs["class_labels"] = pipeline.class_labels
+                confs = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
+                ds = f.create_dataset(
+                    "pred_confidence",
+                    data=confs,
+                    dtype="uint8",
+                    compression="gzip",
+                    shuffle=True,
+                )
+                # Confidence is predicted in 0-1, but we store it in 0-100 as uint8
+                ds.attrs["scale"] = 100
+                ds.attrs["method"] = model.confidence_method
+                frame_ids = [
+                    int(p.stem.split("_")[1])
+                    for p in video_obj.phy_frame_id_to_path.values()
+                ]
+                # These are the actual, raw frame IDs from the original video assigned by
+                # the Spotlight recording software. They may not be contiguous because
+                # frames where the fly is upside down or too close to the edge, etc. are
+                # already removed.
+                f.create_dataset(
+                    "frame_ids",
+                    data=frame_ids,
+                    dtype="int",
+                    compression="gzip",
+                    shuffle=True,
+                )
 
     buckets_and_sizes = {
         i: n_frames for i, n_frames in enumerate(dataloader.dataset.n_frames_by_video)
