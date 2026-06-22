@@ -6,6 +6,7 @@ import re
 import yaml
 import math
 import argparse
+import numpy as np
 from importlib.resources import files
 
 from poseforge.pose.bodyseg.scripts.run_bodyseg_inference import (
@@ -14,102 +15,79 @@ from poseforge.pose.bodyseg.scripts.run_bodyseg_inference import (
 )
 
 
-def temporal_smooth_probabilities(probs, window_size=5, std=1.0):
-    """Apply 1D Gaussian temporal smoothing to the class probabilities for each pixel."""
-    # Convert to float32 for the F.conv1d operation, since PyTorch CPU 
-    # convolutions generally do not support float16 (Half) tensors.
-    probs = probs.to(torch.float32)
-
-    T, C, H, W = probs.shape
-    # Create 1D Gaussian kernel
+def temporal_smooth_probabilities_online(probs, window_size=5, std=1.0):
+    """Apply 1D Gaussian temporal smoothing to the class probabilities (no internal padding)."""
+    T_total, C, H, W = probs.shape
     kernel = [math.exp(-i**2 / (2 * std**2)) for i in range(-window_size//2 + 1, window_size//2 + 1)]
     kernel_tensor = torch.tensor(kernel, dtype=probs.dtype, device=probs.device)
-    kernel_tensor = kernel_tensor / kernel_tensor.sum() # Normalize
+    kernel_tensor = kernel_tensor / kernel_tensor.sum()
     
-    # Pad probs along time dimension to keep size T
-    pad_size = window_size // 2
-    # Permute to [C, H, W, T]
     p = probs.permute(1, 2, 3, 0)
-    # Pad the last dimension (T) using replicate padding
-    p_padded = F.pad(p, (pad_size, pad_size), mode='replicate')
+    C_dim, H_dim, W_dim, T_dim = p.shape
+    p_conv = p.reshape(C_dim * H_dim * W_dim, 1, T_dim)
     
-    # Now reshape to [C * H * W, 1, T + 2*pad_size] to use F.conv1d
-    C_dim, H_dim, W_dim, T_padded = p_padded.shape
-    p_conv = p_padded.reshape(C_dim * H_dim * W_dim, 1, T_padded)
-    
-    # conv1d weight needs to be [out_channels, in_channels, kernel_width] = [1, 1, window_size]
     weight = kernel_tensor.view(1, 1, -1)
+    smoothed = F.conv1d(p_conv, weight)
     
-    # Apply conv1d
-    smoothed = F.conv1d(p_conv, weight) # Shape: [C * H * W, 1, T]
-    
-    # Reshape and permute back to [T, C, H, W]
     smoothed = smoothed.view(C_dim, H_dim, W_dim, -1).permute(3, 0, 1, 2)
     return smoothed
 
 
-def process_batch_smoothing(pipeline, batch):
-    """Run standard inference and return softmax probabilities along with raw predictions."""
-    pred_dict = pipeline.inference(batch["frames"])
-    logits = pred_dict["logits"]
-    
-    # Extract softmax probabilities as float16 to save ~50% RAM during 
-    # the potentially very long Out-Of-Sync OutputBuffer accumulation phase.
-    # Note: F.conv1d on CPU does not support float16, so we upcast right before smoothing.
-    probs = torch.softmax(logits, dim=1).to(torch.float16).detach().cpu()
-    
-    # Extract raw predictions
-    raw_seg = torch.argmax(logits, dim=1).to(torch.uint8).detach().cpu()
-    raw_conf = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
-    
-    data_items = []
-    for i in range(logits.shape[0]):
-        data_items.append((
-            probs[i, :, :, :],
-            raw_seg[i, :, :],
-            raw_conf[i, :, :]
-        ))
-    return data_items
+class BatchSmoother:
+    def __init__(self, window_size=5, std=1.0):
+        self.window_size = window_size
+        self.std = std
+        self.pad_size = window_size // 2
+        self.past_probs = {}
+
+    def __call__(self, pipeline, batch):
+        pred_dict = pipeline.inference(batch["frames"])
+        logits = pred_dict["logits"]
+        probs = torch.softmax(logits, dim=1).to(torch.float32).detach().cpu()
+        
+        raw_seg = torch.argmax(logits, dim=1).to(torch.uint8).detach().cpu()
+        raw_conf = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
+        
+        video_indices = batch["video_indices"].cpu().numpy()
+        smoothed_probs = torch.empty_like(probs)
+        
+        unique_vids = np.unique(video_indices)
+        for vid in unique_vids:
+            mask = (video_indices == vid)
+            vid_probs = probs[mask]
+            
+            if vid in self.past_probs:
+                past = self.past_probs[vid]
+            else:
+                past = vid_probs[0:1].expand(self.pad_size, -1, -1, -1)
+                
+            future = vid_probs[-1:].expand(self.pad_size, -1, -1, -1)
+            concat_probs = torch.cat([past, vid_probs, future], dim=0)
+            
+            smoothed_vid_probs = temporal_smooth_probabilities_online(concat_probs, self.window_size, self.std)
+            smoothed_probs[mask] = smoothed_vid_probs
+            
+            self.past_probs[vid] = vid_probs[-self.pad_size:].clone()
+
+        pred_segmaps_smoothed = torch.argmax(smoothed_probs, dim=1).to(torch.uint8)
+        confidence_smoothed = (compute_confidence_from_probs(smoothed_probs, pipeline.model.confidence_method) * 100).to(torch.uint8)
+        
+        data_items = []
+        for i in range(probs.shape[0]):
+            data_items.append((
+                pred_segmaps_smoothed[i],
+                confidence_smoothed[i],
+                raw_seg[i],
+                raw_conf[i]
+            ))
+        return data_items
 
 
-def make_save_predictions_smoothing(window_size, std):
-    """Create a save_predictions closure with custom window_size and std parameters."""
+def make_save_predictions_smoothing():
+    """Create a save_predictions closure for the smoothed and raw outputs."""
     def save_predictions_smoothing(f, pipeline, data_items, video_obj):
-        # Save raw predictions
-        pred_segmaps_raw = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
-        ds_raw = f.create_dataset(
-            "pred_segmap_raw",
-            data=pred_segmaps_raw,
-            dtype="uint8",
-            compression="gzip",
-            shuffle=True,
-        )
-        ds_raw.attrs["class_labels"] = pipeline.class_labels
-
-        confs_raw = torch.stack([x[2] for x in data_items], dim=0).cpu().numpy()
-        ds_conf_raw = f.create_dataset(
-            "pred_confidence_raw",
-            data=confs_raw,
-            dtype="uint8",
-            compression="gzip",
-            shuffle=True,
-        )
-        ds_conf_raw.attrs["scale"] = 100
-        ds_conf_raw.attrs["method"] = pipeline.model.confidence_method
-
-        # Stack probabilities: [T, n_classes, H, W]
-        all_probs = torch.stack([x[0] for x in data_items], dim=0)
-
-        # Smooth probabilities
-        smoothed_probs = temporal_smooth_probabilities(all_probs, window_size=window_size, std=std)
-
-        # Compute smoothed predictions
-        pred_segmaps_smoothed = torch.argmax(smoothed_probs, dim=1).to(torch.uint8).cpu().numpy()
-        confidence_smoothed = (
-            compute_confidence_from_probs(smoothed_probs, pipeline.model.confidence_method) * 100
-        ).to(torch.uint8).cpu().numpy()
-
         # Save smoothed predictions as the primary datasets
+        pred_segmaps_smoothed = torch.stack([x[0] for x in data_items], dim=0).cpu().numpy()
         ds = f.create_dataset(
             "pred_segmap",
             data=pred_segmaps_smoothed,
@@ -119,6 +97,7 @@ def make_save_predictions_smoothing(window_size, std):
         )
         ds.attrs["class_labels"] = pipeline.class_labels
 
+        confidence_smoothed = torch.stack([x[1] for x in data_items], dim=0).cpu().numpy()
         ds_conf = f.create_dataset(
             "pred_confidence",
             data=confidence_smoothed,
@@ -128,6 +107,28 @@ def make_save_predictions_smoothing(window_size, std):
         )
         ds_conf.attrs["scale"] = 100
         ds_conf.attrs["method"] = pipeline.model.confidence_method
+
+        # Save raw predictions
+        pred_segmaps_raw = torch.stack([x[2] for x in data_items], dim=0).cpu().numpy()
+        ds_raw = f.create_dataset(
+            "pred_segmap_raw",
+            data=pred_segmaps_raw,
+            dtype="uint8",
+            compression="gzip",
+            shuffle=True,
+        )
+        ds_raw.attrs["class_labels"] = pipeline.class_labels
+
+        confs_raw = torch.stack([x[3] for x in data_items], dim=0).cpu().numpy()
+        ds_conf_raw = f.create_dataset(
+            "pred_confidence_raw",
+            data=confs_raw,
+            dtype="uint8",
+            compression="gzip",
+            shuffle=True,
+        )
+        ds_conf_raw.attrs["scale"] = 100
+        ds_conf_raw.attrs["method"] = pipeline.model.confidence_method
 
         frame_ids = [
             int(p.stem.split("_")[1])
@@ -237,6 +238,6 @@ if __name__ == "__main__":
         output_buffer_log_interval=output_buffer_log_interval,
         glob_pattern=args.glob_pattern,
         output_filename="bodyseg_pred_smoothing.h5",
-        process_batch_func=process_batch_smoothing,
-        save_predictions_func=make_save_predictions_smoothing(args.window_size, args.std),
+        process_batch_func=BatchSmoother(args.window_size, args.std),
+        save_predictions_func=make_save_predictions_smoothing(),
     )
