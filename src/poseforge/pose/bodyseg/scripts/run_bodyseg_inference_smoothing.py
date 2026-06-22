@@ -16,6 +16,10 @@ from poseforge.pose.bodyseg.scripts.run_bodyseg_inference import (
 
 def temporal_smooth_probabilities(probs, window_size=5, std=1.0):
     """Apply 1D Gaussian temporal smoothing to the class probabilities for each pixel."""
+    # Convert to float32 for the F.conv1d operation, since PyTorch CPU 
+    # convolutions generally do not support float16 (Half) tensors.
+    probs = probs.to(torch.float32)
+
     T, C, H, W = probs.shape
     # Create 1D Gaussian kernel
     kernel = [math.exp(-i**2 / (2 * std**2)) for i in range(-window_size//2 + 1, window_size//2 + 1)]
@@ -49,8 +53,10 @@ def process_batch_smoothing(pipeline, batch):
     pred_dict = pipeline.inference(batch["frames"])
     logits = pred_dict["logits"]
     
-    # Extract softmax probabilities as float32 for CPU processing safety
-    probs = torch.softmax(logits, dim=1).to(torch.float32).detach().cpu()
+    # Extract softmax probabilities as float16 to save ~50% RAM during 
+    # the potentially very long Out-Of-Sync OutputBuffer accumulation phase.
+    # Note: F.conv1d on CPU does not support float16, so we upcast right before smoothing.
+    probs = torch.softmax(logits, dim=1).to(torch.float16).detach().cpu()
     
     # Extract raw predictions
     raw_seg = torch.argmax(logits, dim=1).to(torch.uint8).detach().cpu()
