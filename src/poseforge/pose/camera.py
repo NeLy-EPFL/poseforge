@@ -95,8 +95,17 @@ class CameraToWorldMapper:
     def __call__(self, xy, depth):
         """Map 2D camera coordinates + depth to 3D world coordinates.
 
+        IMPORTANT: ``xy`` MUST be expressed in the SAME pixel space the mapper
+        was built with, i.e. in ``rendering_size`` pixels. The focal length and
+        principal point scale linearly with ``rendering_size``, so feeding xy
+        that live in a different pixel resolution injects an anisotropic
+        distortion (in-plane x, y scaled by the resolution ratio, depth left
+        exact). If your predictions are at resolution S, build the mapper with
+        ``rendering_size=(S, S)``.
+
         Args:
-            xy: (..., 2) array of 2D camera coordinates (in pixels).
+            xy: (..., 2) array of 2D camera coordinates, in ``rendering_size``
+                pixels.
             depth: (...,) array of depth values (in mm).
 
         Returns:
