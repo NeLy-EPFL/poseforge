@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -160,12 +161,24 @@ def list_spotlight_recordings_and_usable_frames(
 def build_endpoints(
     target_segment_names: list[str],
     xy_lookup: dict[str, np.ndarray],
-    is_spotlight: bool = False,
+    scaling: float = 1.0,
 ) -> np.ndarray:
-    if is_spotlight:
-        SCALING = 900.0/256.0
-    else:
-        SCALING = 1.0
+    """Assemble (proximal, distal) endpoint coordinates for each segment.
+
+    Args:
+        target_segment_names: Segments to build endpoints for, in order.
+        xy_lookup: Maps segment name -> (x, y) keypoint in the SOURCE pixel
+            space of the coordinates (e.g. the resolution the keypoint model
+            ran at).
+        scaling: Multiplicative factor converting the source coordinate space
+            to the saved-image pixel space, i.e.
+            ``target_resolution / source_resolution``. Use ``1.0`` when the
+            coordinates are already in the saved image's pixel space (as for
+            the synthetic renders). Previously this was hardcoded to
+            ``900.0 / 256.0`` for the spotlight branch, which silently produced
+            wrong labels whenever either resolution changed; it is now derived
+            from the actual frame/prediction resolutions by the caller.
+    """
     k = len(target_segment_names)
     xy = np.full((k, 2, 2), np.nan, dtype=np.float32)
 
@@ -173,8 +186,8 @@ def build_endpoints(
         prox_xy = xy_lookup[seg_name]
         distal_seg = DISTAL_CHILD_BY_SEGMENT[seg_name]
         dist_xy = xy_lookup[distal_seg]
-        xy[seg_idx, 0, :] = prox_xy * SCALING
-        xy[seg_idx, 1, :] = dist_xy * SCALING
+        xy[seg_idx, 0, :] = prox_xy * scaling
+        xy[seg_idx, 1, :] = dist_xy * scaling
 
     return xy
 
@@ -308,7 +321,9 @@ def extract_synthetic_with_annotations(
 
                 frame_coords = camera_coords_ds[frame_idx]  # (K, 3)
                 xy_lookup = frame_xy_vis_from_synthetic(frame_coords, seg_names)
-                xy = build_endpoints(TARGET_SEGMENT_NAMES, xy_lookup, False)
+                # Synthetic keypoints are rendered in the same pixel space as
+                # the saved image, so no rescaling is needed.
+                xy = build_endpoints(TARGET_SEGMENT_NAMES, xy_lookup, scaling=1.0)
 
                 rel_path = str(output_image_path.relative_to(output_dir))
                 sample = AnnotationSample(
@@ -325,8 +340,22 @@ def extract_spotlight_with_annotations(
     output_dir: Path,
     trial_info_by_dir: dict[Path, SpotlightTrialInfo],
     accumulators: dict[str, AnnotationAccumulator],
+    pred_coord_resolution: int,
 ) -> None:
+    """Extract spotlight frames and rescale their predicted keypoints.
+
+    Args:
+        pred_coord_resolution: The (square) pixel resolution that the spotlight
+            keypoint predictions in ``pred_xy`` are expressed in. Predicted
+            coordinates are rescaled to the saved-image pixel space by
+            ``saved_image_width / pred_coord_resolution`` per frame, replacing
+            the old hardcoded ``900.0 / 256.0`` factor.
+    """
     print("Extracting spotlight images + annotations...")
+    if pred_coord_resolution <= 0:
+        raise ValueError(
+            f"pred_coord_resolution must be positive, got {pred_coord_resolution}"
+        )
 
     specs_by_trial = defaultdict(list)
     for trial_dir, usable_row_idx, split_dir_name in spotlight_specs:
@@ -385,7 +414,17 @@ def extract_spotlight_with_annotations(
                     pred_xy_frame=pred_xy_frame,
                     pred_names=pred_names,
                 )
-                xy = build_endpoints(TARGET_SEGMENT_NAMES, xy_lookup, True)
+                # Spotlight predictions live in a square `pred_coord_resolution`
+                # space; rescale them to the saved-image pixel space. The
+                # aligned behavior frames are square, so assert that and derive
+                # the factor from the actual sizes instead of hardcoding it.
+                if img_h != img_w:
+                    raise ValueError(
+                        f"Expected a square spotlight frame for {trial_dir.name} "
+                        f"(predictions are isotropic), got (h={img_h}, w={img_w})"
+                    )
+                scaling = img_w / pred_coord_resolution
+                xy = build_endpoints(TARGET_SEGMENT_NAMES, xy_lookup, scaling=scaling)
 
                 rel_path = str(output_image_path.relative_to(output_dir))
                 sample = AnnotationSample(
@@ -409,6 +448,19 @@ def main() -> None:
 
     video_filename = "processed_nmf_sim_render_grayscale.mp4"
 
+    # Number of worker threads used to index/validate the NMF videos. This is
+    # required by `list_nmf_simulations_and_num_frames`; previously it was
+    # omitted, raising a TypeError on launch.
+    num_workers = os.cpu_count() or 1
+
+    # Pixel resolution that the spotlight keypoint predictions (`pred_xy`) are
+    # expressed in. Predicted coords are rescaled to the saved-image pixel
+    # space by `saved_image_width / pred_coord_resolution`. Previously this was
+    # baked into a hardcoded `900.0 / 256.0` factor; pulling it out here keeps
+    # the extraction correct if either the prediction or the saved-frame
+    # resolution changes.
+    pred_coord_resolution = 256
+
     # Sampling config.
     random_seed = 42
     np.random.seed(random_seed)
@@ -420,7 +472,9 @@ def main() -> None:
     split_to_out = {"train": "train", "test": "test", "val": "val"}
 
     # Index available frames.
-    nmf_num_frames = list_nmf_simulations_and_num_frames(nmf_rendering_dir, video_filename)
+    nmf_num_frames = list_nmf_simulations_and_num_frames(
+        nmf_rendering_dir, video_filename, num_workers
+    )
     spotlight_info = list_spotlight_recordings_and_usable_frames(
         spotlight_data_dir,
     )
@@ -501,6 +555,7 @@ def main() -> None:
         output_dir=output_dir,
         trial_info_by_dir=spotlight_info,
         accumulators=accumulators,
+        pred_coord_resolution=pred_coord_resolution,
     )
 
     annotations_dir = output_dir / "annotations"

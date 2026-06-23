@@ -5,11 +5,33 @@ import logging
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from pvio.io import read_frames_from_video, write_frames_to_video, _default_ffmpeg_params_for_video_writing
-level_idx = _default_ffmpeg_params_for_video_writing.index("-level")
-_default_ffmpeg_params_for_video_writing[level_idx + 1] = "5.0"  # allow higher resolution videos for 900x900
+from pvio.io import read_frames_from_video, write_frames_to_video
 
 from poseforge.util.sys import get_hardware_availability
+
+# ffmpeg parameters used when serializing atomic batches to video.
+#
+# Previously we imported pvio's private `_default_ffmpeg_params_for_video_writing`
+# and patched its `-level` entry in place. That symbol is no longer exported by
+# pvio (it is an internal default), so importing it raised ImportError and broke
+# the whole `pose.data.synthetic` / `pose.contrast` packages on import. We now
+# define the params locally and pass them through the public
+# `write_frames_to_video(..., ffmpeg_params=...)` API instead.
+#
+# These mirror pvio's documented high-quality H.264 defaults
+# (["-crf", "15", "-preset", "slow", "-profile:v", "high", "-level", "4.0"]),
+# but with `-level` bumped to 5.0 so that larger frames (e.g. the 900x900
+# renders) stay within the H.264 level limits.
+_DEFAULT_FFMPEG_PARAMS_FOR_VIDEO_WRITING = [
+    "-crf",
+    "15",  # Lower CRF = higher quality (15 is very high quality)
+    "-preset",
+    "slow",  # Slower preset = better compression efficiency
+    "-profile:v",
+    "high",  # Use high profile for better compression
+    "-level",
+    "5.0",  # H.264 level (bumped from pvio default 4.0 to allow larger frames)
+]
 
 # Emit the BODY SEGMENTATION RESIZE WARNING only once per process to avoid
 # flooding the logs when many atomic batches need on-the-fly mask resizing.
@@ -217,7 +239,12 @@ with the same target size from the start.
                 selection = (selection * 255).astype(np.uint8)
                 image[:n_rows, start_col:end_col, :] = selection
             output_frames.append(image.squeeze())
-        write_frames_to_video(output_path, output_frames, fps=fps, ffmpeg_params=_default_ffmpeg_params_for_video_writing)
+        write_frames_to_video(
+            output_path,
+            output_frames,
+            fps=fps,
+            ffmpeg_params=_DEFAULT_FFMPEG_PARAMS_FOR_VIDEO_WRITING,
+        )
 
     @staticmethod
     def load_atomic_batch_frames(
@@ -247,15 +274,61 @@ with the same target size from the start.
             raise ValueError(f"Error: no frames found in video {video_path}")
         n_rows_total, n_cols_total = frames[0].shape[:2]
         n_rows, n_cols = image_size
-        assert (
-            n_variants * n_cols + (n_variants - 1) * spacing <= n_cols_total
-        ), "Error: width of concatenated video does not match expectation"
 
-        # Detect over-supply of variants in the on-disk video. The width is
-        # n_actual_variants * n_cols + (n_actual_variants - 1) * spacing, so
-        # invert that to recover the stored count and warn once if some are
-        # being silently discarded.
-        actual_n_variants = (n_cols_total + spacing) // (n_cols + spacing)
+        # --- I1-C: loud guard on stored-vs-requested tile resolution ---------
+        #
+        # This loader reconstructs each per-variant tile by a TOP-LEFT CROP
+        # `frame[:n_rows, start_col:end_col]`, where the column stride is
+        # `n_cols + spacing` and `(n_rows, n_cols) == image_size`. This is only
+        # correct if each on-disk tile was serialized at exactly `image_size`.
+        # If the atomic batch was extracted at a LARGER per-variant resolution
+        # than `image_size`, the crop silently grabs the wrong columns (slicing
+        # across tile boundaries) and clips the fly, while the stored labels
+        # (keypoints / segmentation maps) remain in the extraction resolution
+        # -> silently corrupted training data. The old assertion only caught
+        # tiles that were too NARROW; it happily accepted tiles that were too
+        # wide. We instead reconstruct the geometry that `save_atomic_batch_frames`
+        # would have produced and require the stored frame size to match it.
+        #
+        # `save_atomic_batch_frames` rounds both the total width and the height
+        # UP to a multiple of 16 for the video encoder, so the stored size is
+        # NOT exactly the logical size -- we must allow that <16px padding.
+        n_variants_in_video, expected_n_cols_total = (
+            AtomicBatchDataset._infer_stored_variant_geometry(
+                n_cols_total, n_cols, spacing
+            )
+        )
+        expected_n_rows_total = _round_up_to_multiple(n_rows, 16)
+        if (
+            n_variants_in_video is None
+            or n_variants_in_video < n_variants
+            or n_rows_total != expected_n_rows_total
+            or n_cols_total != expected_n_cols_total
+        ):
+            raise ValueError(
+                f"Atomic batch {video_path} has stored frame size "
+                f"(height={n_rows_total}, width={n_cols_total}) that is "
+                f"inconsistent with the requested image_size={image_size} and "
+                f"n_variants={n_variants} (spacing={spacing}).\n"
+                f"  Expected, for tiles of size {image_size} laid out side by "
+                f"side and rounded up to a multiple of 16 for encoding: "
+                f"height={expected_n_rows_total}, and a width matching "
+                f"round_up_16(V * {n_cols} + (V - 1) * {spacing}) for some "
+                f"V >= {n_variants}.\n"
+                f"  This usually means the atomic batch was extracted at a "
+                f"DIFFERENT per-variant resolution than image_size. Loading it "
+                f"with this image_size would top-left-crop each tile to the "
+                f"wrong columns while leaving the stored labels at the original "
+                f"resolution, silently corrupting the data.\n"
+                f"  Fix: either pass the image_size the batch was actually "
+                f"extracted at, or re-extract the atomic batches at "
+                f"image_size={image_size}. (Resizing here is intentionally NOT "
+                f"done, because it would not rescale the stored labels.)"
+            )
+
+        # Number of variants physically present in the stored video (>= the
+        # requested `n_variants`, guaranteed by the guard above).
+        actual_n_variants = n_variants_in_video
         if actual_n_variants > n_variants:
             global _EXTRA_VARIANTS_WARNING_EMITTED
             if not _EXTRA_VARIANTS_WARNING_EMITTED:
@@ -286,6 +359,40 @@ with the same target size from the start.
                 atomic_batch[variant_idx, frame_idx, :, :, :] = selection
 
         return torch.from_numpy(atomic_batch).to(torch.float32)
+
+    @staticmethod
+    def _infer_stored_variant_geometry(
+        n_cols_total: int, n_cols: int, spacing: int
+    ) -> tuple[int | None, int]:
+        """Invert the stored-video column geometry.
+
+        ``save_atomic_batch_frames`` lays ``V`` tiles of width ``n_cols`` side
+        by side with ``spacing`` pixels between them and then rounds the total
+        width UP to a multiple of 16 for the encoder, i.e. the stored width is::
+
+            round_up_16(V * n_cols + (V - 1) * spacing)
+
+        Given a stored ``n_cols_total`` and a candidate per-tile width
+        ``n_cols``, find the integer ``V >= 1`` that reproduces it exactly
+        (within the <16px rounding). If no such ``V`` exists, the stored tiles
+        were NOT serialized at width ``n_cols``.
+
+        Returns:
+            (n_variants_in_video, expected_n_cols_total):
+                ``n_variants_in_video`` is the recovered variant count, or
+                ``None`` if the stored width is incompatible with ``n_cols``.
+                ``expected_n_cols_total`` is the width that a single variant
+                (``V = 1``) would have produced -- only used to build a helpful
+                error message when the recovered count is ``None``.
+        """
+        # Lower bound on V (ignoring rounding); the true V can be at most this
+        # because rounding only ever increases the stored width.
+        v_upper = (n_cols_total + spacing) // (n_cols + spacing)
+        for v in range(v_upper, 0, -1):
+            logical_width = v * n_cols + (v - 1) * spacing
+            if _round_up_to_multiple(logical_width, 16) == n_cols_total:
+                return v, n_cols_total
+        return None, _round_up_to_multiple(n_cols, 16)
 
     @staticmethod
     def save_atomic_batch_sim_data(
