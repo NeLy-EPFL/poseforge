@@ -326,50 +326,69 @@ nmf_template = {
 }
 
 # Determine the bounds for each joint DOF
+#
+# ######################################################################### #
+# ##  I3-B (issue #48):  *** NEEDS BIOMECHANICAL / NMF RANGE-OF-MOTION   ## #
+# ##  REVIEW ***                                                          ## #
+# ######################################################################### #
+# The original author flagged several L/R asymmetries here with "# ?" markers.
+# Some were genuine (non-mirrored) inconsistencies, including a physically
+# implausible -270 deg lower bound on RF/RM CTr_pitch. The five bounds below
+# marked "I3-B fix" were changed to be exact L/R mirrors of their counterpart,
+# using the convention:
+#     roll / yaw : RIGHT = (-LEFT_hi, -LEFT_lo)   (reflection about the midline)
+#     pitch      : RIGHT =  LEFT                  (pitch is shared L/R)
+# The mid/hind ThC_roll and CTr_roll bounds already mirror correctly and were
+# left unchanged.
+#
+# These mirror-derived values are a best-effort consistency fix ONLY; they have
+# NOT been validated against measured NeuroMechFly joint ranges of motion. A
+# maintainer with biomechanics knowledge should verify them. This change is in a
+# dedicated commit so it can be reverted independently if the true ranges differ.
 nmf_bounds = {
     # Front legs
     "RF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
     "RF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RF_ThC_roll": (np.deg2rad(-135), np.deg2rad(10)),  # ? 1
-    "RF_CTr_pitch": (np.deg2rad(-270), np.deg2rad(10)),  # ? 2
-    "RF_CTr_roll": (np.deg2rad(-180), np.deg2rad(90)),  # ? 3
+    "RF_ThC_roll": (np.deg2rad(-90), np.deg2rad(10)),  # I3-B fix: mirror of LF (-10,90); was (-135,10)
+    "RF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # I3-B fix: match LF (-180,10); was implausible (-270,10)
+    "RF_CTr_roll": (np.deg2rad(-180), np.deg2rad(90)),  # mirrors LF (-90,180): (-180,90) OK
     "RF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
     "RF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
     "LF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
     "LF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LF_ThC_roll": (np.deg2rad(-10), np.deg2rad(90)),  # ? 1
-    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # ? 2
-    "LF_CTr_roll": (np.deg2rad(-90), np.deg2rad(180)),  # ? 3
+    "LF_ThC_roll": (np.deg2rad(-10), np.deg2rad(90)),
+    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
+    "LF_CTr_roll": (np.deg2rad(-90), np.deg2rad(180)),
     "LF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
     "LF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    
+
     # Mid legs
-    "RM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),  # ? 4
+    "RM_ThC_yaw": (np.deg2rad(-90), np.deg2rad(45)),  # I3-B fix: mirror of LM (-45,90); was (-45,45)
     "RM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RM_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # ? 5
-    "RM_CTr_pitch": (np.deg2rad(-270), np.deg2rad(10)),  # ? 6
+    "RM_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # mirrors LM (-10,180): (-180,10) OK
+    "RM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # I3-B fix: match LM (-180,10); was implausible (-270,10)
     "RM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
     "RM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
     "RM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),  # ? 4
+    "LM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),
     "LM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LM_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),  # ? 5
-    "LM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # ? 6
+    "LM_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),
+    "LM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
     "LM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
     "LM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
     "LM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    
+
     # Hind legs
-    "RH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),  # ? 7
+    "RH_ThC_yaw": (np.deg2rad(-90), np.deg2rad(45)),  # I3-B fix: mirror of LH (-45,90); was (-45,45)
     "RH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RH_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # ? 8
+    "RH_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # mirrors LH (-10,180): (-180,10) OK
     "RH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
     "RH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
     "RH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
     "RH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),  # ? 7
+    "LH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),
     "LH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LH_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),  # ? 8
+    "LH_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),
     "LH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
     "LH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
     "LH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),

@@ -159,10 +159,76 @@ def test_i3a_call_sites_consume_the_restored_constant():
 
 
 # --------------------------------------------------------------------------- #
-# I3-B: nmf_bounds mirror-consistency tests are added in the SEPARATE I3-B
-# commit (the bounds change is intentionally isolated so it can be reverted
-# independently while it awaits biomechanical review).
+# I3-B: nmf_bounds must be L/R mirror-consistent for every leg/DOF.
 # --------------------------------------------------------------------------- #
+LEG_DOFS = [
+    "ThC_yaw",
+    "ThC_pitch",
+    "ThC_roll",
+    "CTr_pitch",
+    "CTr_roll",
+    "FTi_pitch",
+    "TiTa_pitch",
+]
+
+
+def _mirror_of_left(dof: str, lo: float, hi: float) -> tuple[float, float]:
+    """Expected RIGHT bound given the LEFT bound (lo, hi).
+
+    Convention (see constants.py I3-B comment): roll/yaw mirror by negating and
+    swapping the limits -> R = (-hi, -lo); pitch is shared -> R = (lo, hi).
+    """
+    if dof.endswith("pitch"):
+        return (lo, hi)
+    return (-hi, -lo)
+
+
+@pytest.fixture(scope="module")
+def nmf_bounds() -> dict:
+    module = _parse_module(CONSTANTS_PY)
+    return _eval_assigned_dict(module, "nmf_bounds")
+
+
+def test_i3b_all_legs_dofs_present(nmf_bounds):
+    for side in "LR":
+        for pos in "FMH":
+            for dof in LEG_DOFS:
+                assert f"{side}{pos}_{dof}" in nmf_bounds
+
+
+@pytest.mark.parametrize("pos", ["F", "M", "H"])
+@pytest.mark.parametrize("dof", LEG_DOFS)
+def test_i3b_left_right_bounds_are_mirror_consistent(nmf_bounds, pos, dof):
+    left = tuple(nmf_bounds[f"L{pos}_{dof}"])
+    right = tuple(nmf_bounds[f"R{pos}_{dof}"])
+    expected_right = _mirror_of_left(dof, *left)
+    assert right == pytest.approx(expected_right), (
+        f"{pos}_{dof}: right bound {np.rad2deg(right)} deg is not the mirror of "
+        f"left bound {np.rad2deg(left)} deg (expected "
+        f"{np.rad2deg(expected_right)} deg)."
+    )
+
+
+def test_i3b_no_physically_implausible_lower_bound(nmf_bounds):
+    """The old RF/RM CTr_pitch lower bound was -270 deg (implausible). After the
+    fix, no bound should exceed +/-180 deg."""
+    for key, (lo, hi) in nmf_bounds.items():
+        assert np.rad2deg(lo) >= -180.0 - 1e-6, f"{key} lower bound < -180 deg"
+        assert np.rad2deg(hi) <= 180.0 + 1e-6, f"{key} upper bound > 180 deg"
+
+
+def test_i3b_specific_fixed_values(nmf_bounds):
+    """Pin the exact post-fix values for the five corrected bounds."""
+    expected_deg = {
+        "RF_ThC_roll": (-90, 10),
+        "RF_CTr_pitch": (-180, 10),
+        "RM_ThC_yaw": (-90, 45),
+        "RM_CTr_pitch": (-180, 10),
+        "RH_ThC_yaw": (-90, 45),
+    }
+    for key, (lo_deg, hi_deg) in expected_deg.items():
+        lo, hi = nmf_bounds[key]
+        assert (np.rad2deg(lo), np.rad2deg(hi)) == pytest.approx((lo_deg, hi_deg))
 
 
 # --------------------------------------------------------------------------- #
