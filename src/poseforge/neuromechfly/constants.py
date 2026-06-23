@@ -18,6 +18,47 @@ keypoint_name_lookup_nmf_to_canonical = {
 keypoint_name_lookup_canonical_to_nmf = {
     v: k for k, v in keypoint_name_lookup_nmf_to_canonical.items()
     }
+
+# Mapping from the canonical (Aymanns et al. 2022) leg DOF names to the
+# NeuroMechFly DOF (joint) names.
+#
+# This constant was originally introduced in commit 5f8b6ee and accidentally
+# removed in 3c9449a ("compatibility with flygym v2") while its call sites in
+# `run_inverse_kinematics.py` and `production/spotlight/keypoints3d.py` were
+# never updated -> they raised AttributeError when saving IK output. Restored
+# here (see issue #48, finding I3-A).
+#
+# IMPORTANT - ordering and key names:
+#   * The KEYS are the 7 canonical leg DOF names. They are kept in the order
+#       ThC_yaw, ThC_pitch, ThC_roll, CTr_pitch, CTr_roll, FTi_pitch, TiTa_pitch
+#     because the call sites do
+#       `dof_names_per_leg = list(dof_name_lookup_canonical_to_nmf.keys())`
+#     and use that order as the DOF axis of the saved `joint_angles` array
+#     (and as its `dof_names_per_leg` attribute). This is the same DOF ordering
+#     used by `nmf_initial_angles` / seqikpy's kinematic chain (yaw, pitch,
+#     roll, ...).
+#   * seqikpy emits joint-angle dict keys of the form
+#       `Angle_{leg}_{canonical_dof}` (e.g. "Angle_LF_ThC_yaw"); see
+#       seqikpy.leg_inverse_kinematics.LegInvKinSeq. The call sites build the
+#       lookup key as `f"Angle_{leg}_{dof_name}"` where `dof_name` is a KEY of
+#       this dict, so the keys must be exactly these canonical DOF names for the
+#       lookups (and hence the DOF packing order) to be correct.
+#   * The VALUES are the corresponding NeuroMechFly DOF names. They are not used
+#     by the IK save path today but document the canonical<->NMF correspondence
+#     and keep this dict useful for downstream NMF actuation code.
+dof_name_lookup_canonical_to_nmf = {
+    "ThC_yaw": "Coxa_yaw",
+    "ThC_pitch": "Coxa",
+    "ThC_roll": "Coxa_roll",
+    "CTr_pitch": "Femur",
+    "CTr_roll": "Femur_roll",
+    "FTi_pitch": "Tibia",
+    "TiTa_pitch": "Tarsus1",
+}
+dof_name_lookup_nmf_to_canonical = {
+    v: k for k, v in dof_name_lookup_canonical_to_nmf.items()
+}
+
 legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
 leg_keypoints_canonical = ["ThC", "CTr", "FTi", "TiTa", "Claw"]
 leg_keypoints_nmf = [keypoint_name_lookup_canonical_to_nmf[kp] for kp in leg_keypoints_canonical]
