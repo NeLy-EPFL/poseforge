@@ -84,9 +84,9 @@ def run_tiled_inference_for_checkpoint(
     output_basedir: str | None = None,
     video_filename: str | None = None,
     patch_batch_size: int | None = None,
-    weight_type: str = "uniform",
+    weight_type: str = "feather",
     debug_mode: bool = False,
-    randomize_seams: bool = True,
+    randomize_seams: bool = False,
     seed: int | None = 42,
     num_last_checkpoints: int | None = None,
     device: str = "cuda",
@@ -97,9 +97,25 @@ def run_tiled_inference_for_checkpoint(
 
     The full frame is split into minimally many, evenly distributed tiles of
     model input size. In overlapping regions, pixel values are merged with
-    weighted averaging. If randomize_seams is True, seam locations vary
-    per frame using random phases (deterministic if seed is provided).
-    
+    weighted averaging using ``weight_type``:
+
+    - ``"feather"`` (default, recommended): a trapezoidal partition-of-unity
+      window. Overlapping tiles sum to ~1 and the window is nonzero at the seam,
+      giving seamless blends without darkening the boundary between two tiles.
+    - ``"uniform"``: the previous default. Plain 50/50 averaging in overlaps with
+      no feathering, which can leave hard seams where two independently
+      InstanceNorm-normalized tiles meet.
+    - ``"cosine"``/``"pyramid"``/``"gaussian"``: legacy windows kept for
+      backward compatibility. ``cosine``/``pyramid`` are zero at the tile border,
+      so the seam pixel gets ~0 weight from one tile.
+
+    Mirror-padded out-of-frame tile regions are always given zero weight so they
+    cannot leak hallucinated content into genuine edge pixels.
+
+    If randomize_seams is True, seam locations vary per frame using random phases
+    (deterministic if seed is provided). The default is False so seams stay fixed
+    across frames, avoiding temporal flicker.
+
     If num_last_checkpoints is specified, only the last N checkpoints from
     each folder will be processed; otherwise all matching checkpoints are used.
     """

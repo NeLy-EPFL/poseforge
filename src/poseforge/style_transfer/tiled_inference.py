@@ -12,18 +12,59 @@ from poseforge.style_transfer.cut_inference import InferencePipeline
 from poseforge.util.sys import clear_memory_cache
 
 
+# The recommended default. A trapezoidal ramp that is a partition of unity on
+# the 50%-overlap grid (overlapping copies sum to ~1 across the overlap region)
+# and is strictly NONZERO at the seam, so two adjacent tiles always co-contribute
+# there. See ``_feather_ramp_1d`` for the construction.
+_DEFAULT_WEIGHT_TYPE = "feather"
+
+_VALID_WEIGHT_TYPES = ("feather", "uniform", "cosine", "gaussian", "pyramid")
+
+
 def _normalize_weight_type(weight_type: str) -> str:
     normalized_weight_type = weight_type.strip().lower()
     if normalized_weight_type == "guassian":
         normalized_weight_type = "gaussian"
 
-    if normalized_weight_type not in {"uniform", "cosine", "gaussian", "pyramid"}:
+    if normalized_weight_type not in set(_VALID_WEIGHT_TYPES):
+        valid = ", ".join(repr(name) for name in _VALID_WEIGHT_TYPES)
         raise ValueError(
-            "weight_type must be one of 'uniform', 'cosine', 'gaussian', or 'pyramid', "
-            f"got {weight_type!r}"
+            f"weight_type must be one of {valid}, got {weight_type!r}"
         )
 
     return normalized_weight_type
+
+
+def _feather_ramp_1d(length: int) -> np.ndarray:
+    """Return a 1D partition-of-unity feather window of the given length.
+
+    The window ramps linearly up over the first half of the tile and back down
+    over the second half (a symmetric trapezoid/triangle). The ramp is sampled
+    at pixel midpoints, so it is strictly positive everywhere -- including at the
+    tile borders / seam pixels -- yet two copies offset by half a tile (the fixed
+    50% overlap stride used by ``_compute_half_overlap_tile_starts``) sum to
+    exactly 1 across the overlap region. This is the constant-overlap-add (COLA)
+    property that makes blended tiles seamless without darkening the seam.
+
+    Unlike ``cosine``/``pyramid`` (which evaluate to 0 at the borders, so the
+    seam pixel receives ~0 weight from one of the two overlapping tiles), this
+    window keeps both contributions nonzero at the seam.
+    """
+    if length <= 0:
+        raise ValueError(f"length must be positive, got {length}")
+    if length == 1:
+        return np.ones(1, dtype=np.float32)
+
+    # Ramp length equals the 50%-overlap stride so that the down-ramp of one tile
+    # and the up-ramp of its neighbour are complementary and sum to 1.
+    ramp = length // 2
+    weights = np.ones(length, dtype=np.float32)
+    if ramp > 0:
+        # Midpoint sampling (i + 0.5) / ramp keeps the endpoints strictly > 0.
+        up = (np.arange(ramp, dtype=np.float32) + 0.5) / ramp
+        weights[:ramp] = up
+        weights[length - ramp :] = up[::-1]
+    return weights
 
 
 def _make_tile_weight_map(patch_h: int, patch_w: int, weight_type: str) -> np.ndarray:
@@ -34,6 +75,16 @@ def _make_tile_weight_map(patch_h: int, patch_w: int, weight_type: str) -> np.nd
         raise ValueError(f"patch_w must be positive, got {patch_w}")
 
     weight_type = _normalize_weight_type(weight_type)
+
+    if weight_type == "feather":
+        # Return the raw partition-of-unity window unchanged: the overlapping
+        # copies must sum to exactly 1 across the overlap region, so it must NOT
+        # be rescaled by its max (the symmetric midpoint-sampled ramp peaks
+        # slightly below 1, and dividing by that peak would break the unity sum).
+        y_weights = _feather_ramp_1d(patch_h)
+        x_weights = _feather_ramp_1d(patch_w)
+        weight_map = np.outer(y_weights, x_weights).astype(np.float32)
+        return weight_map[..., None]
 
     if weight_type == "uniform":
         weight_map = np.ones((patch_h, patch_w), dtype=np.float32)
@@ -66,6 +117,8 @@ def _make_tile_weight_map(patch_h: int, patch_w: int, weight_type: str) -> np.nd
         else:
             raise AssertionError(f"Unhandled weight_type: {weight_type}")
 
+    # ``feather`` already peaks at 1 and is strictly positive, so the clip/rescale
+    # below is a no-op for it and its partition-of-unity property is preserved.
     weight_map = np.clip(weight_map, 1e-6, None)
     weight_map /= float(weight_map.max())
     return weight_map.astype(np.float32)[..., None]
@@ -196,11 +249,58 @@ def _tile_specs(
     return specs
 
 
+def _clamp_weights_to_frame(
+    weight_map: np.ndarray,
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+) -> tuple[np.ndarray, tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """Zero out the parts of a tile weight map that fall outside the true frame.
+
+    A tile placed at ``(y, x)`` may extend past the image borders; those regions
+    are filled with mirror-padded (hallucinated) pixels when the tile is built.
+    To stop that content from leaking into genuine edge pixels we set the weight
+    of every out-of-frame position to exactly 0 before accumulation, so it never
+    contributes to either the weighted sum or the normalising count.
+
+    Returns the masked (full tile-sized) weight map, the destination slice in
+    image coordinates ``(y0, y1, x0, x1)``, and the matching source slice in
+    tile-local coordinates ``(tile_y0, tile_y1, tile_x0, tile_x1)``.
+    """
+    tile_h = weight_map.shape[0]
+    tile_w = weight_map.shape[1]
+
+    y0 = max(0, y)
+    x0 = max(0, x)
+    y1 = min(height, y + tile_h)
+    x1 = min(width, x + tile_w)
+
+    masked = np.zeros_like(weight_map)
+    if y1 > y0 and x1 > x0:
+        tile_y0 = y0 - y
+        tile_x0 = x0 - x
+        tile_y1 = tile_y0 + (y1 - y0)
+        tile_x1 = tile_x0 + (x1 - x0)
+        masked[tile_y0:tile_y1, tile_x0:tile_x1] = weight_map[
+            tile_y0:tile_y1, tile_x0:tile_x1
+        ]
+    else:
+        # Tile is entirely out of frame (only possible with extreme phases).
+        tile_y0 = tile_y1 = tile_x0 = tile_x1 = 0
+
+    return (
+        masked,
+        (y0, y1, x0, x1),
+        (tile_y0, tile_y1, tile_x0, tile_x1),
+    )
+
+
 def stylize_frame_tiled(
     inference_pipeline: InferencePipeline,
     frame: np.ndarray,
     patch_batch_size: int,
-    weight_type: str = "uniform",
+    weight_type: str = _DEFAULT_WEIGHT_TYPE,
     debug_mode: bool = False,
     y_phase: int = 0,
     x_phase: int = 0,
@@ -209,6 +309,9 @@ def stylize_frame_tiled(
 
     Tiles are extracted on a 50% overlap grid and mirrored at the borders.
     Phases allow randomization of seam locations while preserving 2x2 coverage.
+    Overlapping tiles are blended with ``weight_type`` (default ``"feather"``, a
+    partition-of-unity window); mirror-padded out-of-frame regions are given zero
+    weight so they cannot leak into genuine edge pixels.
     """
     if frame.ndim != 3:
         raise ValueError(f"Expected frame with shape (H, W, C), got {frame.shape}")
@@ -242,17 +345,17 @@ def stylize_frame_tiled(
 
         for j, (y, x, patch_h, patch_w) in enumerate(batch_specs):
             out_patch = batch_out[j].astype(np.float32)
-            y0 = max(0, y)
-            x0 = max(0, x)
-            y1 = min(height, y + tile_size)
-            x1 = min(width, x + tile_size)
 
-            tile_y0 = y0 - y
-            tile_x0 = x0 - x
-            tile_y1 = tile_y0 + (y1 - y0)
-            tile_x1 = tile_x0 + (x1 - x0)
+            # Zero the weight of any mirror-padded (out-of-frame) tile region so
+            # hallucinated content never leaks into real edge pixels, then
+            # accumulate only the in-frame slice.
+            masked_weights, (y0, y1, x0, x1), (tile_y0, tile_y1, tile_x0, tile_x1) = (
+                _clamp_weights_to_frame(weight_map, y, x, height, width)
+            )
+            if y1 <= y0 or x1 <= x0:
+                continue
 
-            tile_weights = weight_map[tile_y0:tile_y1, tile_x0:tile_x1]
+            tile_weights = masked_weights[tile_y0:tile_y1, tile_x0:tile_x1]
             out_sum[y0:y1, x0:x1] += out_patch[tile_y0:tile_y1, tile_x0:tile_x1] * tile_weights
             out_count[y0:y1, x0:x1] += tile_weights
 
