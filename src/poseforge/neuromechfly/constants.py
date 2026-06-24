@@ -325,17 +325,33 @@ nmf_template = {
     "LH_Claw": np.array([-0.215, 0.087, -2.588]),
 }
 
-# Joint DOF bounds for seqikpy IK. DATA-DERIVED (issue #48 I3-B): each bound is the
-# observed range of the ground-truth simulated `dof_angles` (n=16000 frames across
-# 500 atomic batches) padded by +/-10 deg, rounded outward. This supersedes the
-# earlier hand-set / L-R-mirrored bounds, several of which were tighter than the actual
-# range of motion and would clip valid poses (verified: 10/42 of the prior bounds clipped
-# the data). Regenerate with scripts/verify_ik_selfconsistency.py --emit-bounds.
-# CAVEATS: (1) this is the RoM of the *training* kinematics; production may see novel
+# Joint DOF bounds for seqikpy IK. DATA-DERIVED (issue #48 I3-B).
+#
+# Method (values are whole degrees wrapped in np.deg2rad):
+#   1. Source: the ground-truth simulated `dof_angles` stored in every atomic-batch
+#      `_labels.h5` (named via the dataset's `keys` attr; 6 legs x 7 DOFs = 42).
+#   2. Sample: 500 `_labels.h5` files (numpy default_rng(0), no replacement) from the
+#      sorted recursive glob of bulk_data/.../atomic_batches/4variants/**/*_labels.h5,
+#      all 32 frames each -> n = 16000 frames.
+#   3. Per DOF: bound = (floor(min_deg - margin), ceil(max_deg + margin)) with
+#      margin = 10 deg -- the observed range padded outward. The margin gives the
+#      least-squares solver headroom so the optimum does not sit exactly on a boundary
+#      (an IK fragility noted in the audit); min/max (not percentiles) guarantee no
+#      observed pose is clipped.
+#   4. Map ground-truth key `{leg}{dof}` (e.g. RFThC_yaw) -> bounds key `{leg}_{dof}`.
+#   Reproduce EXACTLY with:
+#     python scripts/verify_ik_selfconsistency.py --emit-bounds --n-batches 500 --seed 0 --margin-deg 10
+#
+# Why: supersedes the earlier hand-set / L-R-mirrored bounds, 10/42 of which were tighter
+# than the actual range of motion and would clip valid poses (a bound tighter than the data
+# is unreachable by IK -> forces a wrong solution). The simulated dof_angles are exactly the
+# RoM the IK must reproduce, so they are the correct floor for these bounds.
+# CAVEATS: (1) this is the *training* RoM, not the anatomical RoM; production may see novel
 #   poses, so widen toward NeuroMechFly's anatomical limits if IK saturates a bound.
 #   (2) DOFs flagged WRAPPING below have source angles beyond +/-180 deg, indicating the
 #   upstream kinematics need unwrapping; bounds contain them only so IK can reproduce them.
-#   Wrapping DOFs: RH_ThC_roll.
+#   Wrapping DOFs: RH_ThC_roll. (3) Bounds come out near-mirror L/R where the data is, but
+#   are NOT forced symmetric (data-honest).
 nmf_bounds = {
     # Front legs
     "RF_ThC_yaw": (np.deg2rad(-36), np.deg2rad(57)),
