@@ -325,74 +325,63 @@ nmf_template = {
     "LH_Claw": np.array([-0.215, 0.087, -2.588]),
 }
 
-# Determine the bounds for each joint DOF
-#
-# ######################################################################### #
-# ##  I3-B (issue #48):  *** NEEDS BIOMECHANICAL / NMF RANGE-OF-MOTION   ## #
-# ##  REVIEW ***                                                          ## #
-# ######################################################################### #
-# The original author flagged several L/R asymmetries here with "# ?" markers.
-# Some were genuine (non-mirrored) inconsistencies, including a physically
-# implausible -270 deg lower bound on RF/RM CTr_pitch. The five bounds below
-# marked "I3-B fix" were changed to be exact L/R mirrors of their counterpart,
-# using the convention:
-#     roll / yaw : RIGHT = (-LEFT_hi, -LEFT_lo)   (reflection about the midline)
-#     pitch      : RIGHT =  LEFT                  (pitch is shared L/R)
-# The mid/hind ThC_roll and CTr_roll bounds already mirror correctly and were
-# left unchanged.
-#
-# These mirror-derived values are a best-effort consistency fix ONLY; they have
-# NOT been validated against measured NeuroMechFly joint ranges of motion. A
-# maintainer with biomechanics knowledge should verify them. This change is in a
-# dedicated commit so it can be reverted independently if the true ranges differ.
+# Joint DOF bounds for seqikpy IK. DATA-DERIVED (issue #48 I3-B): each bound is the
+# observed range of the ground-truth simulated `dof_angles` (n=16000 frames across
+# 500 atomic batches) padded by +/-10 deg, rounded outward. This supersedes the
+# earlier hand-set / L-R-mirrored bounds, several of which were tighter than the actual
+# range of motion and would clip valid poses (verified: 10/42 of the prior bounds clipped
+# the data). Regenerate with scripts/verify_ik_selfconsistency.py --emit-bounds.
+# CAVEATS: (1) this is the RoM of the *training* kinematics; production may see novel
+#   poses, so widen toward NeuroMechFly's anatomical limits if IK saturates a bound.
+#   (2) DOFs flagged WRAPPING below have source angles beyond +/-180 deg, indicating the
+#   upstream kinematics need unwrapping; bounds contain them only so IK can reproduce them.
+#   Wrapping DOFs: RH_ThC_roll.
 nmf_bounds = {
     # Front legs
-    "RF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
-    "RF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RF_ThC_roll": (np.deg2rad(-90), np.deg2rad(10)),  # I3-B fix: mirror of LF (-10,90); was (-135,10)
-    "RF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # I3-B fix: match LF (-180,10); was implausible (-270,10)
-    "RF_CTr_roll": (np.deg2rad(-180), np.deg2rad(90)),  # mirrors LF (-90,180): (-180,90) OK
-    "RF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
-    "LF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LF_ThC_roll": (np.deg2rad(-10), np.deg2rad(90)),
-    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LF_CTr_roll": (np.deg2rad(-90), np.deg2rad(180)),
-    "LF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-
+    "RF_ThC_yaw": (np.deg2rad(-36), np.deg2rad(57)),
+    "RF_ThC_pitch": (np.deg2rad(-17), np.deg2rad(79)),
+    "RF_ThC_roll": (np.deg2rad(-185), np.deg2rad(105)),
+    "RF_CTr_pitch": (np.deg2rad(-187), np.deg2rad(-41)),
+    "RF_CTr_roll": (np.deg2rad(-187), np.deg2rad(13)),
+    "RF_FTi_pitch": (np.deg2rad(5), np.deg2rad(178)),
+    "RF_TiTa_pitch": (np.deg2rad(-147), np.deg2rad(9)),
+    "LF_ThC_yaw": (np.deg2rad(-63), np.deg2rad(37)),
+    "LF_ThC_pitch": (np.deg2rad(-21), np.deg2rad(65)),
+    "LF_ThC_roll": (np.deg2rad(-18), np.deg2rad(172)),
+    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(-51)),
+    "LF_CTr_roll": (np.deg2rad(-21), np.deg2rad(186)),
+    "LF_FTi_pitch": (np.deg2rad(-6), np.deg2rad(182)),
+    "LF_TiTa_pitch": (np.deg2rad(-150), np.deg2rad(10)),
     # Mid legs
-    "RM_ThC_yaw": (np.deg2rad(-90), np.deg2rad(45)),  # I3-B fix: mirror of LM (-45,90); was (-45,45)
-    "RM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RM_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # mirrors LM (-10,180): (-180,10) OK
-    "RM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # I3-B fix: match LM (-180,10); was implausible (-270,10)
-    "RM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "RM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),
-    "LM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LM_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),
-    "LM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "LM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-
+    "RM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(28)),
+    "RM_ThC_pitch": (np.deg2rad(-31), np.deg2rad(27)),
+    "RM_ThC_roll": (np.deg2rad(-171), np.deg2rad(-29)),
+    "RM_CTr_pitch": (np.deg2rad(-155), np.deg2rad(-50)),
+    "RM_CTr_roll": (np.deg2rad(-78), np.deg2rad(12)),
+    "RM_FTi_pitch": (np.deg2rad(0), np.deg2rad(166)),
+    "RM_TiTa_pitch": (np.deg2rad(-81), np.deg2rad(9)),
+    "LM_ThC_yaw": (np.deg2rad(-26), np.deg2rad(38)),
+    "LM_ThC_pitch": (np.deg2rad(-32), np.deg2rad(26)),
+    "LM_ThC_roll": (np.deg2rad(35), np.deg2rad(167)),
+    "LM_CTr_pitch": (np.deg2rad(-157), np.deg2rad(-38)),
+    "LM_CTr_roll": (np.deg2rad(-13), np.deg2rad(83)),
+    "LM_FTi_pitch": (np.deg2rad(4), np.deg2rad(163)),
+    "LM_TiTa_pitch": (np.deg2rad(-132), np.deg2rad(10)),
     # Hind legs
-    "RH_ThC_yaw": (np.deg2rad(-90), np.deg2rad(45)),  # I3-B fix: mirror of LH (-45,90); was (-45,45)
-    "RH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RH_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # mirrors LH (-10,180): (-180,10) OK
-    "RH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "RH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "RH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),
-    "LH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LH_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),
-    "LH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "LH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
+    "RH_ThC_yaw": (np.deg2rad(-65), np.deg2rad(39)),
+    "RH_ThC_pitch": (np.deg2rad(-33), np.deg2rad(50)),
+    "RH_ThC_roll": (np.deg2rad(-216), np.deg2rad(-62)),  # WRAPPING: source RoM exceeds +/-180 deg
+    "RH_CTr_pitch": (np.deg2rad(-158), np.deg2rad(-27)),
+    "RH_CTr_roll": (np.deg2rad(-16), np.deg2rad(167)),
+    "RH_FTi_pitch": (np.deg2rad(-3), np.deg2rad(168)),
+    "RH_TiTa_pitch": (np.deg2rad(-156), np.deg2rad(10)),
+    "LH_ThC_yaw": (np.deg2rad(-28), np.deg2rad(66)),
+    "LH_ThC_pitch": (np.deg2rad(-33), np.deg2rad(53)),
+    "LH_ThC_roll": (np.deg2rad(63), np.deg2rad(187)),
+    "LH_CTr_pitch": (np.deg2rad(-169), np.deg2rad(-10)),
+    "LH_CTr_roll": (np.deg2rad(-115), np.deg2rad(85)),
+    "LH_FTi_pitch": (np.deg2rad(2), np.deg2rad(168)),
+    "LH_TiTa_pitch": (np.deg2rad(-123), np.deg2rad(9)),
 }
 
 nmf_size = {
