@@ -35,7 +35,6 @@ from poseforge.pose.common import ResNetFeatureExtractor
 from poseforge.pose.data.synthetic import (
     init_atomic_dataset_and_dataloader,
     concat_atomic_batches,
-    aligned_center_crop,
     collapse_batch,
 )
 from poseforge.pose.contrast.model import compute_alignment_metrics
@@ -100,6 +99,8 @@ def compute_variant_similarity(
         n_workers=n_workers,
         n_channels=3,
         shuffle=False,
+        crop_size=tuple(crop_size) if crop_size is not None else None,
+        crop_mode="center",
     )
     total = max_batches if max_batches is not None else len(loader)
     device_type = "cuda" if (torch.cuda.is_available() and "cuda" in str(device)) else "cpu"
@@ -114,12 +115,9 @@ def compute_variant_similarity(
         ):
             if max_batches is not None and batch_idx >= max_batches:
                 break
+            # crop already applied per atomic batch inside the workers
             atomic_batches = atomic_batches.to(device, non_blocking=True)
             concatenated_batch = concat_atomic_batches(atomic_batches)
-            if crop_size is not None:
-                concatenated_batch = aligned_center_crop(
-                    concatenated_batch, crop_size=tuple(crop_size)
-                )
             n_variants, n_samples, _, _, _ = concatenated_batch.shape
             collapsed_batch = collapse_batch(concatenated_batch)
 

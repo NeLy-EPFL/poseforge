@@ -34,6 +34,9 @@ class AtomicBatchDataset(Dataset):
         load_body_segment_maps: bool = False,
         load_prev_body_segment_maps: bool = False,
         n_samples: int | None = None,
+        crop_size: tuple[int, int] | None = None,
+        crop_border_exclude: int = 0,
+        crop_mode: str = "random",
     ):
         # Find all .h5 and .mp4 files in the provided directories
         all_h5_files = set()
@@ -78,6 +81,19 @@ class AtomicBatchDataset(Dataset):
         self.n_channels = n_channels
         self.frames_serialization_spacing = frames_serialization_spacing
         self.n_samples = n_samples
+        # Crop applied inside __getitem__ on the worker side. Doing it here
+        # rather than on GPU after .to(device) means each worker only holds
+        # crop-sized tensors in its prefetch queue — the difference between
+        # ~5 GB and ~0.4 GB per delivered batch at the typical 900->256
+        # crop, which is the difference between blowing past 90 GB of CPU
+        # memory and using single-digit GB.
+        if crop_mode not in ("random", "center"):
+            raise ValueError(
+                f"crop_mode must be 'random' or 'center', got {crop_mode!r}"
+            )
+        self.crop_size = crop_size
+        self.crop_border_exclude = crop_border_exclude
+        self.crop_mode = crop_mode
         self.label_keys = []
         if load_dof_angles:
             self.label_keys.append("dof_angles")
@@ -167,6 +183,25 @@ with the same target size from the start.
                 )
                 sim_data = dict(sim_data)
                 sim_data["body_seg_maps"] = body_seg_maps
+
+        # Apply the aligned crop on the worker side so we never put a
+        # full-resolution batch into the prefetch queue. The crop is
+        # identical across variants of the same frame (positives must
+        # share content) and independent across frames within this atomic
+        # batch (acts as augmentation). Validation uses crop_mode="center"
+        # for a deterministic window so the validation loss is comparable
+        # across logging steps.
+        if self.crop_size is not None:
+            if self.crop_mode == "random":
+                frames = aligned_random_crop(
+                    frames,
+                    crop_size=tuple(self.crop_size),
+                    border_exclude=self.crop_border_exclude,
+                )
+            else:
+                frames = aligned_center_crop(
+                    frames, crop_size=tuple(self.crop_size)
+                )
 
         return frames, sim_data
 
@@ -540,6 +575,9 @@ def init_atomic_dataset_and_dataloader(
     pin_memory: bool = True,
     drop_last: bool = True,
     prefetch_factor: int | None = None,
+    crop_size: tuple[int, int] | None = None,
+    crop_border_exclude: int = 0,
+    crop_mode: str = "random",
 ):
     """
     Initializes an AtomicBatchDataset and a corresponding DataLoader for
@@ -592,6 +630,9 @@ def init_atomic_dataset_and_dataloader(
         load_body_segment_maps=load_body_segment_maps,
         load_prev_body_segment_maps=load_prev_body_segment_maps,
         n_samples=atomic_batch_n_samples,
+        crop_size=crop_size,
+        crop_border_exclude=crop_border_exclude,
+        crop_mode=crop_mode,
     )
 
     # Check if batch size is valid

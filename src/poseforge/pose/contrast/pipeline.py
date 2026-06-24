@@ -14,8 +14,6 @@ import poseforge.pose.contrast.config as config
 from poseforge.pose.data.synthetic import (
     concat_atomic_batches,
     collapse_batch,
-    aligned_random_crop,
-    aligned_center_crop,
     init_atomic_dataset_and_dataloader,
 )
 from poseforge.pose.contrast.model import (
@@ -213,17 +211,13 @@ class ContrastivePretrainingPipeline:
             epoch_start_time = time()
             running_start_time = time()
             for step_idx, (atomic_batches, _) in enumerate(train_loader):
-                # Merge atomic batches into a single batch
+                # Merge atomic batches into a single batch. The aligned
+                # random crop has already been applied per atomic batch
+                # inside the DataLoader workers (one window per frame,
+                # shared across that frame's variants), so atomic_batches
+                # arrives at the crop size.
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
                 concatenated_batch = concat_atomic_batches(atomic_batches)
-                # Aligned random crop: one window per frame, shared by all
-                # of its variants so positives still differ only in style.
-                if data_config.crop_size is not None:
-                    concatenated_batch = aligned_random_crop(
-                        concatenated_batch,
-                        crop_size=tuple(data_config.crop_size),
-                        border_exclude=data_config.crop_border_exclude,
-                    )
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
                 collapsed_batch = collapse_batch(concatenated_batch)
 
@@ -437,14 +431,11 @@ class ContrastivePretrainingPipeline:
                 if batch_idx == max_nbatches:
                     break
 
-                # Merge atomic batches into a single batch (same as training)
+                # Merge atomic batches into a single batch (same as
+                # training). The aligned center crop has already been
+                # applied per atomic batch inside the DataLoader workers.
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
                 concatenated_batch = concat_atomic_batches(atomic_batches)
-                if data_config is not None and data_config.crop_size is not None:
-                    concatenated_batch = aligned_center_crop(
-                        concatenated_batch,
-                        crop_size=tuple(data_config.crop_size),
-                    )
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
                 collapsed_batch = collapse_batch(concatenated_batch)
 
@@ -539,6 +530,11 @@ class ContrastivePretrainingPipeline:
             batch_size=data_config.train_batch_size,
             n_workers=data_config.n_workers,
             n_channels=3,
+            crop_size=tuple(data_config.crop_size)
+            if data_config.crop_size is not None
+            else None,
+            crop_border_exclude=data_config.crop_border_exclude,
+            crop_mode="random",
         )
 
     @staticmethod
@@ -551,6 +547,11 @@ class ContrastivePretrainingPipeline:
             batch_size=data_config.val_batch_size,
             n_workers=data_config.n_workers,
             n_channels=3,
+            crop_size=tuple(data_config.crop_size)
+            if data_config.crop_size is not None
+            else None,
+            crop_border_exclude=data_config.crop_border_exclude,
+            crop_mode="center",
         )
 
     def _check_amp_status_for_model_params(

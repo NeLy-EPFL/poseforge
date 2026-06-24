@@ -12,8 +12,6 @@ import poseforge.pose.simsiam.config as config
 from poseforge.pose.data.synthetic import (
     concat_atomic_batches,
     collapse_batch,
-    aligned_random_crop,
-    aligned_center_crop,
     init_atomic_dataset_and_dataloader,
 )
 from poseforge.pose.simsiam.model import SimSiamPretrainingModel, SimSiamLoss
@@ -178,14 +176,11 @@ class SimSiamPretrainingPipeline:
             epoch_start_time = time()
             running_start_time = time()
             for step_idx, (atomic_batches, _) in enumerate(train_loader):
+                # Aligned random crop already applied per atomic batch by
+                # the DataLoader workers — atomic_batches arrives at the
+                # crop size so the GPU transfer is small.
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
                 concatenated_batch = concat_atomic_batches(atomic_batches)
-                if data_config.crop_size is not None:
-                    concatenated_batch = aligned_random_crop(
-                        concatenated_batch,
-                        crop_size=tuple(data_config.crop_size),
-                        border_exclude=data_config.crop_border_exclude,
-                    )
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
                 collapsed_batch = collapse_batch(concatenated_batch)
 
@@ -347,13 +342,10 @@ class SimSiamPretrainingPipeline:
                 if batch_idx == max_nbatches:
                     break
 
+                # Center crop already applied by the validation DataLoader
+                # workers.
                 atomic_batches = atomic_batches.to(self.device, non_blocking=True)
                 concatenated_batch = concat_atomic_batches(atomic_batches)
-                if data_config is not None and data_config.crop_size is not None:
-                    concatenated_batch = aligned_center_crop(
-                        concatenated_batch,
-                        crop_size=tuple(data_config.crop_size),
-                    )
                 n_variants, n_samples, _, _, _ = concatenated_batch.shape
                 collapsed_batch = collapse_batch(concatenated_batch)
 
@@ -416,6 +408,11 @@ class SimSiamPretrainingPipeline:
             batch_size=data_config.train_batch_size,
             n_workers=data_config.n_workers,
             n_channels=3,
+            crop_size=tuple(data_config.crop_size)
+            if data_config.crop_size is not None
+            else None,
+            crop_border_exclude=data_config.crop_border_exclude,
+            crop_mode="random",
         )
 
     @staticmethod
@@ -428,4 +425,9 @@ class SimSiamPretrainingPipeline:
             batch_size=data_config.val_batch_size,
             n_workers=data_config.n_workers,
             n_channels=3,
+            crop_size=tuple(data_config.crop_size)
+            if data_config.crop_size is not None
+            else None,
+            crop_border_exclude=data_config.crop_border_exclude,
+            crop_mode="center",
         )
