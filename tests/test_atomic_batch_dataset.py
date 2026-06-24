@@ -6,7 +6,7 @@ from poseforge.pose.data.synthetic import AtomicBatchDataset
 
 def test_atomic_batch_dataset_loading():
     data_dirs = [
-        Path("bulk_data/pose_estimation/atomic_batches/BO_Gal4_fly1_trial001/")
+        Path("bulk_data/pose_estimation/atomic_batches/4variants/BO_Gal4_fly1_trial001/")
     ]
     dataset = AtomicBatchDataset(
         data_dirs=data_dirs,
