@@ -574,7 +574,8 @@ def init_atomic_dataset_and_dataloader(
     n_channels: int = 3,
     pin_memory: bool = True,
     drop_last: bool = True,
-    prefetch_factor: int | None = None,
+    prefetch_factor: int | None = 4,
+    persistent_workers: bool = True,
     crop_size: tuple[int, int] | None = None,
     crop_border_exclude: int = 0,
     crop_mode: str = "random",
@@ -648,15 +649,23 @@ def init_atomic_dataset_and_dataloader(
         hardware_avail = get_hardware_availability()
         n_workers = hardware_avail["num_cpu_cores_available"]
         logging.info(f"Using {n_workers} data loading workers")
-    dataloader = DataLoader(
-        dataset,
+    # persistent_workers=True keeps the worker processes alive between
+    # epochs — otherwise the GPU stalls for several seconds at the start
+    # of every epoch while workers respawn and re-scan data dirs.
+    # prefetch_factor=4 gives the queue more slack to absorb decode-time
+    # variance (cheap to raise now that post-crop batches are ~50 MB
+    # each rather than ~5 GB).
+    dataloader_kwargs = dict(
         batch_size=n_atomic_batches_per_batch,
         shuffle=shuffle,
         num_workers=n_workers,
         pin_memory=pin_memory,
         drop_last=drop_last,
-        prefetch_factor=prefetch_factor,
     )
+    if n_workers and n_workers > 0:
+        dataloader_kwargs["prefetch_factor"] = prefetch_factor
+        dataloader_kwargs["persistent_workers"] = persistent_workers
+    dataloader = DataLoader(dataset, **dataloader_kwargs)
 
     return dataset, dataloader
 
