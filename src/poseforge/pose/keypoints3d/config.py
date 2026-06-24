@@ -12,10 +12,17 @@ class ModelArchitectureConfig(SerializableDataClass):
     n_keypoints: int = 32
     # Number of bins to quantize depth values (distances from camera) into
     depth_n_bins: int = 64
-    # Minimum depth (distance from camera) in mm
-    depth_min: float = -70
-    # Maximum depth (distance from camera) in mm
-    depth_max: float = -63
+    # Minimum depth (distance from camera) in mm. IMPORTANT: this MUST overlap
+    # the actual depth range of your labels, otherwise every keypoint is
+    # out-of-bounds and (with oob_treatment="drop") the depth loss silently
+    # trains on nothing. The default below is chosen to overlap the measured
+    # label range (~[-102, -99] mm for the canonical fly dataset); always
+    # override it to match YOUR data. See `Pose2p5DLoss` for a runtime guard
+    # that escalates to an ERROR log when a large fraction of a batch is OOB.
+    depth_min: float = -103.0
+    # Maximum depth (distance from camera) in mm. MUST overlap label range
+    # (see depth_min note above).
+    depth_max: float = -99.0
     # Temperature param to regulate the "softness" of the predicted x-y heatmaps
     xy_temperature: float = 0.8
     # Temperature param to regulate the "softness" of the predicted depth distributions
@@ -24,6 +31,22 @@ class ModelArchitectureConfig(SerializableDataClass):
     upsample_core_out_channels: int = 64
     # Number of hidden channels in the head that predicts depth distributions
     depth_hidden_channels: int = 128
+    # Which depth-head architecture to use:
+    #   "global" (default, backward-compatible): the original head that
+    #       AdaptiveAvgPool2d's the whole decoder feature map to a single
+    #       global vector and regresses ALL keypoints' depths from it. This has
+    #       NO spatial localization (every keypoint shares one global
+    #       descriptor) and is the primary cause of weak 3D depth vs. the fully
+    #       spatial x-y head (audit #48, finding I1-B).
+    #   "spatial": bilinearly samples the decoder feature map at each keypoint's
+    #       predicted (x, y) location (soft-argmax of its heatmap) and maps the
+    #       per-keypoint feature vector to depth bins with a shared small MLP.
+    #       This grounds each keypoint's depth at its own image location.
+    # NOTE: the two heads have different state_dict keys, so switching to
+    # "spatial" requires TRAINING A NEW MODEL — existing "global" checkpoints
+    # cannot be loaded into a "spatial" model (and vice versa). The
+    # encoder/decoder/heatmap head are identical between the two.
+    depth_head_type: str = "global"
     # Method to compute confidence scores from predicted distr ("entropy" for entropy
     # over predicted distr, "peak" for highest predicted probability in the distr)
     confidence_method: str = "entropy"

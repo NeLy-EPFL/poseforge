@@ -8,6 +8,102 @@ import poseforge.pose.keypoints3d.config as config
 from poseforge.pose.common import ResNetFeatureExtractor, DecoderBlock
 
 
+class SpatialDepthHead(nn.Module):
+    """Spatially-grounded depth head (audit #48, finding I1-B).
+
+    Instead of collapsing the whole decoder feature map to a single global
+    descriptor (as the original ``AdaptiveAvgPool2d`` head does, losing all
+    spatial localization), this head reads the decoder feature map AT each
+    keypoint's predicted (x, y) location and regresses that keypoint's depth
+    distribution from the locally-sampled feature vector. This mirrors the
+    fully-spatial x-y heatmap head, removing depth as the asymmetric weak link.
+
+    Forward inputs:
+        feature_map (torch.Tensor): Decoder feature map ``d0`` of shape
+            (N, C, H, W). H, W match the heatmap spatial size (e.g. 128x128).
+        xy_px (torch.Tensor): Predicted keypoint locations in heatmap-PIXEL
+            coordinates (the soft-argmax of the heatmaps), shape (N, n_kp, 2),
+            with channel 0 = x (column, in [0, W-1]) and channel 1 = y (row,
+            in [0, H-1]). These share ``feature_map``'s spatial grid.
+
+    Forward output:
+        depth_logits (torch.Tensor): (N, n_kp, depth_n_bins).
+
+    The per-keypoint features are obtained with ``F.grid_sample`` (bilinear,
+    ``align_corners=False``) after normalizing the pixel coordinates to
+    [-1, 1]. A shared MLP (Linear -> GroupNorm -> ReLU -> Linear) then maps the
+    sampled C-dim vector to ``depth_n_bins`` logits for every keypoint.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_channels: int,
+        depth_n_bins: int,
+        groupnorm_n_groups: int,
+        pose_head_init_std: float,
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.depth_n_bins = depth_n_bins
+
+        # Shared per-keypoint MLP. Operates on the last (feature) dim, so a
+        # single set of weights is applied to every keypoint's sampled vector.
+        self.fc1 = nn.Linear(in_channels, hidden_channels)
+        # GroupNorm over the hidden feature dim. We normalize the (N*n_kp,
+        # hidden) activations; treating it as channels lets us reuse the
+        # project-wide GroupNorm convention (BatchNorm is unsafe at tiny batch).
+        self.norm = nn.GroupNorm(groupnorm_n_groups, hidden_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(hidden_channels, depth_n_bins)
+
+        # fc1 is followed by ReLU -> Kaiming init is appropriate.
+        nn.init.kaiming_normal_(self.fc1.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.constant_(self.norm.weight, 1)
+        nn.init.constant_(self.norm.bias, 0)
+        # fc2 produces logits (no ReLU after) -> small-std init, matching the
+        # convention used by the other pose heads' final layers.
+        nn.init.normal_(self.fc2.weight, std=pose_head_init_std)
+        nn.init.zeros_(self.fc2.bias)
+
+    def forward(
+        self, feature_map: torch.Tensor, xy_px: torch.Tensor
+    ) -> torch.Tensor:
+        n, c, h, w = feature_map.shape
+        n_kp = xy_px.shape[1]
+
+        # Normalize pixel coords (x in [0, w-1], y in [0, h-1]) to the
+        # align_corners=False grid_sample convention: a coordinate p maps to
+        # 2*(p + 0.5)/size - 1 so that pixel centers land correctly.
+        x = xy_px[..., 0]
+        y = xy_px[..., 1]
+        norm_x = 2.0 * (x + 0.5) / w - 1.0
+        norm_y = 2.0 * (y + 0.5) / h - 1.0
+        # grid_sample expects grid of shape (N, H_out, W_out, 2); use
+        # (N, n_kp, 1, 2) so we sample exactly n_kp points per image.
+        grid = torch.stack([norm_x, norm_y], dim=-1).unsqueeze(2)  # (N, n_kp, 1, 2)
+
+        sampled = F.grid_sample(
+            feature_map,
+            grid,
+            mode="bilinear",
+            align_corners=False,
+            padding_mode="border",
+        )  # (N, C, n_kp, 1)
+        # -> (N, n_kp, C)
+        sampled = sampled.squeeze(-1).permute(0, 2, 1).contiguous()
+
+        # Shared MLP applied per keypoint. Flatten (N, n_kp) so GroupNorm sees
+        # a 2D (batch, channels) input, then restore.
+        feats = sampled.view(n * n_kp, c)
+        feats = self.fc1(feats)
+        feats = self.norm(feats)
+        feats = self.relu(feats)
+        logits = self.fc2(feats)  # (N*n_kp, depth_n_bins)
+        return logits.view(n, n_kp, self.depth_n_bins)
+
+
 class Pose2p5DModel(nn.Module):
     """A 3D keypoint detection model, but implemented in "2.5D", i.e:
         - A x-y pathway predicts heatmaps for each keypoint in the 2D image
@@ -43,6 +139,7 @@ class Pose2p5DModel(nn.Module):
         depth_temperature: float,
         upsample_core_out_channels: int = 64,
         depth_hidden_channels: int = 64,
+        depth_head_type: str = "global",
         confidence_method: str = "entropy",
         groupnorm_n_groups: int = 32,
         pose_head_init_std: float = 1e-3,
@@ -69,6 +166,18 @@ class Pose2p5DModel(nn.Module):
                 upsampling layers.
             depth_hidden_channels (int): Number of hidden channels in
                 depth head.
+            depth_head_type (str): Which depth-head architecture to build.
+                "global" (default, backward-compatible) builds the original
+                head that AdaptiveAvgPool2d's the whole decoder map to one
+                global vector and regresses every keypoint's depth from it
+                (NO spatial localization). "spatial" builds a head that
+                bilinearly samples the decoder feature map at each keypoint's
+                predicted (x, y) location and maps the per-keypoint feature
+                vector to depth bins with a shared MLP, grounding each
+                keypoint's depth at its image location (audit #48, I1-B). The
+                two heads have different state_dict keys, so switching to
+                "spatial" requires training a new model; existing "global"
+                checkpoints are unaffected as long as the default is kept.
             confidence_method (str): Method to compute confidence scores in
                 soft argmax of x-y heatmaps and depth logits. Options:
                 "entropy" (1 - normalized entropy in predicted
@@ -140,6 +249,7 @@ class Pose2p5DModel(nn.Module):
         self.depth_temperature = depth_temperature
         self.upsample_core_out_channels = upsample_core_out_channels
         self.depth_hidden_channels = depth_hidden_channels
+        self.depth_head_type = depth_head_type.lower()
         self.confidence_method = confidence_method.lower()
         self.groupnorm_n_groups = groupnorm_n_groups
         self.pose_head_init_std = pose_head_init_std
@@ -157,6 +267,11 @@ class Pose2p5DModel(nn.Module):
             raise ValueError(
                 f"Invalid confidence_method: {confidence_method}. "
                 'Must be "entropy" or "peak".'
+            )
+        if self.depth_head_type not in ["global", "spatial"]:
+            raise ValueError(
+                f"Invalid depth_head_type: {depth_head_type}. "
+                'Must be "global" or "spatial".'
             )
         if (
             (upsample_core_out_channels % groupnorm_n_groups) != 0
@@ -205,13 +320,24 @@ class Pose2p5DModel(nn.Module):
             hidden_channels=heatmap_hidden_channels,
         )
 
-        # Depth head for distance from camera
-        self.depth_head = self._build_depth_head(
-            in_channels=upsample_core_out_channels,
-            hidden_channels=depth_hidden_channels,
-            n_keypoints=self.n_predicted_keypoints,
-            depth_n_bins=depth_n_bins,
-        )
+        # Depth head for distance from camera.
+        # NOTE: both variants are stored on ``self.depth_head`` so that the
+        # training pipeline's optimizer LR group (which enumerates
+        # ``model.depth_head.parameters()``) and the AMP status check pick up
+        # the head's parameters unchanged regardless of type.
+        if self.depth_head_type == "spatial":
+            self.depth_head = self._build_spatial_depth_head(
+                in_channels=upsample_core_out_channels,
+                hidden_channels=depth_hidden_channels,
+                depth_n_bins=depth_n_bins,
+            )
+        else:  # "global" (default, backward-compatible)
+            self.depth_head = self._build_depth_head(
+                in_channels=upsample_core_out_channels,
+                hidden_channels=depth_hidden_channels,
+                n_keypoints=self.n_predicted_keypoints,
+                depth_n_bins=depth_n_bins,
+            )
 
         # Precompute depth bin centers
         depth_bin_centers = torch.linspace(
@@ -244,6 +370,7 @@ class Pose2p5DModel(nn.Module):
             depth_temperature=architecture_config.depth_temperature,
             upsample_core_out_channels=architecture_config.upsample_core_out_channels,
             depth_hidden_channels=architecture_config.depth_hidden_channels,
+            depth_head_type=architecture_config.depth_head_type,
             confidence_method=architecture_config.confidence_method,
             groupnorm_n_groups=architecture_config.groupnorm_n_groups,
             pose_head_init_std=architecture_config.pose_head_init_std,
@@ -374,6 +501,28 @@ class Pose2p5DModel(nn.Module):
         nn.init.zeros_(fc.bias)
 
         return nn.Sequential(adaptive_pool, conv, groupnorm, relu, flatten, fc, reshape)
+
+    def _build_spatial_depth_head(
+        self,
+        in_channels: int,
+        hidden_channels: int,
+        depth_n_bins: int,
+    ) -> nn.Module:
+        """Build the spatially-grounded depth head (see ``SpatialDepthHead``).
+
+        Unlike the global head, this one is NOT sized per-keypoint: the same
+        shared MLP is applied to every keypoint's locally-sampled feature
+        vector, so the head's parameter count is independent of the number of
+        keypoints. The number of keypoints (and which ones are kept) is
+        determined dynamically at forward time by the predicted (x, y) inputs.
+        """
+        return SpatialDepthHead(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            depth_n_bins=depth_n_bins,
+            groupnorm_n_groups=self.groupnorm_n_groups,
+            pose_head_init_std=self.pose_head_init_std,
+        )
 
     @staticmethod
     def _softmax_with_temp(
@@ -627,8 +776,14 @@ class Pose2p5DModel(nn.Module):
         stride = orig_height / heatmap_size[0]
 
         # Compute depth distributions
-        # Compute logits using depth head
-        depth_logits = self.depth_head(d0)  # (N, n_keypoints, depth_n_bins)
+        # Compute logits using depth head.
+        # The "global" head pools d0 to a single vector (location-agnostic),
+        # whereas the "spatial" head samples d0 at each keypoint's predicted
+        # heatmap-pixel location xy_px_out (which lives on d0's 128x128 grid).
+        if self.depth_head_type == "spatial":
+            depth_logits = self.depth_head(d0, xy_px_out)
+        else:
+            depth_logits = self.depth_head(d0)  # (N, n_keypoints, depth_n_bins)
         # Decode depth from logits using soft-argmax
         # depth_pos and depth_conf both of shape (N, n_keypoints)
         depth_pos, depth_conf = self._soft_argmax_1d(depth_logits)
@@ -955,15 +1110,32 @@ class Pose2p5DLoss(nn.Module):
             xy_labels_in_output_dim, depth_labels, heatmap_size, bin_values
         )
         if combined_oob.any():
+            batch_size = xy_labels_in_output_dim.shape[0]
             n_xy_oob = xy_oob.sum().item()
             n_depth_oob = depth_oob.sum().item()
             n_combined_oob = combined_oob.sum().item()
             logging.warning(
                 f"Found {n_combined_oob} samples with OOB labels "
                 f"({n_xy_oob} with OOB x-y, {n_depth_oob} with OOB depth) "
-                f"out of {xy_labels_in_output_dim.shape[0]} in the current batch. "
+                f"out of {batch_size} in the current batch. "
                 f"Using oob_treatment='{self.oob_treatment}'."
             )
+
+            # I1-G guard: a misconfigured depth window (depth_min/depth_max
+            # disjoint from the label range) makes (almost) every sample's
+            # depth OOB, which with oob_treatment="drop" silently zeroes the
+            # depth loss and trains nothing. Escalate to ERROR so this is loud.
+            depth_oob_frac = n_depth_oob / max(1, batch_size)
+            if depth_oob_frac > 0.5:
+                logging.error(
+                    f"{n_depth_oob}/{batch_size} ({depth_oob_frac:.0%}) of this "
+                    "batch has OUT-OF-BOUNDS DEPTH labels. The depth window "
+                    "[depth_min, depth_max] is very likely misconfigured and "
+                    "does NOT overlap your label depth range. With "
+                    "oob_treatment='drop' the depth loss trains on (almost) "
+                    "nothing. Fix ModelArchitectureConfig.depth_min/depth_max "
+                    "to match your data (see audit #48, finding I1-G)."
+                )
 
             device = xy_labels_in_output_dim.device
 
