@@ -94,6 +94,75 @@ class ContrastivePretrainingModel(nn.Module):
         logging.info("Set up feature extractor from config")
 
 
+def compute_alignment_metrics(
+    features: torch.Tensor, n_samples: int, n_variants: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Diagnostics for how well a contrastive encoder has learned the
+    style-invariant representation we want.
+
+    Computes two things, both on whatever embedding space you pass in (we
+    recommend the pooled feature map, since that is what downstream
+    segmentation / keypoint heads consume — the projection-head output is
+    what the loss directly shapes, so it always looks artificially clean):
+
+    - Aggregate invariance ratio: mean cosine *distance* between
+      embeddings of the *same* simulated frame across variants, divided by
+      mean cosine distance between embeddings of *different* frames.
+      Lower is better. A perfectly invariant encoder approaches 0; a
+      collapsed encoder approaches 1. This is a useful headline scalar for
+      comparing training runs because it captures the property the loss
+      is supposed to produce in a way that the loss value itself cannot
+      (the loss can drop just from pushing negatives apart, without
+      positives getting any closer).
+    - Variant similarity matrix of shape (n_variants, n_variants), where
+      entry (i, j) is the average cosine similarity between variant i and
+      variant j of the same frame, averaged over the batch. The diagonal
+      is 1 by construction. A row/column that stays low compared to the
+      others flags a variant the encoder cannot identify with the rest
+      (either a hard style, or a corrupted variant whose images do not
+      actually share pose content with the others) — i.e. a candidate to
+      inspect visually.
+
+    Args:
+        features (torch.Tensor): Embeddings of shape
+            (n_variants * n_samples, feature_dim), laid out so that rows
+            0..n_samples-1 are variant 0, n_samples..2*n_samples-1 are
+            variant 1, etc. This is the layout produced by
+            collapse_batch().
+        n_samples (int): Number of unique simulated frames in the batch.
+        n_variants (int): Number of style variants per frame.
+
+    Returns:
+        invariance_ratio (torch.Tensor): Scalar; cosine distance ratio.
+        variant_similarity_matrix (torch.Tensor): (n_variants, n_variants).
+    """
+    feats = F.normalize(features, dim=1)
+    feats_grouped = feats.view(n_variants, n_samples, -1)
+
+    # Variant similarity matrix: average over frames of variant_i . variant_j.
+    # Diagonal is 1 by construction (cosine of a normalized vector with itself).
+    variant_similarity_matrix = (
+        torch.einsum("ind,jnd->ij", feats_grouped, feats_grouped) / n_samples
+    )
+
+    # Within-frame similarity: average over off-diagonal entries of the matrix.
+    eye = torch.eye(n_variants, dtype=torch.bool, device=features.device)
+    within_frame_sim = variant_similarity_matrix[~eye].mean()
+
+    # Between-frame similarity: average cosine sim over all pairs that come
+    # from different frames (regardless of variant).
+    sim_all = feats @ feats.T
+    frame_id = torch.arange(n_samples, device=features.device).repeat(n_variants)
+    same_frame = frame_id[None, :] == frame_id[:, None]
+    between_frame_sim = sim_all[~same_frame].mean()
+
+    within_distance = 1.0 - within_frame_sim
+    between_distance = 1.0 - between_frame_sim
+    invariance_ratio = within_distance / between_distance.clamp_min(1e-8)
+
+    return invariance_ratio, variant_similarity_matrix
+
+
 class InfoNCELoss(nn.Module):
     """Compute the InfoNCE loss, treating the same frame from different
     variants as positive pairs and different frames as negative pairs.

@@ -442,6 +442,88 @@ def collapse_batch(
         return collapsed_frames, collapsed_sim_data
 
 
+def aligned_random_crop(
+    frames: torch.Tensor,
+    crop_size: tuple[int, int],
+    border_exclude: int = 0,
+) -> torch.Tensor:
+    """Apply the same random crop window to every variant of each sample.
+
+    Used to do contrastive pretraining on smaller crops while preserving
+    the key invariant of the loss: all variants of a given simulated frame
+    must share their pose-relevant content. Sampling one (y0, x0) per
+    sample (not per variant) and broadcasting it across the variant
+    dimension does exactly that.
+
+    Args:
+        frames (torch.Tensor): Tensor of shape
+            (n_variants, n_samples, n_channels, H, W).
+        crop_size (tuple[int, int]): (crop_H, crop_W) of the output window.
+        border_exclude (int): Pixels along each image edge that the crop
+            window is not allowed to overlap. The valid top-left corner
+            (y0, x0) satisfies y0 in [border_exclude, H - border_exclude
+            - crop_H] and x0 in [border_exclude, W - border_exclude
+            - crop_W]. Useful when the source frames have a black
+            background ring around a centered subject that would otherwise
+            contaminate the contrastive signal.
+
+    Returns:
+        torch.Tensor: Cropped frames of shape
+            (n_variants, n_samples, n_channels, crop_H, crop_W).
+    """
+    n_variants, n_samples, _, H, W = frames.shape
+    crop_H, crop_W = crop_size
+    min_y0 = border_exclude
+    min_x0 = border_exclude
+    max_y0 = H - border_exclude - crop_H
+    max_x0 = W - border_exclude - crop_W
+    if max_y0 < min_y0 or max_x0 < min_x0:
+        raise ValueError(
+            f"Crop size {crop_size} with border_exclude={border_exclude} "
+            f"does not fit inside frames of size ({H}, {W}). Need "
+            f"crop_H + 2*border_exclude <= H and same for width."
+        )
+    y0s = torch.randint(min_y0, max_y0 + 1, (n_samples,), device=frames.device)
+    x0s = torch.randint(min_x0, max_x0 + 1, (n_samples,), device=frames.device)
+    out = torch.empty(
+        (n_variants, n_samples, frames.shape[2], crop_H, crop_W),
+        dtype=frames.dtype,
+        device=frames.device,
+    )
+    for i in range(n_samples):
+        y0 = int(y0s[i])
+        x0 = int(x0s[i])
+        out[:, i] = frames[:, i, :, y0 : y0 + crop_H, x0 : x0 + crop_W]
+    return out
+
+
+def aligned_center_crop(
+    frames: torch.Tensor,
+    crop_size: tuple[int, int],
+) -> torch.Tensor:
+    """Center crop, identical across all variants and samples.
+
+    Args:
+        frames (torch.Tensor): Tensor of shape
+            (n_variants, n_samples, n_channels, H, W).
+        crop_size (tuple[int, int]): (crop_H, crop_W) of the output window.
+
+    Returns:
+        torch.Tensor: Cropped frames of shape
+            (n_variants, n_samples, n_channels, crop_H, crop_W).
+    """
+    _, _, _, H, W = frames.shape
+    crop_H, crop_W = crop_size
+    if crop_H > H or crop_W > W:
+        raise ValueError(
+            f"Crop size {crop_size} does not fit inside frames of size "
+            f"({H}, {W})."
+        )
+    y0 = (H - crop_H) // 2
+    x0 = (W - crop_W) // 2
+    return frames[:, :, :, y0 : y0 + crop_H, x0 : x0 + crop_W]
+
+
 def init_atomic_dataset_and_dataloader(
     data_dirs: list[str | Path],
     atomic_batch_n_samples: int,

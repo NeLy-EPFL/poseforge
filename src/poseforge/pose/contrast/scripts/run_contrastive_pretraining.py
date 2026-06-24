@@ -56,7 +56,12 @@ def pretrain_contrastive_model(
     feature_extractor = model.feature_extractor
     projection_head = model.projection_head
     print("========== Feature Extractor Summary ==========")
-    summary(feature_extractor.cuda(), (3, *training_data_config.image_size))
+    summary_input_size = (
+        tuple(training_data_config.crop_size)
+        if training_data_config.crop_size is not None
+        else tuple(training_data_config.image_size)
+    )
+    summary(feature_extractor.cuda(), (3, *summary_input_size))
     print("=========== Projection Head Summary ===========")
     summary(projection_head.cuda(), (model.feature_extractor.output_channels,))
 

@@ -51,6 +51,19 @@ class TrainingDataConfig(SerializableDataClass):
     n_workers: int | None = None
     # Number of channels in input images (3 to use pretrained ResNet weights)
     n_channels: int = 3
+    # Optional aligned crop applied after loading. If set, each frame is
+    # reduced to a (crop_H, crop_W) window before being fed to the encoder;
+    # the same window is used for every variant of a given frame so the
+    # contrastive positives still share their pose content. Training uses a
+    # random window per frame, validation uses a center crop. None disables
+    # cropping and the full image_size is used (existing behavior).
+    crop_size: tuple[int, int] | None = None
+    # Pixels along each image edge that the random crop window is not
+    # allowed to overlap. Use this to keep the crop centered on the subject
+    # and avoid sampling the black border around it, which would otherwise
+    # leak a same-style "all-black" signal across variants and contaminate
+    # the contrastive loss. Ignored when crop_size is None.
+    crop_border_exclude: int = 0
 
 
 @dataclass(frozen=True)
