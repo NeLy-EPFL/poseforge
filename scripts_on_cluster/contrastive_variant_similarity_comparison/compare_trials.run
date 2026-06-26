@@ -40,11 +40,14 @@ trial_dirs=(
 
 # ----------------------------------------------------------------------------
 # Shared held-out evaluation set. These MUST be identical for every trial so
-# the invariance ratios are directly comparable. BO_Gal4_fly1_trial002 is the
-# validation video held out of every training run (see the *_training/*.run
-# scripts; the model never trained on this trial), 32 samples, 2 variants.
+# the invariance ratios are directly comparable. We rank on fly5: a completely
+# held-out ANIMAL that never appears in any pretraining train OR val set
+# (training used fly1-4; see the *_training/*.run scripts), so ranking on it
+# tests generalization of style-invariance to an unseen fly. Add more held-out
+# trials to the array (e.g. BO_Gal4_fly5_trial002, ...) for more frames.
+# 32 samples, 2 variants, extracted at 912x912 (the *_912 / NMF extraction).
 #
-# IMPORTANT: we evaluate on the FULL 900x900 frames, NOT the 256x256 crops the
+# IMPORTANT: we evaluate on the FULL 912x912 frames, NOT the 256x256 crops the
 # encoder was trained on. The downstream tasks (keypoints3d / bodyseg /
 # joint_segpose) all feed the feature extractor full ~912x912 images with no
 # crop, so style-invariance on full frames is the regime we actually deploy in
@@ -53,10 +56,16 @@ trial_dirs=(
 # apples.) Full frames are ~12x the pixels of a 256 crop, so batch-size is
 # dropped well below the training value to fit the l40s GPU -- see below.
 # ----------------------------------------------------------------------------
-atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
+atomic_batch_dir="/scratch/stimpfli/poseforge/style_transfer/atomic_batches_nmf/atomic_batches_912"
 eval_data_dirs=(
-    "$atomic_batch_dir/BO_Gal4_fly1_trial002"
+    "$atomic_batch_dir/BO_Gal4_fly5_trial001"
 )
+# OPTIONAL unbiased split: to pick each trial's best checkpoint on a DIFFERENT
+# held-out video than the one it's ranked on, set selection_data_dirs to another
+# held-out trial and add `--selection-data-dirs "${selection_data_dirs[@]}"` to
+# the command below. Leaving it unset selects and ranks on eval_data_dirs (with
+# the cheap selection cap below, so still inexpensive).
+# selection_data_dirs=( "$atomic_batch_dir/BO_Gal4_fly5_trial002" )
 
 comparison_name="comparison_20260625"
 output_dir="/scratch/stimpfli/style_transfer/variant_similarity_comparison/$comparison_name"
@@ -75,9 +84,19 @@ output_dir="/scratch/stimpfli/style_transfer/variant_similarity_comparison/$comp
 #       headline number, so score it thoroughly. Only a few such evals.
 # (Re-scoring happens automatically because the two caps differ, even on a
 # single eval set.) For a quick smoke test set both to e.g. 3.
+# --baselines random imagenet => add an untrained random-init ResNet (the
+#   non-trained-encoder control) and an ImageNet-pretrained ResNet as extra
+#   rows. Every trained trial should beat both; the job warns if one doesn't.
+# --min-feature-spread 0.1 => collapse guard: exclude checkpoints whose features
+#   have collapsed (feature_spread ~1 healthy, ->0 collapsed) from selection, so
+#   a collapsed checkpoint's deceptively low invariance ratio can't win. 0.1 is
+#   conservative (only catches near-total collapse; if it ever drops every
+#   checkpoint it falls back to best-ratio with a warning). After the first run,
+#   raise it toward the baselines' reported feature_spread to tighten the guard.
 python -u src/poseforge/pose/contrast/scripts/compute_variant_similarity.py compare \
     --trial-dirs "${trial_dirs[@]}" \
     --data-dirs "${eval_data_dirs[@]}" \
+    --baselines random imagenet \
     --atomic-batch-n-samples 32 \
     --atomic-batch-n-variants 2 \
     --batch-size 8 \
@@ -85,6 +104,7 @@ python -u src/poseforge/pose/contrast/scripts/compute_variant_similarity.py comp
     --n-workers 8 \
     --selection-max-batches 30 \
     --max-batches 100 \
+    --min-feature-spread 0.1 \
     --output-dir "$output_dir"
 
 echo "Comparison ends at $(date)"
