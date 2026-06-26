@@ -9,7 +9,7 @@
 #SBATCH --partition=l40s
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison.log
 
 echo "Hello from $(hostname)"
 
@@ -34,8 +34,11 @@ echo "Comparison starting at $(date)"
 contrastive_root="/scratch/stimpfli/style_transfer/contrastive_pretraining"
 simsiam_root="/scratch/stimpfli/style_transfer/simsiam_pretraining"
 trial_dirs=(
-    "$contrastive_root/trial_20260622_cropped256"
-    "$simsiam_root/trial_20260622_simsiam256"
+	"/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/simsiam_crop256_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/simsiam_crop256_allvar_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/contr_crop256_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/contr_crop256_lowlr_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/tiledlowlr_nmf_20260622"
 )
 
 # ----------------------------------------------------------------------------
@@ -99,11 +102,11 @@ python -u src/poseforge/pose/contrast/scripts/compute_variant_similarity.py comp
     --baselines random imagenet \
     --atomic-batch-n-samples 32 \
     --atomic-batch-n-variants 2 \
-    --batch-size 8 \
+    --batch-size 32 \
     --image-size 912 912 \
     --n-workers 8 \
-    --selection-max-batches 30 \
-    --max-batches 100 \
+    --selection-max-batches 3 \
+    --max-batches 25 \
     --min-feature-spread 0.1 \
     --output-dir "$output_dir"
 
