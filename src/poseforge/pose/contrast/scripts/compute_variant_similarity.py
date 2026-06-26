@@ -299,9 +299,15 @@ def _evaluate_feature_extractor(
 
     Returns a dict with ``invariance_ratio``, ``within_frame_sim``,
     ``between_frame_sim`` (batch-averaged scalars), ``within_matrix`` and
-    ``between_matrix`` (batch-averaged V x V tensors), and ``n_batches_used``.
-    All metrics are on mean-centered pooled features. Frees the encoder and
-    CUDA cache before returning so the next trial starts clean.
+    ``between_matrix`` (batch-averaged V x V tensors), ``feature_spread``, and
+    ``n_batches_used``. The invariance metrics are on mean-centered pooled
+    features. ``feature_spread`` is the collapse diagnostic: the mean
+    per-dimension standard deviation of the L2-normalized (NOT centered) pooled
+    features, scaled by sqrt(feature_dim) so it is ~1 for a healthy high-rank
+    representation and -> 0 as the representation collapses to a point/subspace.
+    (Centering is deliberately skipped here: it would hide a collapse by mapping
+    near-constant features to random directions.) Frees the encoder and CUDA
+    cache before returning so the next trial starts clean.
     """
     # Pass weights through as-is: a path str/Path loads a checkpoint,
     # "IMAGENET1K_V1" uses the pretrained backbone, None is random-init.
@@ -317,6 +323,10 @@ def _evaluate_feature_extractor(
     total_between_sim = 0.0
     accumulated_within_matrix: torch.Tensor | None = None
     accumulated_between_matrix: torch.Tensor | None = None
+    # Running sums for the per-dimension std of L2-normalized features.
+    feat_sum: torch.Tensor | None = None
+    feat_sq_sum: torch.Tensor | None = None
+    n_feature_rows = 0
     n_batches_used = 0
 
     with torch.no_grad():
@@ -335,11 +345,21 @@ def _evaluate_feature_extractor(
                 h = feature_extractor(collapsed_batch)
                 h_pooled = F.adaptive_avg_pool2d(h, (1, 1)).flatten(start_dim=1)
 
+            h_pooled = h_pooled.float()
             metrics = compute_alignment_metrics(
-                h_pooled.float(),
+                h_pooled,
                 n_samples=n_samples,
                 n_variants=n_variants,
             )
+            # Collapse diagnostic accumulators, on raw L2-normalized features.
+            h_norm = F.normalize(h_pooled, dim=1)
+            if feat_sum is None:
+                feat_sum = h_norm.sum(dim=0)
+                feat_sq_sum = (h_norm**2).sum(dim=0)
+            else:
+                feat_sum = feat_sum + h_norm.sum(dim=0)
+                feat_sq_sum = feat_sq_sum + (h_norm**2).sum(dim=0)
+            n_feature_rows += h_norm.shape[0]
             total_invariance_ratio += float(metrics.invariance_ratio)
             total_within_sim += float(metrics.within_frame_sim)
             total_between_sim += float(metrics.between_frame_sim)
@@ -364,12 +384,20 @@ def _evaluate_feature_extractor(
     if device_type == "cuda":
         torch.cuda.empty_cache()
 
+    # feature_spread = mean per-dim std of L2-normalized features * sqrt(d):
+    # ~1 for a healthy high-rank representation, -> 0 under collapse.
+    feat_mean = feat_sum / n_feature_rows
+    feat_var = (feat_sq_sum / n_feature_rows - feat_mean**2).clamp_min(0.0)
+    feature_dim = feat_mean.numel()
+    feature_spread = float(feat_var.sqrt().mean() * (feature_dim**0.5))
+
     return {
         "invariance_ratio": total_invariance_ratio / n_batches_used,
         "within_frame_sim": total_within_sim / n_batches_used,
         "between_frame_sim": total_between_sim / n_batches_used,
         "within_matrix": accumulated_within_matrix / n_batches_used,
         "between_matrix": accumulated_between_matrix / n_batches_used,
+        "feature_spread": feature_spread,
         "n_batches_used": n_batches_used,
     }
 
@@ -391,6 +419,7 @@ def _write_checkpoint_outputs(
     between_frame_sim: float,
     within_matrix: torch.Tensor,
     between_matrix: torch.Tensor,
+    feature_spread: float,
     n_batches_used: int,
 ) -> tuple[Path, Path, Path]:
     """Write the within/between heatmap PNGs and the text summary.
@@ -432,6 +461,9 @@ def _write_checkpoint_outputs(
         f.write(f"invariance_ratio (lower = more invariant): {avg_ratio:.6f}\n")
         f.write(f"within_frame_sim (higher = variants align): {within_frame_sim:.6f}\n")
         f.write(f"between_frame_sim (the floor): {between_frame_sim:.6f}\n")
+        f.write(
+            f"feature_spread (~1 healthy, ->0 collapsed): {feature_spread:.6f}\n"
+        )
         for name, matrix in (
             ("within_frame_matrix", within_matrix),
             ("between_frame_matrix", between_matrix),
@@ -478,6 +510,7 @@ def _write_trial_checkpoint_scores(
                 "invariance_ratio",
                 "within_frame_sim",
                 "between_frame_sim",
+                "feature_spread",
                 "n_batches_used",
                 "is_best",
             ]
@@ -491,6 +524,7 @@ def _write_trial_checkpoint_scores(
                     entry["invariance_ratio"],
                     entry["within_frame_sim"],
                     entry["between_frame_sim"],
+                    entry["feature_spread"],
                     entry["n_batches_used"],
                     entry["stage"] == best_stage,
                 ]
@@ -571,6 +605,7 @@ def _write_comparison_outputs(
         "selection_invariance_ratio",
         "within_frame_sim",
         "between_frame_sim",
+        "feature_spread",
         "n_checkpoints_evaluated",
         "selection",
         "n_batches_used",
@@ -608,6 +643,7 @@ def _write_comparison_outputs(
         ("sel_ratio", "selection_invariance_ratio"),
         ("within_sim", "within_frame_sim"),
         ("between_sim", "between_frame_sim"),
+        ("feat_spread", "feature_spread"),
         ("n_ckpts", "n_checkpoints_evaluated"),
         ("train_nvar", "train_n_variants"),
         ("train_crop", "train_crop_size"),
@@ -640,7 +676,10 @@ def _write_comparison_outputs(
             "sel_ratio = the chosen checkpoint's ratio on the SELECTION set (where it\n"
             "was picked); a much lower sel_ratio than inv_ratio means the selection\n"
             "overfit that set. method='baseline' rows are untrained encoders (random /\n"
-            "ImageNet) — every trained trial should rank below (beat) them.\n\n"
+            "ImageNet) — every trained trial should rank below (beat) them.\n"
+            "feat_spread = collapse check (~1 healthy, ->0 collapsed); a low\n"
+            "inv_ratio paired with a low feat_spread is a collapse artifact, not\n"
+            "a good representation.\n\n"
         )
         f.write("Shared evaluation spec (identical for every trial):\n")
         for key, value in eval_spec.items():
@@ -737,6 +776,7 @@ def compute_variant_similarity(
         between_frame_sim=result["between_frame_sim"],
         within_matrix=result["within_matrix"],
         between_matrix=result["between_matrix"],
+        feature_spread=result["feature_spread"],
         n_batches_used=result["n_batches_used"],
     )
 
@@ -744,6 +784,7 @@ def compute_variant_similarity(
         f"Invariance ratio: {result['invariance_ratio']:.4f} (lower is better); "
         f"within_frame_sim {result['within_frame_sim']:.4f}, "
         f"between_frame_sim {result['between_frame_sim']:.4f}; "
+        f"feature_spread {result['feature_spread']:.4f} (~1 healthy, ->0 collapsed); "
         f"heatmaps saved to {within_heatmap_path} and {between_heatmap_path}; "
         f"summary to {summary_path}"
     )
@@ -765,6 +806,7 @@ def compare_trials(
     trial_names: list[str] | None = None,
     max_batches: int | None = None,
     selection_max_batches: int | None = None,
+    min_feature_spread: float | None = None,
     n_workers: int | None = 4,
     device: str = "cuda",
     use_float16: bool = True,
@@ -839,6 +881,15 @@ def compare_trials(
             ``max_batches`` for the headline number — so this works on a single
             eval set too (cheap sweep, thorough final score), not only with a
             separate ``selection_data_dirs``.
+        min_feature_spread: Collapse guard for selection. ``feature_spread`` is
+            ~1 for a healthy high-rank representation and -> 0 as it collapses.
+            If set (e.g. 0.2), checkpoints whose selection-set spread is below
+            this are excluded before picking the lowest invariance ratio — a
+            collapsed encoder can post a deceptively low ratio. If every
+            checkpoint is below it, the trial is kept (best ratio) with a
+            warning. None = no filtering (still reported, and a hard-collapse
+            warning fires if the chosen checkpoint's spread is < 0.1). Calibrate
+            against the ``random``/``imagenet`` baselines' reported spread.
         n_workers: Dataloader workers.
         device: "cuda" or "cpu".
         use_float16: Run the encoder in mixed precision.
@@ -886,6 +937,7 @@ def compare_trials(
             "selection_invariance_ratio": None,
             "within_frame_sim": None,
             "between_frame_sim": None,
+            "feature_spread": None,
             "n_checkpoints_evaluated": None,
             "selection": None,
             "n_batches_used": None,
@@ -948,11 +1000,44 @@ def compare_trials(
                 per_checkpoint.append({**candidate, **sel})
                 logging.info(
                     f"Trial '{name}' [{candidate['stage']}]: selection "
-                    f"invariance ratio {sel['invariance_ratio']:.4f}"
+                    f"invariance ratio {sel['invariance_ratio']:.4f}, "
+                    f"feature_spread {sel['feature_spread']:.4f}"
                 )
 
+            # Collapse guard: a collapsed encoder can post a deceptively low
+            # invariance ratio, so drop low-spread checkpoints before picking the
+            # lowest ratio. If that empties the pool, keep all (and warn).
+            candidates_pool = per_checkpoint
+            if min_feature_spread is not None:
+                healthy = [
+                    c
+                    for c in per_checkpoint
+                    if c["feature_spread"] >= min_feature_spread
+                ]
+                n_dropped = len(per_checkpoint) - len(healthy)
+                if n_dropped:
+                    logging.info(
+                        f"Trial '{name}': collapse guard dropped {n_dropped}/"
+                        f"{len(per_checkpoint)} checkpoint(s) with feature_spread "
+                        f"< {min_feature_spread}"
+                    )
+                if healthy:
+                    candidates_pool = healthy
+                else:
+                    logging.warning(
+                        f"Trial '{name}': ALL checkpoints have feature_spread "
+                        f"< {min_feature_spread} — representation may have "
+                        "collapsed. Selecting best ratio among all anyway."
+                    )
+
             # Keep the best-scoring checkpoint (on the selection set).
-            best = min(per_checkpoint, key=lambda c: c["invariance_ratio"])
+            best = min(candidates_pool, key=lambda c: c["invariance_ratio"])
+            if best["feature_spread"] < 0.1:
+                logging.warning(
+                    f"Trial '{name}': selected {best['stage']} has very low "
+                    f"feature_spread ({best['feature_spread']:.4f}) — likely "
+                    "near-collapse; its low invariance ratio may be an artifact."
+                )
             _write_trial_checkpoint_scores(
                 output_dir_path / name, per_checkpoint, best_stage=best["stage"]
             )
@@ -1049,6 +1134,7 @@ def compare_trials(
             row["invariance_ratio"] = comp["invariance_ratio"]
             row["within_frame_sim"] = comp["within_frame_sim"]
             row["between_frame_sim"] = comp["between_frame_sim"]
+            row["feature_spread"] = comp["feature_spread"]
             row["n_batches_used"] = comp["n_batches_used"]
             if fin["is_baseline"]:
                 # Baselines have no separate selection step.
@@ -1066,11 +1152,13 @@ def compare_trials(
                 between_frame_sim=comp["between_frame_sim"],
                 within_matrix=comp["within_matrix"],
                 between_matrix=comp["between_matrix"],
+                feature_spread=comp["feature_spread"],
                 n_batches_used=comp["n_batches_used"],
             )
             logging.info(
                 f"'{name}': comparison invariance ratio "
-                f"{comp['invariance_ratio']:.4f}"
+                f"{comp['invariance_ratio']:.4f}, feature_spread "
+                f"{comp['feature_spread']:.4f}"
             )
         except Exception as exc:
             logging.exception(f"'{name}' comparison scoring failed: {exc}")
@@ -1102,6 +1190,11 @@ def compare_trials(
             f"pinned stage '{checkpoint_stage}'"
             if checkpoint_stage is not None
             else "best checkpoint per trial (lowest invariance ratio on selection set)"
+        ),
+        "collapse_guard": (
+            f"exclude checkpoints with feature_spread < {min_feature_spread}"
+            if min_feature_spread is not None
+            else "off (feature_spread reported; warn if chosen < 0.1)"
         ),
     }
     csv_path, summary_path, chart_path = _write_comparison_outputs(
