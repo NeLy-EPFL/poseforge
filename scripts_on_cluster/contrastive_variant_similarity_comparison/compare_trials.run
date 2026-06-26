@@ -9,7 +9,7 @@
 #SBATCH --partition=l40s
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison.log
 
 echo "Hello from $(hostname)"
 
@@ -34,8 +34,11 @@ echo "Comparison starting at $(date)"
 contrastive_root="/scratch/stimpfli/style_transfer/contrastive_pretraining"
 simsiam_root="/scratch/stimpfli/style_transfer/simsiam_pretraining"
 trial_dirs=(
-    "$contrastive_root/trial_20260622_cropped256"
-    "$simsiam_root/trial_20260622_simsiam256"
+	"/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/simsiam_crop256_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/simsiam_crop256_allvar_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/contr_crop256_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/contr_crop256_lowlr_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/tiledlowlr_nmf_20260622"
 )
 
 # ----------------------------------------------------------------------------
@@ -53,7 +56,7 @@ trial_dirs=(
 # apples.) Full frames are ~12x the pixels of a 256 crop, so batch-size is
 # dropped well below the training value to fit the l40s GPU -- see below.
 # ----------------------------------------------------------------------------
-atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
+atomic_batch_dir="/scratch/stimpfli/poseforge/style_transfer/atomic_batches_nmf/atomic_batches_912"
 eval_data_dirs=(
     "$atomic_batch_dir/BO_Gal4_fly1_trial002"
 )
@@ -80,11 +83,11 @@ python -u src/poseforge/pose/contrast/scripts/compute_variant_similarity.py comp
     --data-dirs "${eval_data_dirs[@]}" \
     --atomic-batch-n-samples 32 \
     --atomic-batch-n-variants 2 \
-    --batch-size 8 \
+    --batch-size 32 \
     --image-size 912 912 \
     --n-workers 8 \
-    --selection-max-batches 30 \
-    --max-batches 100 \
+    --selection-max-batches 3 \
+    --max-batches 3 \
     --output-dir "$output_dir"
 
 echo "Comparison ends at $(date)"
