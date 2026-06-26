@@ -23,11 +23,20 @@ from poseforge.pose.contrast.model import (
 )
 
 
-def _render_variant_similarity_heatmap(matrix: torch.Tensor) -> np.ndarray:
+def _render_variant_similarity_heatmap(
+    matrix: torch.Tensor,
+    *,
+    title: str = "Variant cosine similarity",
+    vmin: float = -1.0,
+    vmax: float = 1.0,
+    cmap: str = "coolwarm",
+) -> np.ndarray:
     """Render a V x V variant-similarity matrix as a labeled heatmap image.
 
-    Returns an HWC uint8 RGB array suitable for SummaryWriter.add_image
-    with dataformats="HWC".
+    Defaults assume mean-centered cosine values (range [-1, 1], diverging
+    colormap centered on 0). Returns an HWC uint8 RGB array suitable for
+    SummaryWriter.add_image with dataformats="HWC". NaN cells (e.g. a
+    between-frame matrix from a single-frame batch) are labeled "nan".
     """
     # Local imports to keep the module import cheap when no logging happens.
     import matplotlib
@@ -38,26 +47,32 @@ def _render_variant_similarity_heatmap(matrix: torch.Tensor) -> np.ndarray:
 
     matrix_np = matrix.detach().cpu().to(torch.float32).numpy()
     n = matrix_np.shape[0]
+    cmap_obj = plt.get_cmap(cmap)
+    span = (vmax - vmin) or 1.0
     fig, ax = plt.subplots(figsize=(3.5 + 0.4 * n, 3.0 + 0.4 * n), dpi=100)
-    im = ax.imshow(matrix_np, vmin=0.0, vmax=1.0, cmap="viridis")
+    im = ax.imshow(matrix_np, vmin=vmin, vmax=vmax, cmap=cmap_obj)
     for i in range(n):
         for j in range(n):
-            ax.text(
-                j,
-                i,
-                f"{matrix_np[i, j]:.2f}",
-                ha="center",
-                va="center",
-                color="white" if matrix_np[i, j] < 0.5 else "black",
-                fontsize=9,
-            )
+            value = matrix_np[i, j]
+            if np.isfinite(value):
+                # Pick black/white text from the cell's background luminance
+                # so it stays readable for any colormap.
+                norm = min(max((value - vmin) / span, 0.0), 1.0)
+                r, g, b, _ = cmap_obj(norm)
+                lum = 0.299 * r + 0.587 * g + 0.114 * b
+                color = "white" if lum < 0.5 else "black"
+                label = f"{value:.2f}"
+            else:
+                color = "black"
+                label = "nan"
+            ax.text(j, i, label, ha="center", va="center", color=color, fontsize=9)
     ax.set_xticks(range(n))
     ax.set_yticks(range(n))
     ax.set_xticklabels([f"v{i}" for i in range(n)])
     ax.set_yticklabels([f"v{i}" for i in range(n)])
     ax.set_xlabel("Variant")
     ax.set_ylabel("Variant")
-    ax.set_title("Same-frame cosine similarity")
+    ax.set_title(title)
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
 
@@ -67,6 +82,38 @@ def _render_variant_similarity_heatmap(matrix: torch.Tensor) -> np.ndarray:
     buf.seek(0)
     img = np.array(Image.open(buf).convert("RGB"))
     return img
+
+
+def _log_variant_similarity_heatmaps(
+    writer: SummaryWriter,
+    split: str,
+    within_frame_matrix: torch.Tensor,
+    between_frame_matrix: torch.Tensor,
+    global_step: int,
+) -> None:
+    """Log the within- and between-frame variant-similarity heatmaps.
+
+    ``split`` is e.g. "Train" or "Validation". The two share a color scale
+    so within vs between is directly comparable by eye: if they look the
+    same the encoder is not separating frames (collapse); if within is
+    clearly warmer than between, that gap is the invariance signal.
+    """
+    writer.add_image(
+        f"VariantSimilarity/{split}/WithinFrame",
+        _render_variant_similarity_heatmap(
+            within_frame_matrix, title="Within-frame cosine similarity"
+        ),
+        global_step,
+        dataformats="HWC",
+    )
+    writer.add_image(
+        f"VariantSimilarity/{split}/BetweenFrame",
+        _render_variant_similarity_heatmap(
+            between_frame_matrix, title="Between-frame cosine similarity"
+        ),
+        global_step,
+        dataformats="HWC",
+    )
 from poseforge.util.sys import (
     clear_memory_cache,
     check_mixed_precision_status,
@@ -207,7 +254,8 @@ class ContrastivePretrainingPipeline:
             )
             running_loss = 0.0
             running_invariance_ratio = 0.0
-            latest_variant_sim_matrix: torch.Tensor | None = None
+            latest_within_matrix: torch.Tensor | None = None
+            latest_between_matrix: torch.Tensor | None = None
             epoch_start_time = time()
             running_start_time = time()
             for step_idx, (atomic_batches, _) in enumerate(train_loader):
@@ -256,13 +304,14 @@ class ContrastivePretrainingPipeline:
                 # Computed on what segmentation/keypoint heads actually
                 # consume, not on the projection-head output.
                 with torch.no_grad():
-                    invariance_ratio, variant_sim_matrix = compute_alignment_metrics(
+                    metrics = compute_alignment_metrics(
                         h_features_pooled.detach().float(),
                         n_samples=n_samples,
                         n_variants=n_variants,
                     )
-                running_invariance_ratio += float(invariance_ratio)
-                latest_variant_sim_matrix = variant_sim_matrix.detach()
+                running_invariance_ratio += float(metrics.invariance_ratio)
+                latest_within_matrix = metrics.within_frame_matrix.detach()
+                latest_between_matrix = metrics.between_frame_matrix.detach()
 
                 # Logging
                 running_loss += loss.item()
@@ -313,12 +362,15 @@ class ContrastivePretrainingPipeline:
                     )
                     clear_memory_cache()
 
-                    avg_val_loss, avg_val_invariance_ratio, val_variant_sim_matrix = (
-                        self.validate(
-                            val_loader,
-                            max_nbatches=artifacts_config.n_batches_per_validation,
-                            data_config=data_config,
-                        )
+                    (
+                        avg_val_loss,
+                        avg_val_invariance_ratio,
+                        val_within_matrix,
+                        val_between_matrix,
+                    ) = self.validate(
+                        val_loader,
+                        max_nbatches=artifacts_config.n_batches_per_validation,
+                        data_config=data_config,
                     )
 
                     self._update_logs_validation(
@@ -330,18 +382,16 @@ class ContrastivePretrainingPipeline:
                         avg_invariance_ratio=avg_val_invariance_ratio,
                     )
 
-                    # Log the validation heatmap once per validation run.
+                    # Log the within- and between-frame heatmaps once per run.
                     global_step_idx = (
                         epoch_idx * n_batches_per_epoch + step_idx
                     )
-                    heatmap_img = _render_variant_similarity_heatmap(
-                        val_variant_sim_matrix
-                    )
-                    writer.add_image(
-                        "VariantSimilarity/Validation",
-                        heatmap_img,
+                    _log_variant_similarity_heatmaps(
+                        writer,
+                        "Validation",
+                        val_within_matrix,
+                        val_between_matrix,
                         global_step_idx,
-                        dataformats="HWC",
                     )
 
                 # Save checkpoint
@@ -357,21 +407,19 @@ class ContrastivePretrainingPipeline:
                     logging.info(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
 
                     # Log a training heatmap snapshot at the same cadence as
-                    # checkpoints. Uses the most recent batch's similarity
-                    # matrix; a single snapshot is enough to spot a variant
-                    # the encoder is failing to identify with the rest.
-                    if latest_variant_sim_matrix is not None:
+                    # checkpoints. Uses the most recent batch's matrices; a
+                    # single snapshot is enough to spot a variant the encoder
+                    # is failing to identify with the rest.
+                    if latest_within_matrix is not None:
                         global_step_idx = (
                             epoch_idx * n_batches_per_epoch + step_idx
                         )
-                        heatmap_img = _render_variant_similarity_heatmap(
-                            latest_variant_sim_matrix
-                        )
-                        writer.add_image(
-                            "VariantSimilarity/Train",
-                            heatmap_img,
+                        _log_variant_similarity_heatmaps(
+                            writer,
+                            "Train",
+                            latest_within_matrix,
+                            latest_between_matrix,
                             global_step_idx,
-                            dataformats="HWC",
                         )
 
             end = time()
@@ -385,7 +433,7 @@ class ContrastivePretrainingPipeline:
         validation_loader: DataLoader,
         max_nbatches: int | None = None,
         data_config: config.TrainingDataConfig | None = None,
-    ) -> tuple[float, float, torch.Tensor]:
+    ) -> tuple[float, float, torch.Tensor, torch.Tensor]:
         """Use the model on the validation set and compute the average loss
         plus the diagnostic alignment metrics.
 
@@ -405,12 +453,13 @@ class ContrastivePretrainingPipeline:
             avg_invariance_ratio (float): Mean within-frame / between-frame
                 cosine distance ratio on the pooled features, averaged
                 across batches. Lower is better.
-            avg_variant_similarity_matrix (torch.Tensor): (n_variants,
-                n_variants) tensor with the average same-frame cosine
-                similarity between variant pairs across the validation
-                batches. Diagonal is 1; off-diagonal cells that stay low
-                flag style variants the encoder cannot identify with the
-                others.
+            avg_within_frame_matrix (torch.Tensor): (n_variants, n_variants)
+                average same-frame cosine similarity between variant pairs.
+                Diagonal is 1; off-diagonal cells that stay low flag styles
+                the encoder cannot identify with the others.
+            avg_between_frame_matrix (torch.Tensor): (n_variants, n_variants)
+                average cosine similarity between variant pairs of different
+                frames — the floor the within-frame matrix is judged against.
         """
         # Check if loss function is provided
         if self.loss_func is None:
@@ -421,7 +470,8 @@ class ContrastivePretrainingPipeline:
 
         total_loss = 0.0
         total_invariance_ratio = 0.0
-        accumulated_variant_sim_matrix: torch.Tensor | None = None
+        accumulated_within_matrix: torch.Tensor | None = None
+        accumulated_between_matrix: torch.Tensor | None = None
         if max_nbatches is None:
             max_nbatches = len(validation_loader)
         with torch.no_grad():
@@ -450,24 +500,29 @@ class ContrastivePretrainingPipeline:
 
                 # Diagnostic metric on the pooled features (what downstream
                 # heads will see), accumulated across batches.
-                invariance_ratio, variant_sim_matrix = compute_alignment_metrics(
+                metrics = compute_alignment_metrics(
                     h_features_pooled.float(),
                     n_samples=n_samples,
                     n_variants=n_variants,
                 )
                 total_loss += loss.item()
-                total_invariance_ratio += float(invariance_ratio)
-                if accumulated_variant_sim_matrix is None:
-                    accumulated_variant_sim_matrix = variant_sim_matrix
+                total_invariance_ratio += float(metrics.invariance_ratio)
+                if accumulated_within_matrix is None:
+                    accumulated_within_matrix = metrics.within_frame_matrix
+                    accumulated_between_matrix = metrics.between_frame_matrix
                 else:
-                    accumulated_variant_sim_matrix = (
-                        accumulated_variant_sim_matrix + variant_sim_matrix
+                    accumulated_within_matrix = (
+                        accumulated_within_matrix + metrics.within_frame_matrix
+                    )
+                    accumulated_between_matrix = (
+                        accumulated_between_matrix + metrics.between_frame_matrix
                     )
 
         # Compute averages
         avg_validation_loss = total_loss / max_nbatches
         avg_invariance_ratio = total_invariance_ratio / max_nbatches
-        avg_variant_similarity_matrix = accumulated_variant_sim_matrix / max_nbatches
+        avg_within_matrix = accumulated_within_matrix / max_nbatches
+        avg_between_matrix = accumulated_between_matrix / max_nbatches
 
         # Clean up all validation tensors at the end
         del (
@@ -487,7 +542,8 @@ class ContrastivePretrainingPipeline:
         return (
             avg_validation_loss,
             avg_invariance_ratio,
-            avg_variant_similarity_matrix,
+            avg_within_matrix,
+            avg_between_matrix,
         )
 
     def inference(self, batch: torch.Tensor) -> torch.Tensor:

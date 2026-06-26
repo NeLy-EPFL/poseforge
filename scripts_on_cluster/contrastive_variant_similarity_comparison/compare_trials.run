@@ -1,0 +1,96 @@
+#!/bin/bash -l
+
+#SBATCH --job-name contrastive-variant-similarity-comparison
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 8
+#SBATCH --mem 45GB
+#SBATCH --time 08:00:00
+#SBATCH --partition=l40s
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison.log
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+cd $HOME/poseforge
+echo "Comparison starting at $(date)"
+
+# ----------------------------------------------------------------------------
+# Which trials to compare. Add one line per trained run (contrastive OR
+# SimSiam -- the evaluation is method-agnostic). Each entry is a trial output
+# directory containing checkpoints/ and configs/. Within each trial EVERY
+# checkpoint is scored on the shared eval set and the best (lowest invariance
+# ratio) is kept as that trial's representative, so a run is judged at its peak
+# rather than at its final step. Pin a single stage for all trials by adding
+# "--checkpoint-stage epochXXX_stepYYYYYY" to the command below if you instead
+# want a fixed mid-training comparison point.
+# ----------------------------------------------------------------------------
+contrastive_root="/scratch/stimpfli/style_transfer/contrastive_pretraining"
+simsiam_root="/scratch/stimpfli/style_transfer/simsiam_pretraining"
+trial_dirs=(
+    "$contrastive_root/trial_20260622_cropped256"
+    "$simsiam_root/trial_20260622_simsiam256"
+)
+
+# ----------------------------------------------------------------------------
+# Shared held-out evaluation set. These MUST be identical for every trial so
+# the invariance ratios are directly comparable. BO_Gal4_fly1_trial002 is the
+# validation video held out of every training run (see the *_training/*.run
+# scripts; the model never trained on this trial), 32 samples, 2 variants.
+#
+# IMPORTANT: we evaluate on the FULL 900x900 frames, NOT the 256x256 crops the
+# encoder was trained on. The downstream tasks (keypoints3d / bodyseg /
+# joint_segpose) all feed the feature extractor full ~912x912 images with no
+# crop, so style-invariance on full frames is the regime we actually deploy in
+# and the fair thing to rank on. (This is a distribution shift from training,
+# but an identical one for every model, so the comparison stays apples-to-
+# apples.) Full frames are ~12x the pixels of a 256 crop, so batch-size is
+# dropped well below the training value to fit the l40s GPU -- see below.
+# ----------------------------------------------------------------------------
+atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches"
+eval_data_dirs=(
+    "$atomic_batch_dir/BO_Gal4_fly1_trial002"
+)
+
+comparison_name="comparison_20260625"
+output_dir="/scratch/stimpfli/style_transfer/variant_similarity_comparison/$comparison_name"
+
+# No --crop-size => the encoder sees the full --image-size frame (full images).
+# batch-size is the number of atomic batches per forward pass; the encoder
+# actually sees n_variants * batch_size * atomic_batch_n_samples frames at once
+# (= 2 * 8 * 32 = 512 frames here). At 912x912 that already needs ~16 GB; raise
+# it only if the GPU has room, lower it to 4 if you hit CUDA OOM.
+#
+# Two batch caps (1 cap-batch = 512 full-res frames here):
+#   --selection-max-batches 30 : per-checkpoint sweep. This is the dominant cost
+#       (every checkpoint of every trial) and only needs to RANK checkpoints, so
+#       keep it small -- this is the main runtime lever.
+#   --max-batches 100          : the chosen checkpoint (re-scored) is the
+#       headline number, so score it thoroughly. Only a few such evals.
+# (Re-scoring happens automatically because the two caps differ, even on a
+# single eval set.) For a quick smoke test set both to e.g. 3.
+python -u src/poseforge/pose/contrast/scripts/compute_variant_similarity.py compare \
+    --trial-dirs "${trial_dirs[@]}" \
+    --data-dirs "${eval_data_dirs[@]}" \
+    --atomic-batch-n-samples 32 \
+    --atomic-batch-n-variants 2 \
+    --batch-size 8 \
+    --image-size 912 912 \
+    --n-workers 8 \
+    --selection-max-batches 30 \
+    --max-batches 100 \
+    --output-dir "$output_dir"
+
+echo "Comparison ends at $(date)"
+echo "Results written to $output_dir:"
+echo "  - comparison.csv                  (ranked table, one row per trial)"
+echo "  - comparison_summary.txt          (human-readable ranking + eval spec)"
+echo "  - comparison_invariance_ratio.png (bar chart, lower = better)"
+echo "  - <trial_name>/                   (best-checkpoint within/between heatmaps"
+echo "                                     + summary, checkpoint_scores.csv)"

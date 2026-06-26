@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import poseforge.pose.contrast.config as config
@@ -94,34 +95,69 @@ class ContrastivePretrainingModel(nn.Module):
         logging.info("Set up feature extractor from config")
 
 
+@dataclass
+class AlignmentMetrics:
+    """Diagnostics returned by :func:`compute_alignment_metrics`.
+
+    All quantities are computed on mean-centered, L2-normalized features
+    (see the function docstring for why centering matters).
+
+    Attributes:
+        invariance_ratio (torch.Tensor): Scalar. Within-frame cosine
+            *distance* divided by between-frame cosine distance. Lower is
+            better; ~0 = style-invariant, ~1 = collapsed / no more aligned
+            than two unrelated frames.
+        within_frame_sim (torch.Tensor): Scalar. Mean off-diagonal of
+            ``within_frame_matrix`` (same frame, different styles).
+        between_frame_sim (torch.Tensor): Scalar. Mean of
+            ``between_frame_matrix`` (different frames). The "floor" that
+            within-frame similarity is judged against. NaN if n_samples < 2.
+        within_frame_matrix (torch.Tensor): (n_variants, n_variants). Entry
+            (i, j) is the mean cosine similarity between variant i and
+            variant j of the *same* frame. Diagonal is 1 by construction.
+        between_frame_matrix (torch.Tensor): (n_variants, n_variants). Entry
+            (i, j) is the mean cosine similarity between variant i and
+            variant j of *different* frames. All-NaN if n_samples < 2.
+    """
+
+    invariance_ratio: torch.Tensor
+    within_frame_sim: torch.Tensor
+    between_frame_sim: torch.Tensor
+    within_frame_matrix: torch.Tensor
+    between_frame_matrix: torch.Tensor
+
+
 def compute_alignment_metrics(
     features: torch.Tensor, n_samples: int, n_variants: int
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> AlignmentMetrics:
     """Diagnostics for how well a contrastive encoder has learned the
     style-invariant representation we want.
 
-    Computes two things, both on whatever embedding space you pass in (we
+    All metrics are computed on whatever embedding space you pass in (we
     recommend the pooled feature map, since that is what downstream
     segmentation / keypoint heads consume — the projection-head output is
-    what the loss directly shapes, so it always looks artificially clean):
+    what the loss directly shapes, so it always looks artificially clean).
 
-    - Aggregate invariance ratio: mean cosine *distance* between
-      embeddings of the *same* simulated frame across variants, divided by
-      mean cosine distance between embeddings of *different* frames.
-      Lower is better. A perfectly invariant encoder approaches 0; a
-      collapsed encoder approaches 1. This is a useful headline scalar for
-      comparing training runs because it captures the property the loss
-      is supposed to produce in a way that the loss value itself cannot
-      (the loss can drop just from pushing negatives apart, without
-      positives getting any closer).
-    - Variant similarity matrix of shape (n_variants, n_variants), where
-      entry (i, j) is the average cosine similarity between variant i and
-      variant j of the same frame, averaged over the batch. The diagonal
-      is 1 by construction. A row/column that stays low compared to the
-      others flags a variant the encoder cannot identify with the rest
-      (either a hard style, or a corrupted variant whose images do not
-      actually share pose content with the others) — i.e. a candidate to
-      inspect visually.
+    Features are **mean-centered** (the batch-mean embedding is subtracted)
+    before being L2-normalized. Pooled CNN features are strongly anisotropic
+    — they live in a narrow cone, so the cosine similarity of *every* pair
+    (same frame or not) is crushed into a narrow band near 1 and absolute
+    values are uninformative. Subtracting the common mean direction removes
+    that shared component and lets the genuine structure spread out across
+    the full [-1, 1] range, which makes both the matrices and the invariance
+    ratio actually discriminative between runs.
+
+    Two V x V matrices are returned, both useful to log side by side:
+
+    - ``within_frame_matrix``: entry (i, j) = mean cosine similarity between
+      variant i and variant j of the *same* frame. Diagonal is 1 by
+      construction. A row/column that stays low flags a style the encoder
+      cannot identify with the rest.
+    - ``between_frame_matrix``: entry (i, j) = mean cosine similarity between
+      variant i and variant j of *different* frames — the similarity floor.
+      If the within- and between-frame matrices look the same, the encoder
+      is not separating frames (collapse); if within is clearly higher than
+      between, that gap is the invariance signal.
 
     Args:
         features (torch.Tensor): Embeddings of shape
@@ -133,34 +169,47 @@ def compute_alignment_metrics(
         n_variants (int): Number of style variants per frame.
 
     Returns:
-        invariance_ratio (torch.Tensor): Scalar; cosine distance ratio.
-        variant_similarity_matrix (torch.Tensor): (n_variants, n_variants).
+        AlignmentMetrics: invariance ratio, within/between scalar
+            similarities, and the within/between V x V matrices.
     """
-    feats = F.normalize(features, dim=1)
+    # Mean-center to remove the anisotropic common component, then normalize.
+    feats = features - features.mean(dim=0, keepdim=True)
+    feats = F.normalize(feats, dim=1)
     feats_grouped = feats.view(n_variants, n_samples, -1)
 
-    # Variant similarity matrix: average over frames of variant_i . variant_j.
-    # Diagonal is 1 by construction (cosine of a normalized vector with itself).
-    variant_similarity_matrix = (
-        torch.einsum("ind,jnd->ij", feats_grouped, feats_grouped) / n_samples
-    )
+    # within_sum[i, j] = sum over frames n of <variant_i(n), variant_j(n)>.
+    within_sum = torch.einsum("ind,jnd->ij", feats_grouped, feats_grouped)
+    within_frame_matrix = within_sum / n_samples  # diagonal == 1 by construction
 
-    # Within-frame similarity: average over off-diagonal entries of the matrix.
+    # all_pairs_sum[i, j] = sum over ALL frame pairs (m, n) of
+    # <variant_i(m), variant_j(n)> = <sum_m variant_i(m), sum_n variant_j(n)>.
+    # Subtracting the m == n terms (within_sum) leaves only m != n pairs.
+    frame_sum = feats_grouped.sum(dim=1)  # (n_variants, feature_dim)
+    all_pairs_sum = frame_sum @ frame_sum.T
+    between_sum = all_pairs_sum - within_sum
+    n_between_pairs = n_samples * (n_samples - 1)
+    if n_between_pairs > 0:
+        between_frame_matrix = between_sum / n_between_pairs
+    else:
+        # Only one frame in the batch: between-frame similarity is undefined.
+        between_frame_matrix = torch.full_like(within_frame_matrix, float("nan"))
+
+    # Scalar summaries, derived from the matrices so they stay consistent.
     eye = torch.eye(n_variants, dtype=torch.bool, device=features.device)
-    within_frame_sim = variant_similarity_matrix[~eye].mean()
-
-    # Between-frame similarity: average cosine sim over all pairs that come
-    # from different frames (regardless of variant).
-    sim_all = feats @ feats.T
-    frame_id = torch.arange(n_samples, device=features.device).repeat(n_variants)
-    same_frame = frame_id[None, :] == frame_id[:, None]
-    between_frame_sim = sim_all[~same_frame].mean()
+    within_frame_sim = within_frame_matrix[~eye].mean()
+    between_frame_sim = between_frame_matrix.mean()
 
     within_distance = 1.0 - within_frame_sim
     between_distance = 1.0 - between_frame_sim
     invariance_ratio = within_distance / between_distance.clamp_min(1e-8)
 
-    return invariance_ratio, variant_similarity_matrix
+    return AlignmentMetrics(
+        invariance_ratio=invariance_ratio,
+        within_frame_sim=within_frame_sim,
+        between_frame_sim=between_frame_sim,
+        within_frame_matrix=within_frame_matrix,
+        between_frame_matrix=between_frame_matrix,
+    )
 
 
 class InfoNCELoss(nn.Module):

@@ -19,7 +19,7 @@ from poseforge.pose.simsiam.model import SimSiamPretrainingModel, SimSiamLoss
 # The alignment metric and the heatmap renderer are shared with the
 # InfoNCE pipeline on purpose so the comparison is fair.
 from poseforge.pose.contrast.model import compute_alignment_metrics
-from poseforge.pose.contrast.pipeline import _render_variant_similarity_heatmap
+from poseforge.pose.contrast.pipeline import _log_variant_similarity_heatmaps
 from poseforge.util.sys import (
     clear_memory_cache,
     set_random_seed,
@@ -172,7 +172,8 @@ class SimSiamPretrainingPipeline:
             running_loss = 0.0
             running_invariance_ratio = 0.0
             running_z_norm = 0.0
-            latest_variant_sim_matrix: torch.Tensor | None = None
+            latest_within_matrix: torch.Tensor | None = None
+            latest_between_matrix: torch.Tensor | None = None
             epoch_start_time = time()
             running_start_time = time()
             for step_idx, (atomic_batches, _) in enumerate(train_loader):
@@ -202,7 +203,7 @@ class SimSiamPretrainingPipeline:
                 grad_scaler.update()
 
                 with torch.no_grad():
-                    invariance_ratio, variant_sim_matrix = compute_alignment_metrics(
+                    metrics = compute_alignment_metrics(
                         h_features_pooled.detach().float(),
                         n_samples=n_samples,
                         n_variants=n_variants,
@@ -210,9 +211,10 @@ class SimSiamPretrainingPipeline:
                     # Track |z| (pre-normalization projection norm). If
                     # this collapses to ~0 the model has degenerated.
                     z_norm = z_features.detach().float().norm(dim=-1).mean()
-                running_invariance_ratio += float(invariance_ratio)
+                running_invariance_ratio += float(metrics.invariance_ratio)
                 running_z_norm += float(z_norm)
-                latest_variant_sim_matrix = variant_sim_matrix.detach()
+                latest_within_matrix = metrics.within_frame_matrix.detach()
+                latest_between_matrix = metrics.between_frame_matrix.detach()
 
                 running_loss += loss.item()
                 if step_idx % artifacts_config.logging_interval == 0 and step_idx > 0:
@@ -265,7 +267,8 @@ class SimSiamPretrainingPipeline:
                     (
                         avg_val_loss,
                         avg_val_invariance_ratio,
-                        val_variant_sim_matrix,
+                        val_within_matrix,
+                        val_between_matrix,
                     ) = self.validate(
                         val_loader,
                         max_nbatches=artifacts_config.n_batches_per_validation,
@@ -280,14 +283,12 @@ class SimSiamPretrainingPipeline:
                         avg_invariance_ratio=avg_val_invariance_ratio,
                     )
                     global_step_idx = epoch_idx * n_batches_per_epoch + step_idx
-                    heatmap_img = _render_variant_similarity_heatmap(
-                        val_variant_sim_matrix
-                    )
-                    writer.add_image(
-                        "VariantSimilarity/Validation",
-                        heatmap_img,
+                    _log_variant_similarity_heatmaps(
+                        writer,
+                        "Validation",
+                        val_within_matrix,
+                        val_between_matrix,
                         global_step_idx,
-                        dataformats="HWC",
                     )
 
                 if (
@@ -301,16 +302,14 @@ class SimSiamPretrainingPipeline:
                     self._save_checkpoint(checkpoint_path_stem)
                     logging.info(f"Saved checkpoint: {checkpoint_path_stem}.*.pth")
 
-                    if latest_variant_sim_matrix is not None:
+                    if latest_within_matrix is not None:
                         global_step_idx = epoch_idx * n_batches_per_epoch + step_idx
-                        heatmap_img = _render_variant_similarity_heatmap(
-                            latest_variant_sim_matrix
-                        )
-                        writer.add_image(
-                            "VariantSimilarity/Train",
-                            heatmap_img,
+                        _log_variant_similarity_heatmaps(
+                            writer,
+                            "Train",
+                            latest_within_matrix,
+                            latest_between_matrix,
                             global_step_idx,
-                            dataformats="HWC",
                         )
 
             end = time()
@@ -324,7 +323,7 @@ class SimSiamPretrainingPipeline:
         validation_loader: DataLoader,
         max_nbatches: int | None = None,
         data_config: config.TrainingDataConfig | None = None,
-    ) -> tuple[float, float, torch.Tensor]:
+    ) -> tuple[float, float, torch.Tensor, torch.Tensor]:
         if self.loss_func is None:
             raise ValueError("Loss function must be provided for training")
 
@@ -332,7 +331,8 @@ class SimSiamPretrainingPipeline:
 
         total_loss = 0.0
         total_invariance_ratio = 0.0
-        accumulated_variant_sim_matrix: torch.Tensor | None = None
+        accumulated_within_matrix: torch.Tensor | None = None
+        accumulated_between_matrix: torch.Tensor | None = None
         if max_nbatches is None:
             max_nbatches = len(validation_loader)
         with torch.no_grad():
@@ -361,23 +361,28 @@ class SimSiamPretrainingPipeline:
                         n_variants=n_variants,
                     )
 
-                invariance_ratio, variant_sim_matrix = compute_alignment_metrics(
+                metrics = compute_alignment_metrics(
                     h_features_pooled.float(),
                     n_samples=n_samples,
                     n_variants=n_variants,
                 )
                 total_loss += loss.item()
-                total_invariance_ratio += float(invariance_ratio)
-                if accumulated_variant_sim_matrix is None:
-                    accumulated_variant_sim_matrix = variant_sim_matrix
+                total_invariance_ratio += float(metrics.invariance_ratio)
+                if accumulated_within_matrix is None:
+                    accumulated_within_matrix = metrics.within_frame_matrix
+                    accumulated_between_matrix = metrics.between_frame_matrix
                 else:
-                    accumulated_variant_sim_matrix = (
-                        accumulated_variant_sim_matrix + variant_sim_matrix
+                    accumulated_within_matrix = (
+                        accumulated_within_matrix + metrics.within_frame_matrix
+                    )
+                    accumulated_between_matrix = (
+                        accumulated_between_matrix + metrics.between_frame_matrix
                     )
 
         avg_validation_loss = total_loss / max_nbatches
         avg_invariance_ratio = total_invariance_ratio / max_nbatches
-        avg_variant_similarity_matrix = accumulated_variant_sim_matrix / max_nbatches
+        avg_within_matrix = accumulated_within_matrix / max_nbatches
+        avg_between_matrix = accumulated_between_matrix / max_nbatches
 
         del (
             atomic_batches,
@@ -395,7 +400,8 @@ class SimSiamPretrainingPipeline:
         return (
             avg_validation_loss,
             avg_invariance_ratio,
-            avg_variant_similarity_matrix,
+            avg_within_matrix,
+            avg_between_matrix,
         )
 
     @staticmethod
