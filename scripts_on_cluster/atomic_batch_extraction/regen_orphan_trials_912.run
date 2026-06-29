@@ -1,0 +1,66 @@
+#!/bin/bash -l
+
+# Re-extract atomic batches for the trials that were contaminated by stale
+# (orphaned) -67 subsegments. One array task per affected trial. The output
+# dir is wiped first so a shorter re-run cannot leave stale atomic batches
+# behind (the same orphan failure mode that caused this in the first place).
+#
+# PREREQUISITE: quarantine the 8 orphan subsegments out of the style-transfer
+# input tree (and nmf_rendering) BEFORE submitting this, otherwise they get
+# globbed back in. See the quarantine step in the runbook.
+
+#SBATCH --job-name atomicbatch_912_regen
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 245GB
+#SBATCH --time 12:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --array=0-6
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/atomic_batch_extraction/logs/912_regen/%x_%a.log
+
+echo "Hello from $(hostname), array task $SLURM_ARRAY_TASK_ID"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+cd $HOME/poseforge
+
+# The 7 trials affected by the 8 orphaned subsegments
+trials=( \
+  BO_Gal4_fly1_trial002 \
+  BO_Gal4_fly1_trial003 \
+  BO_Gal4_fly1_trial004 \
+  BO_Gal4_fly2_trial001 \
+  BO_Gal4_fly2_trial003 \
+  BO_Gal4_fly2_trial004 \
+  BO_Gal4_fly3_trial001 \
+)
+trial=${trials[$SLURM_ARRAY_TASK_ID]}
+
+STYLE=/work/upramdya/stimpfli/poseforge/style_transfer/production/tiled_translated_videos/standard_gray
+NMF=/work/upramdya/stimpfli/poseforge/data/nmf_rendering
+OUT=/work/upramdya/stimpfli/poseforge/style_transfer/atomic_batches_nmf/atomic_batches_912
+CLI=src/poseforge/pose/contrast/scripts/preextract_atomic_batches.py
+
+echo "=== Regenerating atomic batches for $trial at $(date) ==="
+
+# Critical: clean the trial's output dir so a (possibly shorter) re-run leaves
+# no orphaned atomic batches behind.
+rm -rf "$OUT/$trial"
+mkdir -p "$OUT/$trial"
+
+python -u $CLI \
+    --atomic-batch-nframes 32 \
+    --atomic-batch-nvariants-max 5 \
+    --minimum-time-diff-frames 60 \
+    --original-image-size 912 912 \
+    --target-image-size 912 912 \
+    --input-basedir "$STYLE/$trial" \
+    --nmf-sim-rendering-basedir "$NMF" \
+    --n_jobs 16 \
+    --output-dir "$OUT/$trial"
+
+echo "=== Done $trial at $(date) ==="
