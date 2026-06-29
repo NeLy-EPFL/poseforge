@@ -464,6 +464,12 @@ class BodySegmentationPipeline:
                     chain(
                         self.model.final_upsampler.parameters(),
                         self.model.classifier.parameters(),
+                        # mask_prior_conv only exists when the prev-mask prior is
+                        # enabled; it feeds the classifier, so group it with the
+                        # segmentation head.
+                        self.model.mask_prior_conv.parameters()
+                        if self.model.use_prev_mask_prior
+                        else [],
                     )
                 ),
                 "lr": optimizer_config.learning_rate_segmentation_head,
