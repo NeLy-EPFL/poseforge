@@ -131,7 +131,13 @@ def train_bodyseg_model(
 def print_model_summary(training_data_config, model):
     down_in_dim = (3, *training_data_config.input_image_size)
     print("============== Full Model Summary ===============")
-    summary(model, down_in_dim, device="cpu")
+    if model.use_prev_mask_prior:
+        # forward also expects prev_mask_indices of shape (B, H, W); pass it as a
+        # second input so torchsummary builds a dummy mask alongside the image.
+        mask_dim = tuple(training_data_config.input_image_size)
+        summary(model, [down_in_dim, mask_dim], device="cpu")
+    else:
+        summary(model, down_in_dim, device="cpu")
     print("=========== Feature Extractor Summary ===========")
     summary(model.feature_extractor, down_in_dim, device="cpu")
 

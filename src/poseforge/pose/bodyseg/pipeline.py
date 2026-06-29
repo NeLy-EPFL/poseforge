@@ -67,6 +67,17 @@ class BodySegmentationPipeline:
         }
         return frames_batch, sim_data_batch
 
+    def _get_prev_mask_indices(self, sim_data):
+        """Extract the previous-frame mask prior from sim_data, mapped into the
+        model's output class space. Returns None when the model does not use the
+        prev-mask prior (the dataloader does not load it in that case)."""
+        if not self.model.use_prev_mask_prior:
+            return None
+        prev_mask_indices = sim_data["body_seg_maps_prev"].long()  # (batch_size, H, W)
+        if self.target_label_mapper is not None:
+            prev_mask_indices = self.target_label_mapper(prev_mask_indices)
+        return prev_mask_indices
+
     @staticmethod
     def create_target_label_mapper(
         selected_original_class_indices: list[int],
@@ -198,9 +209,11 @@ class BodySegmentationPipeline:
                         f"input frames shape {frames.shape}"
                     )
 
+                prev_mask_indices = self._get_prev_mask_indices(sim_data)
+
                 # Forward pass with mixed precision
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred_dict = self.model(frames)
+                    pred_dict = self.model(frames, prev_mask_indices=prev_mask_indices)
 
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
@@ -260,6 +273,7 @@ class BodySegmentationPipeline:
                         frames,
                         sim_data,
                         target_indices,
+                        prev_mask_indices,
                     )
                     clear_memory_cache()
                     val_loss_dict, val_viz_data = self.validate(
@@ -340,9 +354,11 @@ class BodySegmentationPipeline:
                         f"input frames shape {frames.shape}"
                     )
 
+                prev_mask_indices = self._get_prev_mask_indices(sim_data)
+
                 # Run model
                 with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                    pred_dict = self.model(frames)
+                    pred_dict = self.model(frames, prev_mask_indices=prev_mask_indices)
                     loss_dict = self.loss_func(pred_dict["logits"], target_indices)
 
                 # Capture first batch for visualization (up to 3 samples)
@@ -362,6 +378,7 @@ class BodySegmentationPipeline:
             frames,
             sim_data,
             target_indices,
+            prev_mask_indices,
         )
         clear_memory_cache()
         self.model.train()
@@ -369,13 +386,19 @@ class BodySegmentationPipeline:
         avg_losses = {k: v / n_steps_iterated for k, v in total_loss_dict.items()}
         return avg_losses, (val_frames_viz, val_target_viz, val_pred_logits_viz)
 
-    def inference(self, frames: torch.Tensor) -> dict[str, torch.Tensor]:
+    def inference(
+        self,
+        frames: torch.Tensor,
+        prev_mask_indices: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         input_device = frames.device
         self.model.eval()
         with torch.no_grad():
             frames = frames.to(self.device)
+            if prev_mask_indices is not None:
+                prev_mask_indices = prev_mask_indices.to(self.device)
             with torch.amp.autocast(self.device_type, enabled=self.use_float16):
-                pred_dict = self.model(frames)
+                pred_dict = self.model(frames, prev_mask_indices=prev_mask_indices)
         self.model.train()
         return {key: tensor.to(input_device) for key, tensor in pred_dict.items()}
 
@@ -391,6 +414,7 @@ class BodySegmentationPipeline:
             load_dof_angles=False,
             load_keypoint_positions=False,
             load_body_segment_maps=True,
+            load_prev_body_segment_maps=self.model.use_prev_mask_prior,
             shuffle=True,
             n_workers=data_config.n_workers,
             n_channels=3,
@@ -410,6 +434,7 @@ class BodySegmentationPipeline:
             load_dof_angles=False,
             load_keypoint_positions=False,
             load_body_segment_maps=True,
+            load_prev_body_segment_maps=self.model.use_prev_mask_prior,
             shuffle=False,
             n_workers=data_config.n_workers,
             n_channels=3,
