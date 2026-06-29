@@ -1,15 +1,15 @@
 #!/bin/bash -l
 
-#SBATCH --job-name simsiam_pretrain_crop256
+#SBATCH --job-name simsiam_crop256_260622
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
-#SBATCH --mem 90GB
+#SBATCH --mem 92GB
 #SBATCH --time 72:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/simsiam_pretraining_training/output_20260622a_simsiam256.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/simsiam_pretraining_training/output_%x.log
 
 echo "Hello from $(hostname)"
 
@@ -28,9 +28,9 @@ echo "Training starting at $(date)"
 # predictor head). Diagnostic to watch in TensorBoard:
 # Diagnostics/ProjectionNorm — if it collapses toward 0, training has
 # degenerated to the trivial solution.
-trial_name="trial_20260622_simsiam256"
-atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/"
-out_dir="/scratch/stimpfli/style_transfer/simsiam_pretraining/$trial_name"
+trial_name="$SLURM_JOB_NAME"
+atomic_batch_dir="/scratch/stimpfli/poseforge/style_transfer/atomic_batches_nmf/atomic_batches_912/"
+out_dir="/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/$trial_name"
 
 python -u src/poseforge/pose/simsiam/scripts/run_simsiam_pretraining.py \
     --n-epochs 10 \
@@ -62,9 +62,9 @@ python -u src/poseforge/pose/simsiam/scripts/run_simsiam_pretraining.py \
         "${atomic_batch_dir}BO_Gal4_fly1_trial002" \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 2 \
-    --training-data-config.train-batch-size 256 \
-    --training-data-config.val-batch-size 128 \
-    --training-data-config.image-size 900 900 \
+    --training-data-config.train-batch-size 512 \
+    --training-data-config.val-batch-size 256 \
+    --training-data-config.image-size 912 912 \
     --training-data-config.crop-size 256 256 \
     --training-data-config.crop-border-exclude 100 \
     --training-data-config.n-workers 4 \

@@ -3,9 +3,9 @@
 #SBATCH --job-name st_dataset_extraction
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 36
-#SBATCH --mem 250GB
-#SBATCH --time 12:00:00
+#SBATCH --cpus-per-task 10
+#SBATCH --mem 65GB
+#SBATCH --time 5:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
 #SBATCH --output /home/%u/poseforge/scripts_on_cluster/style_transfer_dataset_extraction/output_%x_%j.log
@@ -32,9 +32,9 @@ NMF_RENDERING_DIR="$WORK/$USER/poseforge/data/nmf_rendering"
 # Recorded images (from Spotlight)
 SPOTLIGHT_RECORDINGS_DIR="$WORK/$USER/poseforge/data/spotlight_aligned_and_cropped"
 # Output directory for extracted training images
-OUTPUT_DIR="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_pseudocolor_spotlight_dataset_gray"
+OUTPUT_DIR="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_pseudocolor_spotlight_dataset_segment"
 # Name of the rendered video file inside each NMF subsegment directory
-VIDEO_FILENAME="processed_nmf_sim_render_grayscale.mp4"
+VIDEO_FILENAME="processed_nmf_sim_segment_id.mp4"
 
 # Match the number of workers to the allocated CPUs
 NUM_WORKERS=$SLURM_CPUS_PER_TASK

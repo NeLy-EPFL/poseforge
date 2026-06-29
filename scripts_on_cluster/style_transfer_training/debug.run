@@ -104,7 +104,7 @@ python -u "$TRAINING_SCRIPT_PATH" \
     --save_epoch_freq "$SAVE_EPOCH_FREQ" \
     --num_threads "$NUM_THREADS" \
     --preprocess "resize_and_center_patch" \
-    --load_size 900
+    --load_size 912
     #--wandb_project "$WANDB_PROJECT" \
 
 echo "Training ends at $(date)"

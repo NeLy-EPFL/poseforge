@@ -1,15 +1,15 @@
 #!/bin/bash -l
 
-#SBATCH --job-name keypoints3d
+#SBATCH --job-name keypoints3d_256
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
 #SBATCH --mem 90GB
-#SBATCH --time 72:00:00
+#SBATCH --time 24:00:00
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/%u/poseforge/scripts_on_cluster/keypoints3d_training/output_20260507_tiled_10noise.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/keypoints3d_training/output_20260507_tiled_%x.log
 
 
 echo "Hello from $(hostname)"
@@ -19,14 +19,13 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
-atomic_variants_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
-out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260529_tiled_hs8"
+atomic_variants_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches_256"
+out_dir="/scratch/stimpfli/poseforge/pose_estimation/keypoints3d/trial_20260529_tiled_$SLURM_JOB_NAME"
 activation_noise_std=0.0
-heatmap_sigma=8.0
 
 training_cli_path="src/poseforge/pose/keypoints3d/scripts/run_keypoints3d_training.py"
 
-feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
+feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer_old/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
 contrastive_pretraining_epoch="epoch007"
 contrastive_pretraining_local_step="step000500"
 
@@ -37,7 +36,6 @@ python -u $training_cli_path \
     --model-architecture-config.activation-noise-std $activation_noise_std \
     --model-weights-config.feature-extractor-weights \
         "${feature_extractor_basedir}/checkpoints/checkpoint_${contrastive_pretraining_epoch}_${contrastive_pretraining_local_step}.feature_extractor.pth" \
-    --loss-config.heatmap-sigma $heatmap_sigma \
     --training-data-config.train-data-dirs \
         "$atomic_variants_base_dir/BO_Gal4_fly1_trial001" \
         "$atomic_variants_base_dir/BO_Gal4_fly1_trial002" \
@@ -61,7 +59,7 @@ python -u $training_cli_path \
         "$atomic_variants_base_dir/BO_Gal4_fly4_trial005" \
     --training-data-config.val-data-dirs \
         "$atomic_variants_base_dir/BO_Gal4_fly5_trial001" \
-    --training-data-config.input-image-size 912 912 \
+    --training-data-config.input-image-size 256 256 \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 2 \
     --training-data-config.train-batch-size 32 \

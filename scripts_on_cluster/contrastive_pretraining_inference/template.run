@@ -4,7 +4,7 @@
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 8
-#SBATCH --mem 32GB
+#SBATCH --mem 45GB
 #SBATCH --time 24:00:00
 #SBATCH --partition=l40s
 #SBATCH --qos=normal
@@ -21,9 +21,9 @@ conda activate poseforge
 # Define paths
 # Edit these in the script for your cluster layout.
 project_root="/home/$USER/poseforge"
-style_transfer_root="/work/upramdya/alfie/style_transfer/production/tiled_translated_videos/flybody_gray"
-contrastive_pretraining_root="/scratch/stimpfli/style_transfer/contrastive_pretraining"
-contrastive_pretraining_trial="trial_20260504_tiled2variants"
+style_transfer_root="/work/upramdya/stimpfli/poseforge/style_transfer/production/tiled_translated_videos/flybody_gray"
+contrastive_pretraining_root="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining"
+contrastive_pretraining_trial="trial_20260607_256_tiled2variants"
 
 # Setup
 cd $project_root

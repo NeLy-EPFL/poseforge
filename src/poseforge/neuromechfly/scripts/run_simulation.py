@@ -61,15 +61,15 @@ def get_default_visual_paths(use_flybody: bool) -> list[Path]:
     """Get the default visual paths depending on the chosen model (flybody vs nmf)."""
     visuals_dir = Path(__file__).parent.parent / "visuals"
     if use_flybody:
-        return [#visuals_dir / "flybody_base.yaml",
+        return [visuals_dir / "flybody_base.yaml",
                 visuals_dir / "flybody_grayscale.yaml",
-                # visuals/per_link_color.yaml,
+                visuals_dir / "per_link_color.yaml",
                 # visuals/per_leg_color.yaml, etc
                 ]
     else:
-        return [#visuals_dir / "base.yaml",
+        return [visuals_dir / "base.yaml",
                 visuals_dir / "grayscale.yaml",
-                # visuals/per_link_color.yaml,
+                visuals_dir / "per_link_color.yaml",
                 # visuals/per_leg_color.yaml, etc
                 ]
 

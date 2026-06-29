@@ -18,17 +18,17 @@ spack load ffmpeg
 conda activate poseforge
 cd $HOME/poseforge
 
-atomic_batch_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches"
+atomic_batch_base_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches_912"
 out_dir="/scratch/stimpfli/poseforge/pose_estimation/joint_segpose/output_20260615_tiled_joint"
 
 # Per-head activation noise (shared backbone -> noise std on the encoded
 # feature maps is applied INSIDE each task model from its own activations,
 # so we keep the same values used in the single-task jobs)
 pose_activation_noise_std=0.0
-bodyseg_activation_noise_std=0.5
+bodyseg_activation_noise_std=0.0
 heatmap_sigma=8.0
 
-feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
+feature_extractor_basedir="/scratch/stimpfli/poseforge/style_transfer_old/style_transfer/contrastive_pretraining/trial_20260504_tiled2variants"
 contrastive_pretraining_epoch="epoch007"
 contrastive_pretraining_local_step="step000500"
 
@@ -83,7 +83,7 @@ python -u $training_cli_path \
         "$atomic_batch_base_dir/BO_Gal4_fly5_trial001" \
     --training-data-config.input-image-size 912 912 \
     --training-data-config.atomic-batch-n-samples 32 \
-    --training-data-config.atomic-batch-n-variants 2 \
+    --training-data-config.atomic-batch-n-variants 1 \
     --training-data-config.train-batch-size 32 \
     --training-data-config.val-batch-size 32 \
     --training-data-config.num-workers 8 \

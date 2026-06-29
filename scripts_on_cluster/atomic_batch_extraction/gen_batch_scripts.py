@@ -18,10 +18,10 @@ from pathlib import Path
 # Job-wide parameters (edit these to (re)generate scripts)
 # ============================================================
 # Set ``target_image_size`` to None to keep source resolution (no resize).
-target_image_size: tuple[int, int] | None = (256, 256)
+target_image_size: tuple[int, int] | None = (512, 512)
 original_image_size: tuple[int, int] = (912, 912)
 atomic_batch_nframes: int = 32
-atomic_batch_nvariants_max: int = 4
+atomic_batch_nvariants_max: int = 5
 minimum_time_diff_frames: int = 60
 # Number of joblib workers inside each Slurm job. The template requests
 # slightly more CPUs than this to leave headroom for ffmpeg / I/O.
@@ -37,10 +37,10 @@ work_dir = Path(os.environ.get("WORK", "/work/upramdya")) / user
 
 all_trials_basedir = (
     work_dir
-    / "poseforge/style_transfer/production/tiled_translated_videos/flybody_gray"
-)
-nmf_sim_rendering_basedir = work_dir / "poseforge/data/bulk_data_flybody"
-output_basedir = work_dir / "poseforge/style_transfer/contrastive_pretraining"
+    / "poseforge/style_transfer/production/tiled_translated_videos/standard_gray"
+    )
+nmf_sim_rendering_basedir = work_dir / "poseforge/data/nmf_rendering"
+output_basedir = work_dir / "poseforge/style_transfer/atomic_batches_nmf"
 
 project_dir = Path("~/poseforge").expanduser()
 template_path = project_dir / "scripts_on_cluster/atomic_batch_extraction/template.run"

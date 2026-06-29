@@ -71,7 +71,7 @@ eval_data_dirs=(
 # selection_data_dirs=( "$atomic_batch_dir/BO_Gal4_fly5_trial002" )
 
 comparison_name="comparison_20260625"
-output_dir="/scratch/stimpfli/style_transfer/variant_similarity_comparison/$comparison_name"
+output_dir="/scratch/stimpfli/poseforge/style_transfer/variant_similarity_comparison/$comparison_name"
 
 # No --crop-size => the encoder sees the full --image-size frame (full images).
 # batch-size is the number of atomic batches per forward pass; the encoder

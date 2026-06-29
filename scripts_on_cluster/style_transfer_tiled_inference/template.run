@@ -42,7 +42,7 @@ python -u $inference_script_path \
     --device "cuda" \
     --memory-cleanup-interval 10 \
     --patch_batch_size 1024 \
-    --no-no-override \
+    --no-override \
     --verbose
 
 echo "Tiled inference ends at $(date)"

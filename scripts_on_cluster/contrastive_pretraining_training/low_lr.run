@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name contr_pretrain_lr3e-5
+#SBATCH --job-name tiledlowlr_nmf_20260622
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 16
@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251125a_lowlr.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_%x.log
 
 echo "Hello from $(hostname)"
 
@@ -20,9 +20,9 @@ conda activate poseforge
 cd $HOME/poseforge
 echo "Training starting at $(date)"
 
-trial_name="trial_20260504_tiledlowlr"
-atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/"
-out_dir="/scratch/stimpfli/style_transfer/contrastive_pretraining/$trial_name"
+trial_name="$SLURM_JOB_NAME"
+atomic_batch_dir="/scratch/stimpfli/poseforge/style_transfer/atomic_batches_nmf/atomic_batches_912/"
+out_dir="/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/$trial_name"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
@@ -54,9 +54,9 @@ python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
         "${atomic_batch_dir}BO_Gal4_fly1_trial002" \
     --training-data-config.atomic-batch-n-samples 32 \
     --training-data-config.atomic-batch-n-variants 4 \
-    --training-data-config.train-batch-size 64 \
+    --training-data-config.train-batch-size 32 \
     --training-data-config.val-batch-size 32 \
-    --training-data-config.image-size 900 900 \
+    --training-data-config.image-size 912 912 \
     --training-data-config.n-workers 4 \
     --optimizer-config.adam-lr 3e-5 \
     --optimizer-config.adam-weight-decay 1e-4 \

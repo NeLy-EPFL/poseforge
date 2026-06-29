@@ -9,7 +9,7 @@
 #SBATCH --partition=h100
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/$USER/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_20251125b_2variants.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/contrastive_pretraining_training/output_260607_912_2variants.log
 
 echo "Hello from $(hostname)"
 
@@ -20,9 +20,9 @@ conda activate poseforge
 cd $HOME/poseforge
 echo "Training starting at $(date)"
 
-trial_name="trial_20260504_tiled2variants"
-atomic_batch_dir="/work/upramdya/alfie/style_transfer/contrastive_pretraining/atomic_batches/
-out_dir=/scratch/stimpfli/style_transfer/contrastive_pretraining/$trial_name"
+trial_name="trial_20260607_912_tiled2variants"
+atomic_batch_dir="/work/upramdya/stimpfli/poseforge/style_transfer/contrastive_pretraining/atomic_batches_912/"
+out_dir="/scratch/stimpfli/style_transfer/contrastive_pretraining/$trial_name"
 
 python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --n-epochs 10 \
@@ -56,7 +56,7 @@ python -u src/poseforge/pose/contrast/scripts/run_contrastive_pretraining.py \
     --training-data-config.atomic-batch-n-variants 2 \
     --training-data-config.train-batch-size 96 \
     --training-data-config.val-batch-size 96 \
-    --training-data-config.image-size 900 900 \
+    --training-data-config.image-size 912 912 \
     --training-data-config.n-workers 4 \
     --optimizer-config.adam-lr 3e-4 \
     --optimizer-config.adam-weight-decay 1e-4 \

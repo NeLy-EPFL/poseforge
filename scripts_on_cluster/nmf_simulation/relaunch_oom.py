@@ -5,7 +5,7 @@ import argparse
 import re
 from pathlib import Path
 
-OOM_PATTERN = re.compile(r"Detected \d+ oom_kill event")
+OOM_PATTERN = re.compile(r"error")
 
 SCRIPT_DIR = Path(__file__).parent
 TEMPLATE_PATH = SCRIPT_DIR / "template.run"
@@ -44,7 +44,7 @@ def extract_params(run_script: Path) -> dict:
         m = pattern.search(text)
         if m is None:
             raise ValueError(f"Could not find {key} in {run_script}")
-        params[key] = m.group(1).strip()
+        params[key] = m.group(1).strip().rstrip("\\").strip()
     return params
 
 
@@ -120,6 +120,7 @@ def main():
             print(f"  WARNING: original script not found — {src}")
             continue
         params = extract_params(src)
+        job_name += log_file.parent.name
         dest = make_run_script(job_name, params, template_str, output_dir)
         print(f"  Generated [{model}]: {dest.name}")
         generated += 1

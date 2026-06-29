@@ -7,10 +7,11 @@ from poseforge.style_transfer import parse_hyperparameters_from_checkpoint_path
 
 #scratch_user_dir = Path("/scratch") / os.environ.get("USER", "user")
 work_user_dir = Path("/work/upramdya/stimpfli")
-data_base_dir = work_user_dir / "/poseforge/data/nmf_rendering"
+data_base_dir = work_user_dir / "poseforge/data/nmf_rendering"
 data_base_dir_flybody = work_user_dir / "poseforge/data/nmf_rendering_flybody"
 
-checkpoints_basedir = Path("/scratch/stimpfli/poseforge/style_transfer_old/checkpoint_backups/")
+#checkpoints_basedir = Path("/scratch/stimpfli/poseforge/style_transfer_old/checkpoint_backups/")
+checkpoints_basedir  = Path("/work/upramdya/stimpfli/poseforge/style_transfer/20260615_ablation/checkpoints")
 output_basedir = work_user_dir / "poseforge/style_transfer/production/tiled_translated_videos"
 
 def infer_data_config_from_checkpoint(checkpoint_path_str: str) -> tuple[str, str, str]:
@@ -111,7 +112,7 @@ with open(template_path) as f:
     template_str = f.read()
 
 
-FLY_IDS = [1, 2, 3, 4, 5]
+FLY_IDS = [5]
 
 
 def make_run_script(model_name: str, epoch: int, fly_id: int) -> None:
@@ -144,28 +145,25 @@ if __name__ == "__main__":
     # Data configuration (simulations_basedir, output_basedir, input_video_filename) is auto-detected from checkpoint.
     # Format: (checkpoint_path, model_name_for_job)    
     
-    jobs = [
-        ("20260425_082514_lamG01_bs4_ngf48_flybody_gray", 334),
-        ("20260425_082514_lamG01_bs4_ngf48_flybody_gray", 788),
-        ("20260425_082346_lamG1_bs4_ngf32_flybody_gray", 609),
-        ("20260425_082346_lamG1_bs4_ngf32_flybody_gray", 991),
-        ("20260425_082309_lamG02_bs4_ngf16_flybody_gray", 961),
-        ("20260425_082309_lamG02_bs4_ngf16_flybody_gray", 831),
-        ("20260425_082136_lamG01_bs4_ngf322_flybody_gray", 665),
-        ("20260425_082136_lamG01_bs4_ngf322_flybody_gray", 750)
-    ]
+    #jobs = [
+    #    ("20260425_082514_lamG01_bs4_ngf48_flybody_gray", 334),
+    #    ("20260425_082514_lamG01_bs4_ngf48_flybody_gray", 788),
+    #    ("20260425_082346_lamG1_bs4_ngf32_flybody_gray", 609),
+    #    ("20260425_082346_lamG1_bs4_ngf32_flybody_gray", 991),
+    #    ("20260425_082309_lamG02_bs4_ngf16_flybody_gray", 961),
+    #    ("20260425_082309_lamG02_bs4_ngf16_flybody_gray", 831),
+    #    ("20260425_082136_lamG01_bs4_ngf322_flybody_gray", 665),
+    #    ("20260425_082136_lamG01_bs4_ngf322_flybody_gray", 750)
+    #]
 
-    # # NMF
-    # jobs = [
-    #     ("20260425_082449_lamG01_bs4_ngf48_gray", 368),
-    #     ("20260425_082410_lamG1_bs4_ngf32_gray", 706),
-    #     ("20260425_082410_lamG1_bs4_ngf32_gray", 798),
-    #     ("20260425_082410_lamG1_bs4_ngf32_gray", 986),
-    #     ("20260425_082246_lamG02_bs4_ngf16_gray", 786),
-    #     ("20260425_082246_lamG02_bs4_ngf16_gray", 816),
-    #     ("20260425_082208_lamG01_bs4_ngf32_gray", 976),
-    #     ("20260425_082208_lamG01_bs4_ngf32_gray", 740)
-    # ]
+    # NMF
+    jobs = [
+        ("20260616_081944_cut_exp1_bs16", 120),
+        ("20260616_082042_cut_exp3_nlD4", 120),
+        ("20260616_082042_cut_exp3_nlD4", 100),
+        ("20260616_082143_cut_exp4_adamSG2", 100),
+        ("20260617_222739_cut_exp6_edge_lam1", 101),
+    ]
 
     # Make job scripts: one per (checkpoint, fly) pair
     for checkpoint_path, model_name in jobs:
