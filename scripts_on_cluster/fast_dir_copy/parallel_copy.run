@@ -1,0 +1,76 @@
+#!/bin/bash -l
+#
+# Fast, multiprocessed directory copy on the cluster.
+#
+# Copies SRC into DST by fanning the per-file copies out across all the CPUs
+# allocated to the job (xargs -P). The directory tree is recreated first so the
+# parallel file copies never race on mkdir.
+#
+# Usage:
+#     sbatch parallel_copy.run <SRC_DIR> <DST_DIR>
+# e.g.
+#     sbatch parallel_copy.run /scratch/$USER/dataset /scratch/$USER/dataset_copy
+#
+# Tune --cpus-per-task below for more/less parallelism.
+
+#SBATCH --job-name parallel_copy
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 16GB
+#SBATCH --time 06:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output parallel_copy_%j.log
+
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: sbatch parallel_copy.run <SRC_DIR> <DST_DIR>"
+    exit 1
+fi
+
+SRC="$1"
+DST="$2"
+
+if [ ! -d "$SRC" ]; then
+    echo "Error: source '$SRC' is not a directory."
+    exit 1
+fi
+
+# Strip any trailing slash so path math below is consistent.
+SRC="${SRC%/}"
+DST="${DST%/}"
+
+# Number of parallel workers = CPUs SLURM gave us (fallback to 1 outside SLURM).
+NPROC="${SLURM_CPUS_PER_TASK:-1}"
+
+echo "Hello from $(hostname)"
+echo "Copying '$SRC' -> '$DST' with $NPROC parallel workers"
+echo "Copy starting at $(date)"
+
+mkdir -p "$DST"
+
+# 1) Recreate the full directory tree first (cheap, avoids mkdir races).
+( cd "$SRC" && find . -mindepth 1 -type d -print0 ) \
+    | xargs -0 -r -P "$NPROC" -I{} mkdir -p "$DST/{}"
+
+# 2) Copy every regular file in parallel, preserving attributes (cp -a).
+( cd "$SRC" && find . -type f -print0 ) \
+    | xargs -0 -r -P "$NPROC" -I{} cp -a "$SRC/{}" "$DST/{}"
+
+# 3) Copy symlinks as-is (kept separate so cp -a preserves them verbatim).
+( cd "$SRC" && find . -type l -print0 ) \
+    | xargs -0 -r -P "$NPROC" -I{} cp -a "$SRC/{}" "$DST/{}"
+
+echo "Copy ends at $(date)"
+
+# Quick sanity check on file counts.
+src_files=$(find "$SRC" -type f -o -type l | wc -l)
+dst_files=$(find "$DST" -type f -o -type l | wc -l)
+echo "Source entries: $src_files  |  Destination entries: $dst_files"
+if [ "$src_files" -ne "$dst_files" ]; then
+    echo "WARNING: file counts differ between source and destination!"
+    exit 1
+fi
+echo "Done."
