@@ -132,14 +132,22 @@ def print_model_summary(training_data_config, model):
     down_in_dim = (3, *training_data_config.input_image_size)
     print("============== Full Model Summary ===============")
     if model.use_prev_mask_prior:
-        # forward also expects prev_mask_indices of shape (B, H, W); pass it as a
-        # second input so torchsummary builds a dummy mask alongside the image.
-        mask_dim = tuple(training_data_config.input_image_size)
-        summary(model, [down_in_dim, mask_dim], device="cpu")
+        # torchsummary's summary() can't handle the extra prev_mask_indices input
+        # (its size accounting calls np.prod over the mixed-rank input shapes and
+        # raises), so fall back to a manual parameter count for the full model.
+        print_param_counts(model)
     else:
         summary(model, down_in_dim, device="cpu")
     print("=========== Feature Extractor Summary ===========")
     summary(model.feature_extractor, down_in_dim, device="cpu")
+
+
+def print_param_counts(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total params:     {total_params:,}")
+    print(f"Trainable params: {trainable_params:,}")
+    print(f"Non-trainable:    {total_params - trainable_params:,}")
 
 
 if __name__ == "__main__":
