@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 from pathlib import Path
@@ -185,3 +186,101 @@ class DecoderBlock(nn.Module):
         x = self.bn2(x)
         x = self.relu(x)
         return x
+
+
+class BottleneckSelfAttention(nn.Module):
+    """Multi-head self-attention over the spatial tokens of a (N, C, H, W)
+    feature map, with fixed 2D sinusoidal positional encodings and a residual
+    connection.
+
+    Intended for the low-resolution ResNet bottleneck (``e4``, 512ch and
+    ~8x8 at 256px input), where the token count is tiny so full all-pairs
+    attention is cheap. It lets every spatial location aggregate
+    content-selected global context in a single hop -- something stacked
+    convolutions can only do weakly and indirectly (their effective receptive
+    field is a small Gaussian, and at large inputs even the theoretical field
+    is smaller than the animal). This directly targets keypoint
+    identity/plausibility ("is this a real claw, or clutter?", "which leg am
+    I?").
+
+    Applied as a pre-norm residual sub-layer:
+        ``x <- x + Proj(SelfAttention(LayerNorm(tokens) + pos_enc))``
+    The output projection is zero-initialized so the block starts as an exact
+    identity (residual only) and attention is learned gradually, which avoids
+    disrupting the pretrained backbone at the start of training.
+    """
+
+    def __init__(self, channels: int, n_heads: int = 4):
+        super().__init__()
+        if channels % n_heads != 0:
+            raise ValueError(
+                f"channels ({channels}) must be divisible by n_heads ({n_heads})."
+            )
+        if channels % 4 != 0:
+            # 2D sinusoidal encoding splits channels into row/col halves, each
+            # of which needs an even size for the sin/cos interleave.
+            raise ValueError(
+                f"channels ({channels}) must be divisible by 4 for the 2D "
+                "sinusoidal positional encoding."
+            )
+        self.channels = channels
+        self.n_heads = n_heads
+        self.head_dim = channels // n_heads
+        self.norm = nn.LayerNorm(channels)
+        self.qkv = nn.Linear(channels, 3 * channels)
+        self.proj = nn.Linear(channels, channels)
+        # Identity at init: zero the output projection so x + proj(...) == x.
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    @staticmethod
+    def _sinusoidal_pos_encoding_2d(
+        h: int, w: int, dim: int, device: torch.device, dtype: torch.dtype
+    ) -> torch.Tensor:
+        """Return a (h*w, dim) 2D sinusoidal positional encoding: the first
+        half of the channels encode the row index, the second half the column
+        index."""
+        d = dim // 2  # channels for row, and for col
+        div = torch.exp(
+            torch.arange(0, d, 2, device=device, dtype=torch.float32)
+            * (-math.log(10000.0) / d)
+        )  # (d/2,)
+        y = torch.arange(h, device=device, dtype=torch.float32).unsqueeze(1)  # (h,1)
+        x = torch.arange(w, device=device, dtype=torch.float32).unsqueeze(1)  # (w,1)
+        pe_y = torch.zeros(h, d, device=device, dtype=torch.float32)
+        pe_y[:, 0::2] = torch.sin(y * div)
+        pe_y[:, 1::2] = torch.cos(y * div)
+        pe_x = torch.zeros(w, d, device=device, dtype=torch.float32)
+        pe_x[:, 0::2] = torch.sin(x * div)
+        pe_x[:, 1::2] = torch.cos(x * div)
+        pe_y = pe_y.unsqueeze(1).expand(h, w, d)  # (h,w,d)
+        pe_x = pe_x.unsqueeze(0).expand(h, w, d)  # (h,w,d)
+        pe = torch.cat([pe_y, pe_x], dim=-1)  # (h,w,dim)
+        return pe.reshape(h * w, dim).to(dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        n, c, h, w = x.shape
+        # (N, C, H, W) -> (N, H*W, C) sequence of tokens
+        tokens = x.flatten(2).transpose(1, 2)
+        residual = tokens
+        t = self.norm(tokens)
+        # Inject absolute position so attention is not permutation-blind.
+        t = t + self._sinusoidal_pos_encoding_2d(h, w, c, x.device, t.dtype).unsqueeze(0)
+
+        qkv = self.qkv(t)  # (N, H*W, 3C)
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        def split_heads(z: torch.Tensor) -> torch.Tensor:
+            # (N, H*W, C) -> (N, n_heads, H*W, head_dim)
+            return z.view(n, h * w, self.n_heads, self.head_dim).transpose(1, 2)
+
+        q, k, v = split_heads(q), split_heads(k), split_heads(v)
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn = torch.softmax(scores, dim=-1)
+        out = attn @ v  # (N, n_heads, H*W, head_dim)
+        out = out.transpose(1, 2).reshape(n, h * w, c)  # (N, H*W, C)
+        out = self.proj(out)
+
+        tokens = residual + out
+        # (N, H*W, C) -> (N, C, H, W)
+        return tokens.transpose(1, 2).view(n, c, h, w)

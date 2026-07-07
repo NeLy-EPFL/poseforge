@@ -5,7 +5,11 @@ import logging
 from pathlib import Path
 
 import poseforge.pose.keypoints3d.config as config
-from poseforge.pose.common import ResNetFeatureExtractor, DecoderBlock
+from poseforge.pose.common import (
+    ResNetFeatureExtractor,
+    DecoderBlock,
+    BottleneckSelfAttention,
+)
 
 
 class Pose2p5DModel(nn.Module):
@@ -53,6 +57,8 @@ class Pose2p5DModel(nn.Module):
         xy_decode_mode: str = "local_window",
         xy_decode_window: int = 11,
         coord_conv_enabled: bool = False,
+        bottleneck_attention_enabled: bool = False,
+        bottleneck_attention_n_heads: int = 4,
         excluded_keypoint_indices: tuple[int, ...] = (),
     ):
         """
@@ -124,6 +130,20 @@ class Pose2p5DModel(nn.Module):
                 Default False (opt-in). NOTE: this relies on the input being
                 spatially registered -- if alignment drifts at test time, a
                 position-conditioned head can hurt.
+            bottleneck_attention_enabled (bool): If True, insert a multi-head
+                self-attention block (with 2D sinusoidal positional encoding
+                and a residual connection) on the ResNet bottleneck ``e4``
+                before decoding. This gives every bottleneck location direct,
+                content-selected global context in one hop -- targeting
+                keypoint identity/plausibility errors that a small effective
+                receptive field cannot resolve. Cheap because ``e4`` has very
+                few spatial tokens. The block is identity at init (zero-init
+                output projection), so training starts unchanged. Default
+                False (opt-in).
+            bottleneck_attention_n_heads (int): Number of attention heads for
+                the bottleneck self-attention block. Must divide the
+                bottleneck channel count (512 for ResNet-18). Only used when
+                ``bottleneck_attention_enabled`` is True.
             excluded_keypoint_indices (tuple[int, ...]): Indices (into the
                 full set of ``n_keypoints`` label keypoints) that the model
                 should NOT predict. The prediction heads are sized to emit
@@ -183,6 +203,8 @@ class Pose2p5DModel(nn.Module):
         # Number of coordinate channels appended to the heatmap head input when
         # CoordConv is enabled (x and y).
         self._n_coord_channels = 2 if coord_conv_enabled else 0
+        self.bottleneck_attention_enabled = bottleneck_attention_enabled
+        self.bottleneck_attention_n_heads = bottleneck_attention_n_heads
 
         # Spatial dropout for decoder (drops entire channels)
         # nn.Dropout2d is a no-op when p=0.0 or in eval mode
@@ -226,6 +248,16 @@ class Pose2p5DModel(nn.Module):
             )
 
         self.feature_extractor = feature_extractor
+
+        # Optional multi-head self-attention on the bottleneck (e4) for global
+        # context. Identity at init, so it does not disturb early training.
+        if bottleneck_attention_enabled:
+            self.bottleneck_attention = BottleneckSelfAttention(
+                channels=feature_extractor.output_channels,
+                n_heads=bottleneck_attention_n_heads,
+            )
+        else:
+            self.bottleneck_attention = None
 
         # Create decoder core with skipped connections for upsampling
         # We use decoder4/3/2/1 to mirror layers1/2/3/4 in the ResNet encoder
@@ -300,6 +332,8 @@ class Pose2p5DModel(nn.Module):
             xy_decode_mode=architecture_config.xy_decode_mode,
             xy_decode_window=architecture_config.xy_decode_window,
             coord_conv_enabled=architecture_config.coord_conv_enabled,
+            bottleneck_attention_enabled=architecture_config.bottleneck_attention_enabled,
+            bottleneck_attention_n_heads=architecture_config.bottleneck_attention_n_heads,
             excluded_keypoint_indices=architecture_config.excluded_keypoint_indices,
         )
 
@@ -680,6 +714,11 @@ class Pose2p5DModel(nn.Module):
             e2 = e2 * (1.0 + torch.randn_like(e2) * self.activation_noise_std)
             e3 = e3 * (1.0 + torch.randn_like(e3) * self.activation_noise_std)
             e4 = e4 * (1.0 + torch.randn_like(e4) * self.activation_noise_std)
+
+        # Optional global-context mixing on the bottleneck via self-attention.
+        # Shape (N, 512, H, W) is preserved, so the decoder is unaffected.
+        if self.bottleneck_attention is not None:
+            e4 = self.bottleneck_attention(e4)
 
         d4 = e4  # this is just the bottleneck
 

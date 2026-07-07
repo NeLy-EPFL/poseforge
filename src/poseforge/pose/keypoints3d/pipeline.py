@@ -392,20 +392,27 @@ class Pose2p5DPipeline:
     def _create_optimizer(
         self, optimizer_config: config.OptimizerConfig
     ) -> torch.optim.Optimizer:
+        # Core (non-pretrained) params: the decoder, plus the optional
+        # bottleneck self-attention block when present. Grouped with the
+        # deconv LR since, like the decoder, they are trained from scratch
+        # (unlike the pretrained encoder).
+        core_modules = [
+            self.model.dec_layer1,
+            self.model.dec_layer2,
+            self.model.dec_layer3,
+            self.model.dec_layer4,
+        ]
+        if getattr(self.model, "bottleneck_attention", None) is not None:
+            core_modules.append(self.model.bottleneck_attention)
+        core_params = list(chain(*[m.parameters() for m in core_modules]))
+
         params = [
             {
                 "params": self.model.feature_extractor.parameters(),
                 "lr": optimizer_config.learning_rate_encoder,
             },
             {
-                "params": list(
-                    chain(
-                        self.model.dec_layer1.parameters(),
-                        self.model.dec_layer2.parameters(),
-                        self.model.dec_layer3.parameters(),
-                        self.model.dec_layer4.parameters(),
-                    )
-                ),
+                "params": core_params,
                 "lr": optimizer_config.learning_rate_deconv,
             },
             {
