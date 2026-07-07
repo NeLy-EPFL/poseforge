@@ -287,7 +287,7 @@ if __name__ == "__main__":
         output_basedir=output_basedir,
         batch_size=batch_size,
         n_workers=n_workers,
-        c=inference_image_size,
+        inference_image_size=inference_image_size,
         camera_pos=camera_pos,
         camera_fov_deg=camera_fov_deg,
         camera_rendering_size=camera_rendering_size,
