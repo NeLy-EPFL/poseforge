@@ -70,6 +70,17 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Default False (opt-in); changing it changes the head's first-layer shape,
     # so a checkpoint must be trained with the same setting used at inference.
     coord_conv_enabled: bool = False
+    # If True, insert a multi-head self-attention block (2D sinusoidal
+    # positional encoding + residual) on the ResNet bottleneck `e4` before
+    # decoding, giving every location direct global context in one hop. Targets
+    # keypoint identity/plausibility errors a small receptive field can't fix.
+    # Identity at init, so training starts unchanged. Adds parameters, so a
+    # checkpoint must be trained and run with the same setting. Default False.
+    bottleneck_attention_enabled: bool = False
+    # Number of heads for the bottleneck self-attention. Must divide the
+    # bottleneck channels (512 for ResNet-18). Only used when
+    # `bottleneck_attention_enabled` is True.
+    bottleneck_attention_n_heads: int = 4
     # Indices (into the full set of `n_keypoints` label keypoints) that the
     # model should NOT predict. The prediction heads are sized to emit only
     # the remaining (kept) keypoints, in their original relative order, so the
