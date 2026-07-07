@@ -62,6 +62,14 @@ class ModelArchitectureConfig(SerializableDataClass):
     # Side length (in heatmap pixels) of the window used when
     # `xy_decode_mode == "local_window"`. Spans peak +/- (xy_decode_window // 2).
     xy_decode_window: int = 11
+    # If True, append two normalized coordinate channels (x, y in [-1, 1]) to
+    # the x-y heatmap head input (CoordConv). Gives the head absolute-position
+    # awareness so a keypoint that always sits in a fixed image region is less
+    # likely to be predicted somewhere impossible. Relies on the input being
+    # spatially registered (aligned/cropped). Depth head is unaffected.
+    # Default False (opt-in); changing it changes the head's first-layer shape,
+    # so a checkpoint must be trained with the same setting used at inference.
+    coord_conv_enabled: bool = False
     # Indices (into the full set of `n_keypoints` label keypoints) that the
     # model should NOT predict. The prediction heads are sized to emit only
     # the remaining (kept) keypoints, in their original relative order, so the
