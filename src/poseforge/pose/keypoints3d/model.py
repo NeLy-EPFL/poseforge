@@ -52,6 +52,7 @@ class Pose2p5DModel(nn.Module):
         heatmap_hidden_channels: int = 64,
         xy_decode_mode: str = "local_window",
         xy_decode_window: int = 11,
+        coord_conv_enabled: bool = False,
         excluded_keypoint_indices: tuple[int, ...] = (),
     ):
         """
@@ -111,6 +112,18 @@ class Pose2p5DModel(nn.Module):
                 window used when ``xy_decode_mode == "local_window"``. The
                 window spans peak +/- (xy_decode_window // 2). Must be a
                 positive integer. Ignored for "global".
+            coord_conv_enabled (bool): If True, append two normalized
+                coordinate channels (x and y, each in [-1, 1]) to the x-y
+                heatmap head's input (CoordConv, Liu et al. 2018). This gives
+                the otherwise translation-equivariant head an absolute-position
+                signal, so a keypoint that always appears in a specific image
+                region (e.g. a foreleg in an aligned/cropped frame) is less
+                likely to be predicted in an impossible location. Only the
+                heatmap head gets the extra channels; the depth head is
+                global-pooled, so per-pixel coordinates would wash out there.
+                Default False (opt-in). NOTE: this relies on the input being
+                spatially registered -- if alignment drifts at test time, a
+                position-conditioned head can hurt.
             excluded_keypoint_indices (tuple[int, ...]): Indices (into the
                 full set of ``n_keypoints`` label keypoints) that the model
                 should NOT predict. The prediction heads are sized to emit
@@ -166,6 +179,10 @@ class Pose2p5DModel(nn.Module):
         self.heatmap_hidden_channels = heatmap_hidden_channels
         self.xy_decode_mode = xy_decode_mode.lower()
         self.xy_decode_window = xy_decode_window
+        self.coord_conv_enabled = coord_conv_enabled
+        # Number of coordinate channels appended to the heatmap head input when
+        # CoordConv is enabled (x and y).
+        self._n_coord_channels = 2 if coord_conv_enabled else 0
 
         # Spatial dropout for decoder (drops entire channels)
         # nn.Dropout2d is a no-op when p=0.0 or in eval mode
@@ -225,9 +242,10 @@ class Pose2p5DModel(nn.Module):
         self.dec_layer1 = DecoderBlock(64, 64, upsample_core_out_channels)
 
         # Heatmap head for (x, y) keypoint locations. Sized to the predicted
-        # (kept) keypoints only.
+        # (kept) keypoints only. When CoordConv is enabled, the head also
+        # consumes the two appended coordinate channels, so widen its input.
         self.heatmap_head = self._build_heatmap_head(
-            in_channels=upsample_core_out_channels,
+            in_channels=upsample_core_out_channels + self._n_coord_channels,
             out_channels=self.n_predicted_keypoints,
             n_hidden_layers=heatmap_n_hidden_layers,
             hidden_channels=heatmap_hidden_channels,
@@ -281,6 +299,7 @@ class Pose2p5DModel(nn.Module):
             heatmap_hidden_channels=architecture_config.heatmap_hidden_channels,
             xy_decode_mode=architecture_config.xy_decode_mode,
             xy_decode_window=architecture_config.xy_decode_window,
+            coord_conv_enabled=architecture_config.coord_conv_enabled,
             excluded_keypoint_indices=architecture_config.excluded_keypoint_indices,
         )
 
@@ -404,6 +423,26 @@ class Pose2p5DModel(nn.Module):
         nn.init.zeros_(fc.bias)
 
         return nn.Sequential(adaptive_pool, conv, groupnorm, relu, flatten, fc, reshape)
+
+    @staticmethod
+    def _coord_channels(feat: torch.Tensor) -> torch.Tensor:
+        """Build two normalized coordinate channels (x, y in [-1, 1]) matching
+        the spatial size, batch, dtype and device of ``feat``.
+
+        Args:
+            feat (torch.Tensor): Feature map of shape (N, C, H, W).
+
+        Returns:
+            torch.Tensor: Coordinate channels of shape (N, 2, H, W); channel 0
+                is x (varies across columns), channel 1 is y (varies across
+                rows).
+        """
+        n, _, h, w = feat.shape
+        x = torch.linspace(-1.0, 1.0, w, device=feat.device, dtype=feat.dtype)
+        y = torch.linspace(-1.0, 1.0, h, device=feat.device, dtype=feat.dtype)
+        x_channel = x.view(1, 1, 1, w).expand(n, 1, h, w)
+        y_channel = y.view(1, 1, h, 1).expand(n, 1, h, w)
+        return torch.cat([x_channel, y_channel], dim=1)
 
     @staticmethod
     def _softmax_with_temp(
@@ -652,8 +691,15 @@ class Pose2p5DModel(nn.Module):
         # No dropout after the last decoder layer — let the heads see clean features
 
         # Compute x-y heatmaps
+        # Optionally append normalized coordinate channels (CoordConv) so the
+        # otherwise position-agnostic head can condition on absolute location.
+        # Only the heatmap head sees them; the depth head keeps clean features.
+        if self.coord_conv_enabled:
+            heatmap_head_input = torch.cat([d0, self._coord_channels(d0)], dim=1)
+        else:
+            heatmap_head_input = d0
         # Compute logits using heatmap head
-        heatmaps = self.heatmap_head(d0)  # (N, n_keypoints, nrows_out, ncols_out)
+        heatmaps = self.heatmap_head(heatmap_head_input)  # (N, n_keypoints, nrows_out, ncols_out)
         # Decode x-y coordinates from logits using soft-argmax
         # xy_px_out: x, y in heatmap pixel space, shape (N, n_keypoints, 2)
         # xy_conf: shape (N, n_keypoints)
