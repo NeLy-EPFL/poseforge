@@ -50,6 +50,8 @@ class Pose2p5DModel(nn.Module):
         decoder_spatial_dropout_p: float = 0.0,
         heatmap_n_hidden_layers: int = 0,
         heatmap_hidden_channels: int = 64,
+        xy_decode_mode: str = "local_window",
+        xy_decode_window: int = 11,
         excluded_keypoint_indices: tuple[int, ...] = (),
     ):
         """
@@ -94,6 +96,21 @@ class Pose2p5DModel(nn.Module):
             heatmap_hidden_channels (int): Width of the hidden layers in
                 the heatmap head (only used when heatmap_n_hidden_layers >
                 0). Must be a divisor multiple of groupnorm_n_groups.
+            xy_decode_mode (str): How the x-y heatmap is turned into a
+                coordinate. "local_window" (default) takes the argmax peak
+                and computes the soft-argmax (expectation) only within a
+                window of side ``xy_decode_window`` around it, so a spurious
+                secondary bump elsewhere cannot drag the estimate into the
+                empty space between two modes. "global" computes the
+                expectation over the entire heatmap (legacy behavior; kept
+                for A/B comparison and reproducing older results). This only
+                affects decoding at inference/eval time -- the training loss
+                is computed on the raw heatmap, not on the decoded point, so
+                switching modes does not require retraining.
+            xy_decode_window (int): Side length, in heatmap pixels, of the
+                window used when ``xy_decode_mode == "local_window"``. The
+                window spans peak +/- (xy_decode_window // 2). Must be a
+                positive integer. Ignored for "global".
             excluded_keypoint_indices (tuple[int, ...]): Indices (into the
                 full set of ``n_keypoints`` label keypoints) that the model
                 should NOT predict. The prediction heads are sized to emit
@@ -147,6 +164,8 @@ class Pose2p5DModel(nn.Module):
         self.decoder_spatial_dropout_p = decoder_spatial_dropout_p
         self.heatmap_n_hidden_layers = heatmap_n_hidden_layers
         self.heatmap_hidden_channels = heatmap_hidden_channels
+        self.xy_decode_mode = xy_decode_mode.lower()
+        self.xy_decode_window = xy_decode_window
 
         # Spatial dropout for decoder (drops entire channels)
         # nn.Dropout2d is a no-op when p=0.0 or in eval mode
@@ -157,6 +176,15 @@ class Pose2p5DModel(nn.Module):
             raise ValueError(
                 f"Invalid confidence_method: {confidence_method}. "
                 'Must be "entropy" or "peak".'
+            )
+        if self.xy_decode_mode not in ["local_window", "global"]:
+            raise ValueError(
+                f"Invalid xy_decode_mode: {xy_decode_mode}. "
+                'Must be "local_window" or "global".'
+            )
+        if self.xy_decode_mode == "local_window" and self.xy_decode_window < 1:
+            raise ValueError(
+                f"xy_decode_window must be a positive integer, got {xy_decode_window}."
             )
         if (
             (upsample_core_out_channels % groupnorm_n_groups) != 0
@@ -251,6 +279,8 @@ class Pose2p5DModel(nn.Module):
             decoder_spatial_dropout_p=architecture_config.decoder_spatial_dropout_p,
             heatmap_n_hidden_layers=architecture_config.heatmap_n_hidden_layers,
             heatmap_hidden_channels=architecture_config.heatmap_hidden_channels,
+            xy_decode_mode=architecture_config.xy_decode_mode,
+            xy_decode_window=architecture_config.xy_decode_window,
             excluded_keypoint_indices=architecture_config.excluded_keypoint_indices,
         )
 
@@ -431,13 +461,36 @@ class Pose2p5DModel(nn.Module):
         )
         probs = probs_flat.view(batch_size, n_keypoints, n_rows, n_cols)
 
-        # Extract the X-Y coordinates from the heatmaps. We do this by computing the
-        # expected values of the X and Y coordinates, i.e. summing over all possible
-        # coordinates weighted by their probabilities.
+        # Extract the X-Y coordinates from the heatmaps as the expected (x, y)
+        # position, i.e. the probability-weighted average of the grid coordinates.
         x_grid, y_grid = self._get_heatmap_xy_grid(heatmaps)
+
+        if self.xy_decode_mode == "local_window":
+            # Anchor the expectation at the argmax peak and only average within a
+            # +/- half-window box around it. A distant spurious bump then falls
+            # outside the window and cannot drag the estimate into the empty
+            # valley between two modes. Restricting-then-renormalizing the
+            # softmax over the window is exactly a softmax over that window, so
+            # this is a local soft-argmax (still sub-pixel within the window).
+            half = self.xy_decode_window // 2
+            peak_idx = heatmaps.reshape(batch_size, n_keypoints, -1).argmax(dim=-1)
+            peak_col = (peak_idx % n_cols).to(probs.dtype).view(
+                batch_size, n_keypoints, 1, 1
+            )
+            peak_row = (peak_idx // n_cols).to(probs.dtype).view(
+                batch_size, n_keypoints, 1, 1
+            )
+            within_window = ((x_grid - peak_col).abs() <= half) & (
+                (y_grid - peak_row).abs() <= half
+            )
+            masked = probs * within_window.to(probs.dtype)
+            masked = masked / masked.sum(dim=(2, 3), keepdim=True).clamp_min(1e-12)
+        else:  # "global": expectation over the entire heatmap (legacy behavior)
+            masked = probs
+
         # Dimensions 2 and 3 are rows and cols
-        x_expected = (probs * x_grid).sum(dim=(2, 3))  # (batch_size, n_keypoints)
-        y_expected = (probs * y_grid).sum(dim=(2, 3))  # (batch_size, n_keypoints)
+        x_expected = (masked * x_grid).sum(dim=(2, 3))  # (batch_size, n_keypoints)
+        y_expected = (masked * y_grid).sum(dim=(2, 3))  # (batch_size, n_keypoints)
         xy_expected = torch.stack([x_expected, y_expected], dim=-1)
 
         # Compute the confidence of the prediction (one scalar per keypoint per image)

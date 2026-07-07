@@ -49,6 +49,19 @@ class ModelArchitectureConfig(SerializableDataClass):
     # `heatmap_n_hidden_layers > 0`. Must be a multiple of `groupnorm_n_groups`
     # and >= `groupnorm_n_groups`.
     heatmap_hidden_channels: int = 64
+    # How the x-y heatmap is decoded into a coordinate.
+    # "local_window" (default): take the argmax peak and soft-argmax
+    #   (expectation) only within a `xy_decode_window`-sized window around it,
+    #   so a spurious secondary bump cannot drag the estimate into the empty
+    #   space between two modes.
+    # "global": expectation over the whole heatmap (legacy behavior; kept for
+    #   A/B comparison and reproducing older results).
+    # Decoding is inference/eval-only (the training loss is on the raw heatmap),
+    # so this can be changed without retraining.
+    xy_decode_mode: str = "local_window"
+    # Side length (in heatmap pixels) of the window used when
+    # `xy_decode_mode == "local_window"`. Spans peak +/- (xy_decode_window // 2).
+    xy_decode_window: int = 11
     # Indices (into the full set of `n_keypoints` label keypoints) that the
     # model should NOT predict. The prediction heads are sized to emit only
     # the remaining (kept) keypoints, in their original relative order, so the
