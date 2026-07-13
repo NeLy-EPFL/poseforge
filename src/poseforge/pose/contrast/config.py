@@ -9,6 +9,10 @@ class ModelArchitectureConfig(SerializableDataClass):
     projection_head_hidden_dim: int
     # Number of output dimensions in the contrastive projection head (3-layer MLP)
     projection_head_output_dim: int
+    # ResNet backbone for the feature extractor. One of "resnet18" or
+    # "resnet34". ResNet-34 is deeper (larger receptive field) but keeps the
+    # same channel layout as ResNet-18, so it is a drop-in for downstream heads.
+    backbone: str = "resnet18"
 
 
 @dataclass(frozen=True)
