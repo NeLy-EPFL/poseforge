@@ -9,7 +9,7 @@
 #SBATCH --partition=l40s
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --output /home/%u/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison.log
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/contrastive_variant_similarity_comparison/output_20260625_comparison_resnet34.log
 
 echo "Hello from $(hostname)"
 
@@ -34,10 +34,7 @@ echo "Comparison starting at $(date)"
 contrastive_root="/scratch/stimpfli/style_transfer/contrastive_pretraining"
 simsiam_root="/scratch/stimpfli/style_transfer/simsiam_pretraining"
 trial_dirs=(
-	"/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/simsiam_crop256_260622"
-	"/scratch/stimpfli/poseforge/style_transfer/simsiam_pretraining/simsiam_crop256_allvar_260622"
-	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/contr_crop256_260622"
-	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/contr_crop256_lowlr_260622"
+	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/trial_20260713_912_resnet34"
 	"/scratch/stimpfli/poseforge/style_transfer/contrastive_pretraining/tiledlowlr_nmf_20260622"
 )
 
@@ -70,7 +67,7 @@ eval_data_dirs=(
 # the cheap selection cap below, so still inexpensive).
 # selection_data_dirs=( "$atomic_batch_dir/BO_Gal4_fly5_trial002" )
 
-comparison_name="comparison_20260625"
+comparison_name="comparison_resnet34_20260715"
 output_dir="/scratch/stimpfli/poseforge/style_transfer/variant_similarity_comparison/$comparison_name"
 
 # No --crop-size => the encoder sees the full --image-size frame (full images).
