@@ -3,31 +3,63 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 from torchvision import models
-from torchvision.models import ResNet18_Weights
+from torchvision.models import ResNet18_Weights, ResNet34_Weights
+from torchvision.models._api import WeightsEnum
+
+
+# Supported ResNet backbones, mapping the string used in configs/CLI to the
+# torchvision constructor and its ImageNet weights enum. Only BasicBlock
+# variants (resnet18, resnet34) are included: they share the exact same
+# per-stage channel layout (64/64/128/256/512) and feature-map sizes, so a
+# ResNetFeatureExtractor and every downstream head that consumes its
+# intermediates is agnostic to which of the two is used. ResNet-34 is the
+# deeper option and therefore has the larger receptive field.
+_BACKBONES: dict[str, tuple] = {
+    "resnet18": (models.resnet18, ResNet18_Weights),
+    "resnet34": (models.resnet34, ResNet34_Weights),
+}
 
 
 class ResNetFeatureExtractor(nn.Module):
-    """Feature extractor using a ResNet-18 backbone."""
+    """Feature extractor using a ResNet (18 or 34) backbone."""
 
-    def __init__(self, weights: str | Path | ResNet18_Weights | None = "IMAGENET1K_V1"):
+    def __init__(
+        self,
+        weights: str | Path | WeightsEnum | None = "IMAGENET1K_V1",
+        backbone: str = "resnet18",
+    ):
         """
         Args:
-            weights (str | Path | ResNet18_Weights | None): Weights to use
+            weights (str | Path | WeightsEnum | None): Weights to use
                 for the backbone. In practice, use "IMAGENET1K_V1" for
                 off-the-shelf ImageNet weights from torchvision, or a path
                 to a .pth file with weights for this nn.Module (e.g. from
-                pretraining). If None, start from scratch.
+                pretraining). If None, start from scratch. When loading
+                pretrained weights for this nn.Module from a path, ``backbone``
+                must match the backbone those weights were trained with.
+            backbone (str): Which ResNet variant to use as the backbone. One
+                of "resnet18" (default) or "resnet34". ResNet-34 is deeper and
+                has a larger receptive field, while keeping the same channel
+                layout and feature-map sizes as ResNet-18, so it is a drop-in
+                replacement everywhere the intermediates are consumed.
         """
         super(ResNetFeatureExtractor, self).__init__()
 
+        if backbone not in _BACKBONES:
+            raise ValueError(
+                f"Invalid backbone {backbone!r}. Must be one of "
+                f"{sorted(_BACKBONES)}."
+            )
+        self.backbone = backbone
+        backbone_fn, weights_enum = _BACKBONES[backbone]
+
         # Figure out which weights to use
         if weights == "IMAGENET1K_V1":  # only option as of 2025-09
-            weights = ResNet18_Weights.IMAGENET1K_V1
+            weights = weights_enum.IMAGENET1K_V1
 
-
-        if isinstance(weights, ResNet18_Weights):
+        if isinstance(weights, WeightsEnum):
             # Use an off-the-shelf pretrained ResNet backbone from torchvision.models
-            backbone_weights = weights  # used to initialize models.resnet18
+            backbone_weights = weights  # used to initialize the torchvision backbone
             my_module_weights = None  # load weights for this very nn.Module
         elif isinstance(weights, (str, Path)):
             # Instead of using off-the-shelf weights for the ResNet backbone, this very
@@ -45,13 +77,14 @@ class ResNetFeatureExtractor(nn.Module):
         else:
             raise ValueError(f"Invalid weights argument: {weights}")
 
-        # Initialize ResNet-18 backbone
-        self.resnet = models.resnet18(weights=backbone_weights)
+        # Initialize the ResNet backbone
+        self.resnet = backbone_fn(weights=backbone_weights)
 
         # Find out the output size of the ResNet feature extractor
         # input_size will be detected dynamically on first forward pass
         self.input_size = None  # will be set during first forward pass
-        self.output_channels = 512  # ResNet-18 layer4 output channels
+        # layer4 output channels == fc.in_features (512 for BasicBlock resnets)
+        self.output_channels = self.resnet.fc.in_features
 
         # Load weights for this very nn.Module if provided
         if my_module_weights is not None:

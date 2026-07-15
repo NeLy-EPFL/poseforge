@@ -47,7 +47,7 @@ class ContrastivePretrainingModel(nn.Module):
             )
             logging.info(f"Loaded model architecture config from {architecture_config}")
         # Initialize feature extractor (WITHOUT WEIGHTS at this step!)
-        feature_extractor = ResNetFeatureExtractor()
+        feature_extractor = ResNetFeatureExtractor(backbone=architecture_config.backbone)
 
         # Initialize model from config (WITHOUT WEIGHTS at this step!)
         obj = cls(
@@ -87,10 +87,12 @@ class ContrastivePretrainingModel(nn.Module):
             )
             return
 
-        # Otherwise, init feature extractor first
+        # Otherwise, init feature extractor first, keeping the backbone that was
+        # already selected by create_architecture_from_config.
         self.feature_extractor = ResNetFeatureExtractor(
             # Path, str, or "IMAGENET1K_V1"
-            weights=weights_config.feature_extractor_weights
+            weights=weights_config.feature_extractor_weights,
+            backbone=self.feature_extractor.backbone,
         )
         logging.info("Set up feature extractor from config")
 
