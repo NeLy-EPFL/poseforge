@@ -45,13 +45,24 @@ conda run -n poseforge-clone python \
     --n_workers "${N_WORKERS}"
 
 echo "Step 2: Detecting flipped flies (CUDA, batched)"
-conda run -n poseforge-clone python \
-    src/poseforge/spotlight/scripts/detect_flipped_flies.py \
-    "${ALIGNED_DIR}" \
-    "${GLOB_PATTERN}" \
-    --config_path "${CONFIG_PATH}" \
-    --device cuda \
-    --n_workers "${N_WORKERS}"
+# Skip trials that already have flip predictions; run detection only on the
+# rest. Pass FORCE_FLIP=1 to re-run every trial regardless.
+for trial_dir in "${ALIGNED_DIR}"/${GLOB_PATTERN}/; do
+    [ -d "${trial_dir}" ] || continue
+    trial_name="$(basename "${trial_dir}")"
+    if [ "${FORCE_FLIP:-0}" != "1" ] && [ -f "${trial_dir}predicted_flip_labels.csv" ]; then
+        echo "  Skipping ${trial_name} (predicted_flip_labels.csv exists)"
+        continue
+    fi
+    echo "  Detecting flips: ${trial_name}"
+    conda run -n poseforge-clone python \
+        src/poseforge/spotlight/scripts/detect_flipped_flies.py \
+        "${ALIGNED_DIR}" \
+        "${trial_name}" \
+        --config_path "${CONFIG_PATH}" \
+        --device cuda \
+        --n_workers "${N_WORKERS}"
+done
 
 echo "Step 3: Running body segmentation inference (CUDA, batched)"
 conda run -n poseforge-clone python \
