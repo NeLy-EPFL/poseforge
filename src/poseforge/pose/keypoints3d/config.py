@@ -10,6 +10,13 @@ from poseforge.util import SerializableDataClass
 class ModelArchitectureConfig(SerializableDataClass):
     # Number of body keypoints to detect
     n_keypoints: int = 32
+    # ResNet backbone for the feature extractor. "resnet18" (default) or
+    # "resnet34". Both are BasicBlock ResNets with an identical channel layout
+    # (64/64/128/256/512) and feature-map sizes, so the decoder and heads are
+    # unchanged; resnet34 is deeper (~2x the receptive field) for a larger
+    # effective field of view on big inputs. Must match the backbone the
+    # contrastively pretrained feature-extractor weights were trained with.
+    backbone: str = "resnet18"
     # Number of bins to quantize depth values (distances from camera) into
     depth_n_bins: int = 64
     # Minimum depth (distance from camera) in mm

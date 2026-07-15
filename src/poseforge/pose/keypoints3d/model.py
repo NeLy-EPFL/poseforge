@@ -309,7 +309,9 @@ class Pose2p5DModel(nn.Module):
             )
             logging.info(f"Loaded model architecture config from {architecture_config}")
         # Initialize feature extractor (WITHOUT WEIGHTS at this step!)
-        feature_extractor = ResNetFeatureExtractor()
+        feature_extractor = ResNetFeatureExtractor(
+            backbone=architecture_config.backbone
+        )
 
         # Initialize model from config (WITHOUT WEIGHTS at this step!)
         obj = cls(
@@ -371,10 +373,13 @@ class Pose2p5DModel(nn.Module):
             )
             return
 
-        # Otherwise, init feature extractor first
+        # Otherwise, init feature extractor first. Preserve the backbone chosen
+        # at architecture-creation time so pretrained resnet34 weights load into
+        # a resnet34 (not the default resnet18).
         self.feature_extractor = ResNetFeatureExtractor(
             # Path, str, or "IMAGENET1K_V1"
-            weights=weights_config.feature_extractor_weights
+            weights=weights_config.feature_extractor_weights,
+            backbone=self.feature_extractor.backbone,
         )
         logging.info("Set up feature extractor from config")
 
