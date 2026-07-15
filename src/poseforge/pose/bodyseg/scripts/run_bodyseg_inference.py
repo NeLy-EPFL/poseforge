@@ -148,10 +148,16 @@ def run_bodyseg_inference_generic(
         if process_batch_func is not None:
             data_items = process_batch_func(pipeline, batch)
         else:
-            pred_dict = pipeline.inference(batch["frames"])
+            # Run inference with the batch already on the GPU so the (large,
+            # full-resolution, float) logits stay in VRAM. Reducing to a uint8
+            # segmap/confidence on the GPU means we only copy ~13 MB/batch back
+            # to the host instead of the full ~1 GB logits tensor, and the
+            # argmax runs on the GPU instead of the CPU.
+            frames = batch["frames"].to("cuda", non_blocking=True)
+            pred_dict = pipeline.inference(frames)
             logits = pred_dict["logits"]
-            pred_seg = torch.argmax(logits, dim=1).to(torch.uint8).detach().cpu()
-            confidence = (pred_dict["confidence"] * 100).to(torch.uint8).detach().cpu()
+            pred_seg = torch.argmax(logits, dim=1).to(torch.uint8).cpu()
+            confidence = (pred_dict["confidence"] * 100).to(torch.uint8).cpu()
             data_items = [(pred_seg[i, :, :], confidence[i, :, :]) for i in range(logits.shape[0])]
 
         for i in range(len(data_items)):

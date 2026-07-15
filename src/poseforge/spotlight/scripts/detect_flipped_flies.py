@@ -103,6 +103,12 @@ def start():
         default=None,
         help="DataLoader workers. Defaults to config common.n_workers or 8.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run detection even for trials that already have "
+        "predicted_flip_labels.csv (by default those are skipped).",
+    )
     args = parser.parse_args()
 
     return args
@@ -156,6 +162,12 @@ if __name__ == "__main__":
     for trial in sorted(args.aligned_data_dir.glob(args.glob_pattern)):
         if not trial.is_dir():
             continue
+
+        labels_csv = trial / "predicted_flip_labels.csv"
+        if labels_csv.exists() and not args.force:
+            print(f"Skipping trial (already done): {trial.name} — use --force to redo.")
+            continue
+
         print(f"Processing trial: {trial.name}")
 
         all_images = sorted(list(trial.glob("all/*.jpg")))
@@ -169,7 +181,7 @@ if __name__ == "__main__":
         df = pd.DataFrame(
             {"image": [x.name for x in all_images], "predicted_label": labels_all}
         )
-        df.to_csv(trial / "predicted_flip_labels.csv", index=False)
+        df.to_csv(labels_csv, index=False)
 
         if link_data:
             # Make one folder per label and symlink images into it. Downstream
