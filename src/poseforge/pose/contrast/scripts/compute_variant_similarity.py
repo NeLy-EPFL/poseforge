@@ -165,6 +165,12 @@ def _read_trial_metadata(trial_dir: str | Path) -> dict:
         "train_crop_size": None,
         "info_nce_temperature": None,
         "adam_lr": None,
+        # ResNet backbone the encoder was trained with. Must be passed to
+        # ResNetFeatureExtractor when loading the checkpoint, or the state_dict
+        # won't match (e.g. a resnet34 run has extra BasicBlocks a resnet18
+        # module lacks). Defaults to resnet18 when the config is absent, which
+        # matches ResNetFeatureExtractor's own default for older trials.
+        "backbone": "resnet18",
     }
 
     def _safe_load(name: str):
@@ -191,6 +197,10 @@ def _read_trial_metadata(trial_dir: str | Path) -> dict:
     optimizer_cfg = _safe_load("optimizer_config.yaml")
     if optimizer_cfg:
         meta["adam_lr"] = optimizer_cfg.get("adam_lr")
+
+    arch_cfg = _safe_load("model_architecture_config.yaml")
+    if arch_cfg and arch_cfg.get("backbone") is not None:
+        meta["backbone"] = arch_cfg.get("backbone")
 
     # Heuristic: the contrastive pipeline writes loss_config.yaml (InfoNCE
     # temperature); the SimSiam pipeline does not but still writes the other
@@ -294,6 +304,7 @@ def _evaluate_feature_extractor(
     device: str,
     use_float16: bool,
     max_batches: int | None,
+    backbone: str = "resnet18",
 ) -> dict:
     """Run one feature extractor over the loader and accumulate the metrics.
 
@@ -311,7 +322,12 @@ def _evaluate_feature_extractor(
     """
     # Pass weights through as-is: a path str/Path loads a checkpoint,
     # "IMAGENET1K_V1" uses the pretrained backbone, None is random-init.
-    feature_extractor = ResNetFeatureExtractor(weights=feature_extractor_weights)
+    # ``backbone`` must match the architecture the checkpoint was trained with
+    # (read from the trial's model_architecture_config.yaml); a mismatch fails
+    # the state_dict load.
+    feature_extractor = ResNetFeatureExtractor(
+        weights=feature_extractor_weights, backbone=backbone
+    )
     feature_extractor.to(device)
     feature_extractor.eval()
     device_type = (
@@ -714,6 +730,7 @@ def compute_variant_similarity(
     n_workers: int | None = 4,
     device: str = "cuda",
     use_float16: bool = True,
+    backbone: str = "resnet18",
 ) -> None:
     """Compute the within/between variant-similarity heatmaps and invariance
     ratio for a single checkpoint.
@@ -738,6 +755,11 @@ def compute_variant_similarity(
         n_workers: Dataloader workers.
         device: "cuda" or "cpu".
         use_float16: Run the encoder in mixed precision.
+        backbone: ResNet variant the checkpoint was trained with, one of
+            "resnet18" (default) or "resnet34". Must match, or loading the
+            state_dict fails. ``compare`` reads this automatically from each
+            trial's config; here it is explicit since only a raw weights path
+            is given.
     """
     del crop_border_exclude  # parity with the training config; not used here
 
@@ -761,6 +783,7 @@ def compute_variant_similarity(
         device=device,
         use_float16=use_float16,
         max_batches=max_batches,
+        backbone=backbone,
     )
 
     within_heatmap_path, between_heatmap_path, summary_path = _write_checkpoint_outputs(
@@ -996,6 +1019,7 @@ def compare_trials(
                     device=device,
                     use_float16=use_float16,
                     max_batches=sel_cap,
+                    backbone=meta["backbone"],
                 )
                 per_checkpoint.append({**candidate, **sel})
                 logging.info(
@@ -1050,6 +1074,7 @@ def compare_trials(
                     "name": name,
                     "weights": best["path"],
                     "weights_label": str(best["path"]),
+                    "backbone": meta["backbone"],
                     "is_baseline": False,
                     # Reuse this eval as the comparison score only when it IS the
                     # comparison eval (same data + same cap); else re-score later.
@@ -1108,6 +1133,10 @@ def compare_trials(
                 "name": spec["name"],
                 "weights": spec["weights"],
                 "weights_label": f"{spec['stage']} (untrained baseline)",
+                # Baselines load no checkpoint state_dict (random-init or
+                # torchvision ImageNet weights), so the backbone is just the
+                # reference architecture; resnet18 matches the historic default.
+                "backbone": "resnet18",
                 "is_baseline": True,
                 "comp_metrics": None,
             }
@@ -1130,6 +1159,7 @@ def compare_trials(
                     device=device,
                     use_float16=use_float16,
                     max_batches=max_batches,
+                    backbone=fin["backbone"],
                 )
             row["invariance_ratio"] = comp["invariance_ratio"]
             row["within_frame_sim"] = comp["within_frame_sim"]
