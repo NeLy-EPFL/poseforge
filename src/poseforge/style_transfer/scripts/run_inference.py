@@ -5,8 +5,67 @@ from tqdm import tqdm
 from pathlib import Path
 from pvio.io import read_frames_from_video
 
-from poseforge.style_transfer import get_inference_pipeline, process_simulation
+from poseforge.style_transfer import (
+    get_inference_pipeline,
+    parse_hyperparameters_from_checkpoint_path,
+    process_simulation,
+)
 from poseforge.util.sys import clear_memory_cache
+
+
+def resolve_trained_resolution(
+    checkpoint_path: Path, requested_image_side_length: int
+) -> tuple[int, dict | None]:
+    """Determine the inference resolution and preprocessing for a checkpoint.
+
+    The non-tiled inference path historically hard-coded the input resolution to
+    ``requested_image_side_length`` (default 256) and a fixed
+    ``resize_and_crop`` preprocessing, ignoring the resolution the CUT model was
+    actually trained at. A model trained at a higher resolution would therefore
+    still be run at 256.
+
+    This helper mirrors the tiled inference script: it reads ``crop_size`` /
+    ``load_size`` / ``preprocess`` from the trained model's ``train_options.json``
+    (via :func:`parse_hyperparameters_from_checkpoint_path`) and uses the trained
+    ``crop_size`` as the input side length. If ``train_options.json`` is absent it
+    falls back to ``requested_image_side_length`` and the legacy preprocessing.
+
+    A warning is emitted if the user-supplied ``requested_image_side_length``
+    conflicts with the resolution the model was trained at.
+
+    Returns:
+        A tuple ``(image_side_length, preprocess_opt)`` where ``preprocess_opt``
+        is either a dict suitable for ``CUTPreprocessOptions(**preprocess_opt)``
+        or ``None`` to use the legacy default preprocessing.
+    """
+    try:
+        trained_hparams = parse_hyperparameters_from_checkpoint_path(checkpoint_path)
+    except FileNotFoundError:
+        logging.warning(
+            "Could not find train_options.json next to checkpoint %s; falling "
+            "back to the requested input resolution of %d px (the model's "
+            "trained crop_size is unknown).",
+            checkpoint_path,
+            requested_image_side_length,
+        )
+        return requested_image_side_length, None
+
+    trained_side_length = trained_hparams["image_side_length"]
+    preprocess_opt = trained_hparams.get("preprocess_opt")
+
+    if trained_side_length != requested_image_side_length:
+        logging.warning(
+            "Requested image_side_length=%d but the model was trained at "
+            "crop_size=%d. Using the trained resolution %d px so the generator "
+            "runs at the resolution it was trained for. Pass "
+            "image_side_length=%d to silence this warning.",
+            requested_image_side_length,
+            trained_side_length,
+            trained_side_length,
+            trained_side_length,
+        )
+
+    return trained_side_length, preprocess_opt
 
 
 def ensure_gpu_availability() -> None:
@@ -62,7 +121,12 @@ def run_inference_cli(
             architecture used during training.
         training_batch_size (int): Batch size used during training.
         lambGAN (float): Weight for the GAN loss during training.
-        image_side_length (int): Side length (in pixels) of input images.
+        image_side_length (int): Requested side length (in pixels) of input
+            images. This is only used as a fallback: if the model's
+            train_options.json is found next to the checkpoint, the resolution
+            (crop_size) and preprocessing the model was actually trained at are
+            used instead, and a warning is logged if this value disagrees with
+            the trained crop_size.
         input_video_filename (str): Filename of the input video within each
             simulation directory. For example,
             "processed_nmf_sim_render_colorcode_0.mp4", which is the
@@ -102,14 +166,30 @@ def run_inference_cli(
     if len(all_simulation_paths) == 0:
         return
 
-    # Set up inference pipeline
+    # Set up inference pipeline. Honor the resolution / preprocessing the CUT
+    # model was actually trained at (parsed from its train_options.json) instead
+    # of hard-coding 256, so a model trained at higher resolution runs at that
+    # resolution. Falls back to the requested image_side_length if unavailable.
     print(f"Getting inference pipeline for model at {checkpoint_path}...")
+    resolved_image_side_length, preprocess_opt = resolve_trained_resolution(
+        checkpoint_path, image_side_length
+    )
+    logging.info(
+        "Running style-transfer inference at %d px (preprocess: %s).",
+        resolved_image_side_length,
+        (preprocess_opt or {}).get("preprocess", "resize_and_crop (default)"),
+    )
+    print(
+        f"Style-transfer inference resolution: {resolved_image_side_length} px "
+        f"(input images are resized/cropped to this before the generator)."
+    )
     model_hparams = {
         "ngf": ngf,
         "netG": netG,
         "batsize": training_batch_size,
         "lambGAN": lambGAN,
-        "image_side_length": image_side_length,
+        "image_side_length": resolved_image_side_length,
+        "preprocess_opt": preprocess_opt,
     }
     inference_pipeline = get_inference_pipeline(checkpoint_path, model_hparams, device)
     if inference_batch_size is None:
