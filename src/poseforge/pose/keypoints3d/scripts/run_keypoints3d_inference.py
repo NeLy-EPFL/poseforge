@@ -97,9 +97,32 @@ def run_keypoints3d_inference(
     print("========== Model Summary ==========")
     summary(pipeline.model, input_size=(3, *inference_image_size), device="cuda")
 
-    # Set up camera mapper
+    # Set up camera mapper.
+    #
+    # IMPORTANT: the mapper's intrinsics (focal length and principal point)
+    # scale linearly with the image/sensor size it is built with, so it MUST be
+    # built at the pixel space the predictions actually live in. The model
+    # consumes images resized to `inference_image_size` and emits `pred_xy` in
+    # that same pixel space. Therefore the mapper is built at
+    # `inference_image_size`, NOT at `camera_rendering_size`.
+    #
+    # `camera_rendering_size` is the resolution at which the *training* data was
+    # rendered in simulation; it is NOT the space the predictions are in. Using
+    # it here would scale the in-plane (x, y) coordinates by
+    # inference_image_size / camera_rendering_size while leaving depth exact,
+    # injecting an anisotropic distortion that corrupts downstream IK joint
+    # angles. See tests/test_camera_unprojection.py.
+    if tuple(camera_rendering_size) != tuple(inference_image_size):
+        print(
+            "Note: camera_rendering_size "
+            f"{tuple(camera_rendering_size)} differs from inference_image_size "
+            f"{tuple(inference_image_size)}. The camera mapper is built at "
+            "inference_image_size because pred_xy is in inference_image_size "
+            "pixels; camera_rendering_size (the simulation render size) is "
+            "intentionally not used for unprojection."
+        )
     cam_mapper = CameraToWorldMapper(
-        camera_pos, camera_fov_deg, camera_rendering_size, camera_rotation_euler
+        camera_pos, camera_fov_deg, inference_image_size, camera_rotation_euler
     )
 
     # Run inference

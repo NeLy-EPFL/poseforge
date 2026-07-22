@@ -62,14 +62,37 @@ def predict_keypoints3d(
     logger.info("Creating 3D keypoints inference pipeline")
     pipeline = keypoints3d.Pose2p5DPipeline(model, device=device, use_float16=True)
 
-    # Set up camera mapper
+    # Set up camera mapper.
+    #
+    # IMPORTANT: the mapper's intrinsics (focal length and principal point)
+    # scale linearly with the image/sensor size it is built with, so it MUST be
+    # built at the pixel space the predictions actually live in. The model
+    # consumes images resized to `working_size` and emits `pred_xy` in that same
+    # pixel space, so the mapper is built at `(working_size, working_size)`, NOT
+    # at `camera_rendering_size`. `camera_rendering_size` is the simulation
+    # render resolution of the training data and is NOT the prediction space;
+    # using it would scale in-plane (x, y) by working_size / camera_rendering_size
+    # while leaving depth exact, an anisotropic distortion that corrupts
+    # downstream IK joint angles. See tests/test_camera_unprojection.py.
+    working_size = keypoints3d_model_config["working_size"]
+    if tuple(camera_rendering_size) != (working_size, working_size):
+        logger.info(
+            "camera_rendering_size {} differs from working_size {}; building the "
+            "camera mapper at working_size because pred_xy is in working_size "
+            "pixels (camera_rendering_size is the simulation render size and is "
+            "intentionally not used for unprojection).",
+            tuple(camera_rendering_size),
+            (working_size, working_size),
+        )
     cam_mapper = CameraToWorldMapper(
-        camera_pos, camera_fov_deg, camera_rendering_size, camera_rotation_euler
+        camera_pos,
+        camera_fov_deg,
+        (working_size, working_size),
+        camera_rotation_euler,
     )
 
     # Create video loader
     logger.info("Creating video loader for 3D keypoints prediction")
-    working_size = keypoints3d_model_config["working_size"]
     video_loader = SimpleVideoCollectionLoader(
         [aligned_behavior_video_path],
         transform=transforms.Resize((working_size, working_size)),
