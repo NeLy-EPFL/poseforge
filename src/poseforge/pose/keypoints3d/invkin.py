@@ -11,12 +11,74 @@ import poseforge.neuromechfly.constants as nmf_constants
 from poseforge.pose.keypoints3d.visualizer import visualize_leg_segment_lengths
 
 
+def _interpolate_nan_frames(
+    data_block: np.ndarray,
+) -> tuple[np.ndarray, int, int]:
+    """Linearly interpolate (and edge-fill) NaN values along the time axis.
+
+    seqikpy's IK solver has no NaN handling: a single NaN/occluded keypoint that
+    reaches the solver propagates to NaN joint angles, which then trips the
+    ``assert not np.isnan(...)`` at IK save time and aborts the whole recording
+    (issue #48, finding I3-D). Rather than aborting, we fill short occlusion gaps
+    per keypoint/coordinate so the solver always receives finite input.
+
+    The fill is per (keypoint, coordinate) time series:
+      * interior NaNs are linearly interpolated from the nearest finite
+        neighbours on each side, and
+      * leading/trailing NaNs are filled with the nearest finite value
+        (forward/backward fill at the edges).
+
+    Args:
+        data_block: array of shape (n_frames, n_keypoints, 3). Modified on a copy.
+
+    Returns:
+        (filled, n_nan_values, n_affected_frames): the filled array (a copy), the
+        number of NaN scalar values present before filling, and the number of
+        frames that had at least one NaN coordinate before filling. If an entire
+        time series for a (keypoint, coordinate) is NaN it cannot be filled and
+        remains NaN; the caller is responsible for surfacing that.
+    """
+    filled = data_block.astype(np.float32, copy=True)
+    n_frames = filled.shape[0]
+    nan_mask = np.isnan(filled)
+    n_nan_values = int(nan_mask.sum())
+    n_affected_frames = int(nan_mask.any(axis=(1, 2)).sum())
+    if n_nan_values == 0:
+        return filled, 0, 0
+
+    frame_idx = np.arange(n_frames)
+    # Flatten (keypoint, coord) into independent time series.
+    flat = filled.reshape(n_frames, -1)
+    flat_nan = nan_mask.reshape(n_frames, -1)
+    for series_idx in range(flat.shape[1]):
+        col_nan = flat_nan[:, series_idx]
+        if not col_nan.any():
+            continue
+        valid = ~col_nan
+        if not valid.any():
+            # Entire series is NaN; nothing to interpolate from. Leave as NaN.
+            continue
+        # np.interp clamps to the first/last valid value at the edges, which
+        # gives us forward/backward fill for leading/trailing NaNs for free.
+        flat[col_nan, series_idx] = np.interp(
+            frame_idx[col_nan], frame_idx[valid], flat[valid, series_idx]
+        )
+    return filled, n_nan_values, n_affected_frames
+
+
 def _world_xyz_to_seqikpy_format(
     world_xyz: np.ndarray,
     keypoint_names_canonical: list[str] | np.ndarray,
     max_n_frames: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Convert raw 3D keypoint positions to format expected by SeqIKPy."""
+    """Convert raw 3D keypoint positions to format expected by SeqIKPy.
+
+    Occluded/NaN keypoints are not fatal: NaN gaps are interpolated per leg over
+    time and a warning is logged with the count and location (issue #48, finding
+    I3-D). Only a keypoint that is NaN for *every* frame of a recording is left
+    as NaN and aborts (it cannot be recovered and would otherwise silently corrupt
+    the whole leg chain).
+    """
     n_frames, n_keypoints, _ = world_xyz.shape
     if max_n_frames is not None:
         n_frames = min(n_frames, max_n_frames)
@@ -34,7 +96,30 @@ def _world_xyz_to_seqikpy_format(
             poseforge_key = f"{leg}{nmf_constants.keypoint_name_lookup_nmf_to_canonical[keypoint_name]}"
             idx = keypoint_names_canonical.index(poseforge_key)
             data_block[:, keypoint_idx, :] = world_xyz[:n_frames, idx, :]
-        assert not np.isnan(data_block).any()
+
+        # Gracefully handle NaN/occluded keypoints instead of aborting the whole
+        # recording on a single NaN (was: `assert not np.isnan(data_block).any()`).
+        data_block, n_nan_values, n_affected_frames = _interpolate_nan_frames(
+            data_block
+        )
+        if n_nan_values > 0:
+            logger.warning(
+                f"Leg {leg}: found {n_nan_values} NaN coordinate value(s) "
+                f"(occluded keypoints) in {n_affected_frames}/{n_frames} frames; "
+                f"linearly interpolated over time before inverse kinematics."
+            )
+        # Any remaining NaN means a keypoint was occluded for the entire recording
+        # and could not be recovered. This would corrupt the IK chain, so fail loud
+        # and clear (per-leg) rather than producing silently wrong angles.
+        if np.isnan(data_block).any():
+            fully_nan = np.isnan(data_block).all(axis=0)  # (n_keypoints, 3)
+            bad_kp_idxs = sorted({int(i) for i, _ in zip(*np.where(fully_nan))})
+            bad_kps = [nmf_constants.leg_keypoints_nmf[i] for i in bad_kp_idxs]
+            raise ValueError(
+                f"Leg {leg}: keypoint(s) {bad_kps} are NaN for the entire "
+                f"recording and cannot be interpolated. Cannot run inverse "
+                f"kinematics for this leg."
+            )
         pose_data_dict[f"{leg}_leg"] = data_block
 
     return pose_data_dict
@@ -186,12 +271,86 @@ def run_seqikpy(
     return joint_angles, forward_kinematics
 
 
+def detect_large_joint_angle_jumps(
+    joint_angles: dict[str, np.ndarray],
+    threshold_rad: float = np.deg2rad(45.0),
+) -> dict[str, np.ndarray]:
+    """Detect large frame-to-frame jumps in per-DOF joint-angle time series.
+
+    seqikpy seeds the IK solve at frame ``t`` with the solution from frame
+    ``t-1``, so a single bad solve can propagate; and with
+    ``parallel_over_time=True`` each time chunk is re-seeded from the static
+    initial angles and chunks are linearly blended, which can introduce wrong
+    transients at chunk boundaries (issue #48, finding I3-C).
+
+    This is a *post-hoc* detector: it does not fix the angles, it flags frames
+    whose absolute change from the previous frame exceeds ``threshold_rad`` so a
+    caller can log / inspect them. It is intentionally pure (dict of numpy arrays
+    in, dict of boolean masks out) so it is easy to test and reuse.
+
+    Args:
+        joint_angles: mapping of ``Angle_{leg}_{dof}`` -> 1D array of radians.
+        threshold_rad: absolute per-frame jump (radians) above which a frame is
+            flagged. Defaults to 45 degrees.
+
+    Returns:
+        Mapping from each input key to a boolean mask of shape (n_frames,) that is
+        ``True`` at frame ``t`` when ``|angle[t] - angle[t-1]| > threshold_rad``.
+        Frame 0 is always ``False`` (no previous frame). Keys whose values are not
+        1D arrays are skipped.
+    """
+    jumps: dict[str, np.ndarray] = {}
+    for key, series in joint_angles.items():
+        series = np.asarray(series)
+        if series.ndim != 1 or series.shape[0] < 2:
+            continue
+        diff = np.abs(np.diff(series))
+        mask = np.zeros(series.shape[0], dtype=bool)
+        mask[1:] = diff > threshold_rad
+        jumps[key] = mask
+    return jumps
+
+
+def log_large_joint_angle_jumps(
+    joint_angles: dict[str, np.ndarray],
+    threshold_rad: float = np.deg2rad(45.0),
+) -> int:
+    """Run :func:`detect_large_joint_angle_jumps` and log a warning summary.
+
+    Returns the total number of flagged (DOF, frame) pairs. Logs nothing beyond a
+    debug line when no jumps are found.
+    """
+    jumps = detect_large_joint_angle_jumps(joint_angles, threshold_rad=threshold_rad)
+    total = int(sum(int(mask.sum()) for mask in jumps.values()))
+    if total == 0:
+        logger.debug(
+            f"No frame-to-frame joint-angle jumps above "
+            f"{np.rad2deg(threshold_rad):.0f} deg detected."
+        )
+        return 0
+
+    # Summarise per DOF (only those with at least one jump), most jumps first.
+    per_dof = {k: int(m.sum()) for k, m in jumps.items() if m.any()}
+    summary = ", ".join(
+        f"{k}:{n}" for k, n in sorted(per_dof.items(), key=lambda kv: -kv[1])
+    )
+    logger.warning(
+        f"Detected {total} large frame-to-frame joint-angle jump(s) "
+        f"(>{np.rad2deg(threshold_rad):.0f} deg). These can indicate a bad IK "
+        f"solve propagating or a chunk-boundary transient (parallel_over_time). "
+        f"Per-DOF counts: {summary}. For correctness-critical runs, consider "
+        f"re-running with parallel_over_time=False (or n_workers=1)."
+    )
+    return total
+
+
 def align_fwdkin_xyz_to_rawpred_xyz(
     keypoints_pos_raw: np.ndarray,
     keypoints_pos_constrained: np.ndarray,
     keypoints_order: list[str],
     legs: list[str],
     leg_keypoints_canonical: list[str],
+    keypoints_order_constrained: list[str] | None = None,
 ) -> np.ndarray:
     """Align constrained poses to raw poses by shifting each leg's kinematic chain.
 
@@ -199,52 +358,84 @@ def align_fwdkin_xyz_to_rawpred_xyz(
     we want to shift each leg back so that the first keypoint (ThC/Coxa) has the same 3D
     position as in the raw poses.
 
+    The raw and constrained arrays may use *different* keypoint orderings: the raw
+    array is ordered by the inference HDF5's ``keypoints`` attribute, while the
+    constrained array is produced by :func:`fwdkin_world_xyz_append_antennae`, which
+    returns its own ordering. Previously this function indexed *both* arrays with the
+    raw ``keypoints_order``, which silently produced wrong results if the two orders
+    ever differed (issue #48, finding I3-E). We now index each array with its own
+    order and validate the constrained order.
+
     Args:
         keypoints_pos_raw: Raw keypoint positions (n_frames, n_keypoints, 3)
         keypoints_pos_constrained: Constrained keypoint positions (n_frames, n_keypoints, 3)
-        keypoints_order: List of keypoint names
+        keypoints_order: List of keypoint names for ``keypoints_pos_raw``
         legs: List of leg names ['LF', 'LM', 'LH', 'RF', 'RM', 'RH']
         leg_keypoints_canonical: List of keypoint names per leg ['ThC', 'CTr', 'FTi', 'TiTa', 'Claw']
+        keypoints_order_constrained: List of keypoint names for
+            ``keypoints_pos_constrained``. Defaults to ``keypoints_order`` for
+            backwards compatibility (i.e. the caller asserts both arrays share an
+            ordering).
 
     Returns:
         keypoints_pos_constrained_aligned: Aligned constrained poses
     """
+    if keypoints_order_constrained is None:
+        keypoints_order_constrained = keypoints_order
+
     keypoints_pos_constrained_aligned = keypoints_pos_constrained.copy()
     n_frames = keypoints_pos_raw.shape[0]
 
     # For each leg, align the constrained pose to the raw pose
     for leg in legs:
-        # Get the first keypoint (ThC/Coxa) for this leg
+        # Get the first keypoint (ThC/Coxa) for this leg, looked up separately in
+        # each array's own keypoint ordering.
         first_keypoint_name = f"{leg}{leg_keypoints_canonical[0]}"  # e.g., "LFThC"
 
         try:
-            first_keypoint_idx = keypoints_order.index(first_keypoint_name)
+            first_keypoint_idx_raw = keypoints_order.index(first_keypoint_name)
         except ValueError:
             logger.warning(
-                f"Keypoint {first_keypoint_name} not found in keypoints_order"
+                f"Keypoint {first_keypoint_name} not found in raw keypoints_order"
+            )
+            continue
+        try:
+            first_keypoint_idx_constr = keypoints_order_constrained.index(
+                first_keypoint_name
+            )
+        except ValueError:
+            logger.warning(
+                f"Keypoint {first_keypoint_name} not found in "
+                f"keypoints_order_constrained"
             )
             continue
 
-        # Get all keypoint indices for this leg
-        leg_keypoint_indices = []
+        # Get all keypoint indices for this leg, in both orderings. We keep them
+        # paired so the translation applies to the same physical keypoint in each
+        # array even if the orderings differ.
+        leg_keypoint_index_pairs: list[tuple[int, int]] = []
         for keypoint in leg_keypoints_canonical:
             keypoint_name = f"{leg}{keypoint}"
             try:
-                idx = keypoints_order.index(keypoint_name)
-                leg_keypoint_indices.append(idx)
+                idx_raw = keypoints_order.index(keypoint_name)
+                idx_constr = keypoints_order_constrained.index(keypoint_name)
             except ValueError:
-                logger.warning(f"Keypoint {keypoint_name} not found in keypoints_order")
+                logger.warning(
+                    f"Keypoint {keypoint_name} not found in raw/constrained "
+                    f"keypoints_order"
+                )
                 continue
+            leg_keypoint_index_pairs.append((idx_raw, idx_constr))
 
-        if not leg_keypoint_indices:
+        if not leg_keypoint_index_pairs:
             continue
 
         # For each frame, compute the translation needed to align the first keypoint
         for frame_idx in range(n_frames):
             # Get the positions of the first keypoint in raw and constrained poses
-            raw_first_pos = keypoints_pos_raw[frame_idx, first_keypoint_idx]
+            raw_first_pos = keypoints_pos_raw[frame_idx, first_keypoint_idx_raw]
             constrained_first_pos = keypoints_pos_constrained[
-                frame_idx, first_keypoint_idx
+                frame_idx, first_keypoint_idx_constr
             ]
 
             # Skip if either position has NaN values
@@ -254,11 +445,14 @@ def align_fwdkin_xyz_to_rawpred_xyz(
             # Compute translation vector
             translation = raw_first_pos - constrained_first_pos
 
-            # Apply translation to all keypoints of this leg
-            for leg_kp_idx in leg_keypoint_indices:
-                current_pos = keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx]
+            # Apply translation to all keypoints of this leg (indexed in the
+            # constrained array's own ordering).
+            for _, leg_kp_idx_constr in leg_keypoint_index_pairs:
+                current_pos = keypoints_pos_constrained_aligned[
+                    frame_idx, leg_kp_idx_constr
+                ]
                 if not np.isnan(current_pos).any():
-                    keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx] = (
+                    keypoints_pos_constrained_aligned[frame_idx, leg_kp_idx_constr] = (
                         current_pos + translation
                     )
 
