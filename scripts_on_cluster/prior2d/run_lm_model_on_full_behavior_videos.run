@@ -1,0 +1,23 @@
+#!/bin/bash -l
+
+#SBATCH --job-name sleap_inference
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 8
+#SBATCH --mem 32G
+#SBATCH --time 01:00:00
+#SBATCH --partition l40s  # or h100
+#SBATCH --qos normal
+#SBATCH --gres gpu:1
+#SBATCH --output /home/sibwang/poseforge/scripts_on_cluster/prior2d/logs/sleap_inference_lm/%A-%a.log
+
+
+echo "Starting job on $(hostname) at $(date)"
+
+trial_path=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "manifest.txt")
+processing_script="/home/sibwang/poseforge/src/poseforge/prior2d/scripts/run_lm_model_on_full_behavior_videos.sh"
+
+conda activate sleap
+bash "$processing_script" "$trial_path"
+
+echo "Finishing job on $(hostname) at $(date)"
