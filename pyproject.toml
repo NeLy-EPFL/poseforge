@@ -3,56 +3,90 @@ name = "poseforge"
 version = "0.3.0"
 description = "Pose estimation guided by a biomechanical model."
 authors = [
-    {name = "Sibo Wang-Chen",email = "sibo.wang@epfl.ch"}
+    {name = "Sibo Wang-Chen",email = "sibo.wang@epfl.ch"},
+    {name = "Victor Stimpfling",email = "victor.stimpfling@epfl.ch"},
 ]
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    # Generic scientific & CV
     "numpy>=2.0,<3",
     "scipy>=1.16.1,<2",
+    "opencv-python>=4.12,<5",
+    "h5py>=3.14,<4",
     "pandas>=2.3,<3",
-    "matplotlib>=3.10,<4",
-    "torch==2.9.*",  # specific version required by torchvision and torchcodec!
-    "torchvision==0.24.*",  # specific to torch 2.9
-    "torchcodec==0.8.*",  # specific to torch 2.9
-    "tensorboard>=2.19,<3",
     "pillow>=11.3,<12",
-    "tqdm>=4.67,<5",
-    # "flygym>=1.2.1,<2",  # TODO: make it compatible with python 3.13
-    # "dm_control==1.0.27",  # TODO: flygym requires one specific version of dm_control- make sure they match!
-    "tyro==0.9.31",
+    
+    # Machine learning
+    "torch==2.12.*",
+    "torchvision==0.27.*",
+    "torchsummary>=1.5.1,<2",
+    "tensorboard>=2.19,<3",
     "wandb==0.21.1",
-    "packaging>=25.0,<26",
+    "pyvista==0.46.3",
+    "scikit-learn>=1.7.2,<2",
+
+    # Visualization & video codec
+    "matplotlib>=3.10,<4",
+    "seaborn==0.13.2",
+    "cmasher>=1.3.3,<2",
+    "distinctipy>=1.3.4,<2",
     "imageio>=2.37.0,<3",
     "imageio-ffmpeg==0.6.0",
-    "joblib>=1.5.1,<2",
-    "distinctipy>=1.3.4,<2",
-    "psutil>=7.0.0,<8",
-    "seaborn==0.13.2",
-    "pyvista==0.46.3",
-    "pytest>=8.4.2,<9",
-    "h5py>=3.14,<4",
-    "scikit-learn>=1.7.2,<2",
-    "PyYAML>=6.0.3,<7",
-    "cmasher>=1.3.3,<2",
-    "torchsummary>=1.5.1,<2",
     "imagecodecs==2025.8.2",
-    "opencv-python>=4.12,<5",
+    "parallel-video-io",
+    "parallel-matplotlib-animation",
+
+    # Utilities
+    "packaging>=25.0,<26",
+    "tyro>=1",
+    "tqdm>=4.67,<5",
+    "joblib>=1.5.1,<2",
+    "psutil>=7.0.0,<8",
+    "PyYAML>=6.0.3,<7",
     "filelock>=3.20.0,<4",
-    "av<16",  # imageio depends on pyav but no pyav 16.0.0 wheel is available for my hardware yet
-    "loguru==0.7.*",
-    # The following should be installed manually (pip install -e .):
-    # flygym & dm_control
-    # parallel-video-io
-    # parallel-matplotlib-animation
-    # seqikpy
-    # spotlight-tools
-    # contrastive-unpaired-translation
+    "loguru>=0.7",
+    
+    # SLEAP
+    "sleap[nn]==1.6.3",
+    "sleap-io==0.7.0",
+    "sleap-nn==0.2.0",
+
+    # Mature NeLy software
+    "flygym[warp]==2.1.0",
+    "seqikpy==1.1.0",
+
+    # Project-specific (see [tool.uv.sources])
+    "contrastive-unpaired-translation",
+    "spotlight-tools",
 ]
 
-[tool.poetry]
-packages = [{include = "poseforge", from = "src"}]
+[tool.uv.sources]
+# Local dependency
+spotlight-tools = { path = "../spotlight/tools", editable = true }
+# NeLy fork of CUT
+contrastive-unpaired-translation = {path = "../contrastive-unpaired-translation", editable = true }
+# Local checkouts with unreleased API changes
+parallel-video-io = { path = "../parallel-video-io", editable = true }
+parallel-matplotlib-animation = { path = "../parallel-matplotlib-animation", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.21",
+]
+
+[tool.uv]
+torch-backend = "auto"
+# parallel-matplotlib-animation's published pyproject.toml pins
+# parallel-video-io==0.1.9, but we override parallel-video-io to a local,
+# unreleased checkout (see [tool.uv.sources]) with a newer version number.
+# Override the transitive constraint so the resolver accepts it.
+override-dependencies = ["parallel-video-io"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/poseforge"]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

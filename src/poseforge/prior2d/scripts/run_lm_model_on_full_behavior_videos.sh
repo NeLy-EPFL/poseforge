@@ -24,10 +24,11 @@ sleap-track \
     "$video_path"
 
 echo "sleap-track finished at $(date). Converting SLP to NPZ."
-python "$scripts_dir/slp2npz.py" \
-    "$slp_path" \
-    "$npz_path" \
-    --video "$video_path" \
+python "$scripts_dir/convert_slp.py" \
+    --slp2npz \
+    --input-path "$slp_path" \
+    --output-path "$npz_path" \
+    --video-path "$video_path" \
     --overview-video "$overview_video_path"
 
 echo "All done at $(date)."
