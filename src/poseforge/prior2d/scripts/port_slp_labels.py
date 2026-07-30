@@ -14,10 +14,10 @@ trial) and saved as a single new-format .slp file (see https://sleap.ai/).
 Trials are sorted by path and restricted to `TRIAL_RANGE`, so re-running with
 a different range (e.g. train/val/test) produces disjoint trial sets.
 
-With `--aligned-input` (default False), each trial's npz is expected to
+With `--aligned-input` (default False), each trial's h5 is expected to
 already contain aligned-domain coordinates and no per-frame transform is
 applied; `--transforms-relpath` is then unused. With the default
-`--no-aligned-input`, each trial needs both `--npz-relpath` (raw camera
+`--no-aligned-input`, each trial needs both `--h5-relpath` (raw camera
 domain) and `--transforms-relpath` (per-frame affine matrices).
 
 Usage:
@@ -35,7 +35,7 @@ from loguru import logger
 
 from poseforge.prior2d.geometry import apply_affine
 
-NPZ_RELPATH = Path("sleap/prediction_lm_full_behavior_video.npz")
+H5_RELPATH = Path("sleap/prediction_lm_full_behavior_video.h5")
 REFERENCE_SLP_RELPATH = Path("sleap/prediction_lm_full_behavior_video.slp")
 TRANSFORMS_RELPATH = Path("processed/behavior_alignment_transforms.h5")
 ALIGNED_VIDEO_RELPATH = Path("processed/aligned_behavior_video.mkv")
@@ -49,16 +49,16 @@ TRIAL_RANGE = (0, 63)
 
 def find_trial_dirs(
     data_root: Path,
-    npz_relpath: Path,
+    h5_relpath: Path,
     aligned_video_relpath: Path,
     transforms_relpath: Path | None,
 ) -> list[Path]:
-    """Find trial directories with the npz, aligned video, and (if required)
+    """Find trial directories with the h5, aligned video, and (if required)
     transforms files.
 
     Args:
         data_root: Root directory to search (searched recursively).
-        npz_relpath: Trial-relative path to the predictions npz.
+        h5_relpath: Trial-relative path to the predictions h5.
         aligned_video_relpath: Trial-relative path to the aligned video.
         transforms_relpath: Trial-relative path to the per-frame affine
             transforms h5, or None if the input is already aligned (no
@@ -68,11 +68,11 @@ def find_trial_dirs(
         Sorted list of trial directory paths.
     """
     trial_dirs = []
-    for npz_path in sorted(data_root.rglob(str(npz_relpath))):
-        # npz_relpath may have subdirectory components; the trial dir is the
-        # ancestor `len(npz_relpath.parts)` levels up from npz_path.
-        trial_dir = npz_path
-        for _ in npz_relpath.parts:
+    for h5_path in sorted(data_root.rglob(str(h5_relpath))):
+        # h5_relpath may have subdirectory components; the trial dir is the
+        # ancestor `len(h5_relpath.parts)` levels up from h5_path.
+        trial_dir = h5_path
+        for _ in h5_relpath.parts:
             trial_dir = trial_dir.parent
 
         has_video = (trial_dir / aligned_video_relpath).is_file()
@@ -94,7 +94,7 @@ def build_predicted_frames(
     trial_dir: Path,
     skeleton: sio.Skeleton,
     aligned_input: bool,
-    npz_relpath: Path,
+    h5_relpath: Path,
     transforms_relpath: Path,
     aligned_video_relpath: Path,
     max_frames: int | None,
@@ -102,12 +102,12 @@ def build_predicted_frames(
     """Build the aligned-domain, predictions-only labeled frames for one trial.
 
     Args:
-        trial_dir: Trial directory containing the npz, video, and (unless
+        trial_dir: Trial directory containing the h5, video, and (unless
             `aligned_input`) transforms.
         skeleton: Skeleton shared across all trials.
-        aligned_input: If True, `poses` in the npz are already aligned and no
+        aligned_input: If True, `poses` in the h5 are already aligned and no
             transform is applied.
-        npz_relpath: Trial-relative path to the predictions npz.
+        h5_relpath: Trial-relative path to the predictions h5.
         transforms_relpath: Trial-relative path to the per-frame affine
             transforms h5 (unused if `aligned_input`).
         aligned_video_relpath: Trial-relative path to the aligned video.
@@ -118,10 +118,10 @@ def build_predicted_frames(
         video: The aligned video, linked from an absolute path.
         labeled_frames: One `LabeledFrame` per frame with a detected pose.
     """
-    with np.load(trial_dir / npz_relpath) as data:
-        poses = data["poses"]
-        instance_scores = data["instance_scores"]
-        keypoint_scores = data["keypoint_scores"]
+    with h5py.File(trial_dir / h5_relpath, "r") as f:
+        poses = f["poses"][:]
+        instance_scores = f["instance_scores"][:]
+        keypoint_scores = f["keypoint_scores"][:]
 
     if max_frames is not None:
         poses = poses[:max_frames]
@@ -137,7 +137,7 @@ def build_predicted_frames(
             transform_matrices = transform_matrices[:max_frames]
         if transform_matrices.shape[0] != poses.shape[0]:
             raise ValueError(
-                f"{trial_dir}: frame count mismatch between npz ({poses.shape[0]}) "
+                f"{trial_dir}: frame count mismatch between h5 ({poses.shape[0]}) "
                 f"and transforms ({transform_matrices.shape[0]})"
             )
         aligned_poses = apply_affine(poses, transform_matrices)
@@ -168,7 +168,7 @@ def main(
     output_path: Path,
     data_root: Path = Path("/mnt/upramdya_data/VAS/poseforge_paper_data"),
     aligned_input: bool = False,
-    npz_relpath: Path = NPZ_RELPATH,
+    h5_relpath: Path = H5_RELPATH,
     reference_slp_relpath: Path = REFERENCE_SLP_RELPATH,
     transforms_relpath: Path = TRANSFORMS_RELPATH,
     aligned_video_relpath: Path = ALIGNED_VIDEO_RELPATH,
@@ -179,11 +179,11 @@ def main(
     Args:
         output_path: Where to save the combined, predictions-only .slp file.
         data_root: Root directory to search for trials (read-only).
-        aligned_input: If True, each trial's npz is already in the aligned
+        aligned_input: If True, each trial's h5 is already in the aligned
             domain and no per-frame transform is applied (`transforms_relpath`
-            is unused). If False (default), each trial's npz is in the raw
+            is unused). If False (default), each trial's h5 is in the raw
             camera domain and is aligned using `transforms_relpath`.
-        npz_relpath: Trial-relative path to the predictions npz.
+        h5_relpath: Trial-relative path to the predictions h5.
         reference_slp_relpath: Trial-relative path to a `.slp` file to take
             the skeleton from (only the first trial's is used).
         transforms_relpath: Trial-relative path to the per-frame affine
@@ -194,7 +194,7 @@ def main(
     """
     trial_dirs = find_trial_dirs(
         data_root,
-        npz_relpath,
+        h5_relpath,
         aligned_video_relpath,
         None if aligned_input else transforms_relpath,
     )
@@ -215,7 +215,7 @@ def main(
             trial_dir,
             skeleton,
             aligned_input,
-            npz_relpath,
+            h5_relpath,
             transforms_relpath,
             aligned_video_relpath,
             max_frames_per_trial,

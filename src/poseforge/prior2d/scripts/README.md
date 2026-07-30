@@ -4,20 +4,24 @@ Pipeline, in order:
 
 - `run_lm_model_on_full_behavior_videos.sh <trial_path>`: runs the landmark
   SLEAP model on one trial's full behavior video, producing a per-trial
-  `.slp`/`.npz` of raw predictions.
+  `.slp`/`.h5` of raw predictions.
 - `port_slp_labels.py`: combines every trial's raw predictions into one
   aligned-domain `.slp` (no filtering).
 - `filter_slp_labels.py`: promotes high-confidence predictions to user
   labels, based on score, leg-segment-length, missing-keypoint, and
   temporal-dedup criteria.
-- `convert_slp.py`: bidirectional `.slp` <-> `.npz` conversion, optionally
-  rendering an annotated overview video.
+- `convert_slp.py`: bidirectional `.slp` <-> `.h5` conversion, optionally
+  rendering an annotated overview video. Bulk arrays (`poses`,
+  `instance_scores`, `keypoint_scores`, `accepted`) are gzip-compressed
+  datasets; small per-video metadata (`node_names`, `genotypes`,
+  `fly_trials`, `n_frames_per_video`) are root `.attrs`.
 - (train a "student" SLEAP model on the promoted labels; not scripted here)
 - `filter_student_predictions.sh`: runs the student model's predictions
   through the full labeled-data pipeline in one go:
-  1. `filter_slp_labels.py` (promote high-confidence predictions)
-  2. `convert_slp.py` (`.slp` -> `.npz`, with acceptance flags)
-  3. `extract_continuous_periods_from_npz.py` (extract contiguous
+  1. `filter_slp_labels.py` (promote high-confidence predictions, using
+     `--min-keypoint-score 0.2` by default)
+  2. `convert_slp.py` (`.slp` -> `.h5`, with acceptance flags)
+  3. `extract_continuous_periods_from_h5.py` (extract contiguous
      accepted-frame periods into a periods `.h5`, with each period's
      keypoints in both pixel (`pred_2d_px`) and physical mm (`pred_2d_mm`)
      coordinates; always also saves a summary figure of periods per trial
@@ -45,9 +49,14 @@ scripts.
 
 ## Pipeline history
 
-Everything below happened under
-`bulk_data/prior-2dinvkin/sleap/lm_ported/` unless noted, across two rounds
-of SLEAP models.
+Everything below happened under `bulk_data/prior-2dinvkin/sleap/`, across two
+rounds of SLEAP models. The shared upstream files (raw and ported LM
+predictions, the retrained model, its raw predictions) are not specific to
+any confidence threshold and live under `lm_ported_score_0.5/` only because
+that directory is a straight rename of the original (pre-threshold-sweep)
+`lm_ported/`; `filter_student_predictions.sh` reads its input `.slp` from
+there and writes filtered/periods outputs to the threshold-specific
+`lm_ported_score*/` directory instead.
 
 ### Round 1: initial "LM" model -> promoted labels -> retrained model
 
@@ -86,15 +95,23 @@ of SLEAP models.
    `lm_ported_v000_trained000.slp` as found, i.e. effectively against the
    original LM model's predictions, not the retrained model's.
 
+   These files all live under `lm_ported_score_0.5/` (see note above).
+
 ### Round 2: filtering, periods, IK (this session, 2026-07-30)
 
+Run once with `--min-keypoint-score 0.5` (outputs under
+`lm_ported_score_0.5/`), then again with the new default `0.2` (outputs
+under `lm_ported_score/`), which keeps ~30% more frames after IK filtering
+with no change in fit quality.
+
 ```bash
-lm_ported_dir="bulk_data/prior-2dinvkin/sleap/lm_ported"
+source_dir="bulk_data/prior-2dinvkin/sleap/lm_ported_score_0.5"
+output_dir="bulk_data/prior-2dinvkin/sleap/lm_ported_score"
 scripts_dir="src/poseforge/prior2d/scripts"
 
-# filter_slp_labels.py -> convert_slp.py -> extract_continuous_periods_from_npz.py
+# filter_slp_labels.py -> convert_slp.py -> extract_continuous_periods_from_h5.py
 # (promotes confident frames in lm_ported_v000_trained000.slp to labels, converts
-# to .npz with acceptance flags, extracts contiguous accepted periods, and always
+# to .h5 with acceptance flags, extracts contiguous accepted periods, and always
 # saves its own summary figure)
 bash "$scripts_dir/filter_student_predictions.sh"
 
@@ -111,8 +128,8 @@ bash "$scripts_dir/filter_student_predictions.sh"
 #   filtering (median, 5-frame window) happens before this check so the
 #   threshold bounds what's actually stored.
 python "$scripts_dir/solve_ik.py" \
-    --periods-path "$lm_ported_dir/lm_ported_v000_trained000_filtered_periods.h5" \
-    --output-path "$lm_ported_dir/lm_ported_v000_trained000_filtered_periods_ikfk.h5" \
+    --periods-path "$output_dir/periods.h5" \
+    --output-path "$output_dir/periods_ikfk.h5" \
     --n-jobs -1
 
 # Renders annotated videos: kchain_plotting_colors per leg, thin white raw
@@ -120,8 +137,8 @@ python "$scripts_dir/solve_ik.py" \
 # view of the IK reconstruction (yaw-tracking camera, 1mm ground-plane grid).
 # Encodes on GPU (NVENC) via pvio, 3 videos in parallel via joblib.
 python "$scripts_dir/make_videos.py" \
-    "$lm_ported_dir/lm_ported_v000_trained000_filtered_periods_ikfk.h5" \
-    "$lm_ported_dir/period_videos" \
+    "$output_dir/periods_ikfk.h5" \
+    "$output_dir/period_videos" \
     --with-ik \
     --periods-per-trial 1
 ```

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Fit inverse kinematics (QuickIK) to a periods `.h5`'s `pred_2d_mm` data.
 
-For each period in a periods `.h5` (see `extract_continuous_periods_from_npz.py`),
+For each period in a periods `.h5` (see `extract_continuous_periods_from_h5.py`),
 fits the NeuroMechFly body plan (see
 `flygym/scripts/export_model_for_quickik.py`) to the 2D (mm) keypoint
 sequence via QuickIK's `SequenceSolver` with an `XYView` mapper (see
@@ -26,7 +26,7 @@ computed per keypoint, and a frame is rejected if its worst keypoint exceeds
 means the threshold actually bounds the quality of what ends up stored.
 This refined accepted mask is then run through the same
 morphological-closing + minimum-length logic as
-`extract_continuous_periods_from_npz.py` (closing size and minimum length
+`extract_continuous_periods_from_h5.py` (closing size and minimum length
 given by `--filtering-mask-frames` and `--min-period-length`), so an input
 period can end up dropped entirely, shortened, or split into several
 shorter periods.
@@ -438,7 +438,7 @@ def main(
 
     Args:
         periods_path: Periods `.h5` file (see
-            `extract_continuous_periods_from_npz.py`), with a `pred_2d_mm`
+            `extract_continuous_periods_from_h5.py`), with a `pred_2d_mm`
             dataset per period.
         output_path: Where to save the IK/FK-augmented, re-segmented copy.
         data_root: Root directory containing each trial's calibration,
@@ -555,7 +555,7 @@ def main(
 
         # Trials with zero input periods have no work item (and so no entry in
         # `results`) but should still get an (empty) group, matching
-        # `extract_continuous_periods_from_npz.py`'s convention of always
+        # `extract_continuous_periods_from_h5.py`'s convention of always
         # representing every trial.
         for trial_key in old_period_ranges:
             f_out.require_group(trial_key)

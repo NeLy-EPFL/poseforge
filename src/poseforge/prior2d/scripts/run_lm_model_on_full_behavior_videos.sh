@@ -12,7 +12,7 @@ cd "$trial_path"
 mkdir -p "sleap"
 video_path="processed/fullsize_behavior_video.mkv"
 slp_path="sleap/prediction_lm_full_behavior_video.slp"
-npz_path="sleap/prediction_lm_full_behavior_video.npz"
+h5_path="sleap/prediction_lm_full_behavior_video.h5"
 overview_video_path="sleap/prediction_lm_full_behavior_video.mp4"
 
 echo "Running sleap-track at $(date)"
@@ -23,11 +23,11 @@ sleap-track \
     --batch_size 4 \
     "$video_path"
 
-echo "sleap-track finished at $(date). Converting SLP to NPZ."
+echo "sleap-track finished at $(date). Converting SLP to H5."
 python "$scripts_dir/convert_slp.py" \
-    --slp2npz \
+    --slp2h5 \
     --input-path "$slp_path" \
-    --output-path "$npz_path" \
+    --output-path "$h5_path" \
     --video-path "$video_path" \
     --overview-video "$overview_video_path"
 

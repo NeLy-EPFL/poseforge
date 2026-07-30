@@ -1,6 +1,6 @@
 """Shared logic for finding and summarizing continuous accepted-frame periods.
 
-Used by `scripts/extract_continuous_periods_from_npz.py` (finds the periods
+Used by `scripts/extract_continuous_periods_from_h5.py` (finds the periods
 and writes the periods `.h5`) and, for the summary figure, by that same
 script as well as other scripts that want to compare period statistics
 (e.g. before/after an extra filtering step) without going through an `.h5`
@@ -80,7 +80,7 @@ def collect_period_stats(
 
     Args:
         periods_path_or_h5_group: Either a periods `.h5` path (see
-            `extract_continuous_periods_from_npz.py`), in which case the whole
+            `extract_continuous_periods_from_h5.py`), in which case the whole
             file is walked, or an already-open `h5py.Group` structured the
             same way (`<genotype>/<fly_trial>/<period_id>`, with `start_idx`
             and `end_idx` attrs on each period group).

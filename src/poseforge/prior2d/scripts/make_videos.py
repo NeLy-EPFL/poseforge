@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Render annotated overview videos for a sample of continuous good periods.
 
-Works on both a plain periods `.h5` (see `extract_continuous_periods_from_npz.py`)
+Works on both a plain periods `.h5` (see `extract_continuous_periods_from_h5.py`)
 and an IK/FK-augmented periods `.h5` (see `solve_ik.py`). For each trial,
 renders its `--periods-per-trial` longest periods as short videos.
 
@@ -397,7 +397,7 @@ def main(
 
     Args:
         periods_path: Periods `.h5` file, with or without IK/FK results (see
-            `extract_continuous_periods_from_npz.py` and `solve_ik.py`).
+            `extract_continuous_periods_from_h5.py` and `solve_ik.py`).
         output_dir: Directory to save the rendered period videos to. Cleared
             first if it already exists, so stale videos from an earlier run
             (e.g. with different period ids after `solve_ik.py`

@@ -1,31 +1,31 @@
 #!/usr/bin/env python
-"""Convert between SLEAP `.slp` prediction files and `.npz` pose arrays.
+"""Convert between SLEAP `.slp` prediction files and `.h5` pose arrays.
 
-Two modes, selected by `--slp2npz` or `--npz2slp`:
+Two modes, selected by `--slp2h5` or `--h52slp`:
 
-- `--slp2npz`: extract the highest-confidence instance per frame from a `.slp`
-  file into a compressed `.npz` with `poses`, `instance_scores`,
-  `keypoint_scores`, and `node_names` arrays. Optionally also renders an
-  annotated overview video (drawn with OpenCV only, no matplotlib). Pass
+- `--slp2h5`: extract the highest-confidence instance per frame from a `.slp`
+  file into an `.h5` file with `poses`, `instance_scores`, `keypoint_scores`
+  datasets and a `node_names` attr. Optionally also renders an annotated
+  overview video (drawn with OpenCV only, no matplotlib). Pass
   `--include-acceptance` to also record, per frame, whether a user-labeled
   `Instance` (not just a prediction) is present, e.g. for the output of
   `filter_slp_labels.py`.
-- `--npz2slp`: build a new-format `.slp` file (one `PredictedInstance` per
-  frame, no user labels) from such a `.npz`, linked to a given video, with
+- `--h52slp`: build a new-format `.slp` file (one `PredictedInstance` per
+  frame, no user labels) from such an `.h5`, linked to a given video, with
   the skeleton taken from a reference `.slp` file.
 
 By default, `.slp` reading goes through `sleap_io`, which transparently
 handles both the legacy (pre-2024) and current SLEAP file formats, and all
 writing goes through `sleap_io`, which always writes the current format (see
 https://sleap.ai/). Pass `--legacy-slp-format` to instead read via the older
-`sleap` package's own loader (`sleap.load_file`) for `--slp2npz`, for
+`sleap` package's own loader (`sleap.load_file`) for `--slp2h5`, for
 environments where only that package is installed and not `sleap_io` (e.g.
 the standalone `sleap=1.4.1` conda environment described in
 `prior2d/README.md`).
 
 Usage:
-    python convert_slp.py --slp2npz --input-path predictions.slp --output-path poses.npz
-    python convert_slp.py --npz2slp --input-path poses.npz --output-path poses.slp \
+    python convert_slp.py --slp2h5 --input-path predictions.slp --output-path poses.h5
+    python convert_slp.py --h52slp --input-path poses.h5 --output-path poses.slp \
         --video-path video.mkv --reference-slp-path reference.slp
 """
 
@@ -34,12 +34,52 @@ import subprocess
 from pathlib import Path
 
 import cv2
+import h5py
 import numpy as np
 import sleap_io as sio
 import tyro
 from loguru import logger
 
 from poseforge.prior2d.skeleton_viz import build_skeleton, draw_pose
+
+# Written as root h5 attrs (small, dataset-level metadata) rather than
+# datasets (bulk per-frame arrays); see `save_poses_h5`.
+ATTR_KEYS = {"node_names", "genotypes", "fly_trials", "n_frames_per_video"}
+
+
+def save_poses_h5(data: dict, output_path: Path) -> None:
+    """Save an `extract_poses`-style dict to an `.h5` file.
+
+    Args:
+        data: Dict as returned by `extract_poses`/`extract_poses_legacy`.
+        output_path: Where to save the `.h5` file.
+    """
+    with h5py.File(output_path, "w") as f:
+        for key, value in data.items():
+            if key in ATTR_KEYS:
+                # h5py can't store a fixed-length-unicode ("<U...") numpy
+                # array directly as an attr; a plain list converts numpy
+                # string arrays to `str` (and numeric ones to Python
+                # ints/floats) uniformly, both of which h5py accepts.
+                f.attrs[key] = value.tolist()
+            else:
+                f.create_dataset(key, data=value, compression="gzip")
+
+
+def load_poses_h5(input_path: Path) -> dict:
+    """Load an `.h5` file written by `save_poses_h5` back into a plain dict.
+
+    Args:
+        input_path: `.h5` file to load.
+
+    Returns:
+        Dict with the same keys/shapes `extract_poses`/`extract_poses_legacy`
+        would have produced (attrs and datasets both as plain numpy arrays).
+    """
+    with h5py.File(input_path, "r") as f:
+        data = {key: f.attrs[key] for key in f.attrs}
+        data.update({key: f[key][:] for key in f})
+    return data
 
 
 def extract_poses_legacy(slp_path: Path) -> dict:
@@ -54,7 +94,7 @@ def extract_poses_legacy(slp_path: Path) -> dict:
 
     Returns:
         Dict with keys "poses", "instance_scores", "keypoint_scores",
-        "node_names", ready to be passed to np.savez_compressed.
+        "node_names", ready to be passed to `save_poses_h5`.
     """
     import sleap
 
@@ -177,7 +217,7 @@ def extract_poses(slp_path: Path, include_acceptance: bool = False) -> dict:
             schema matches plain prediction files exactly.
 
     Returns:
-        Dict ready to be passed to np.savez_compressed. See above for the
+        Dict ready to be passed to `save_poses_h5`. See above for the
         single- vs. multi-video schemas.
     """
     labels = sio.load_file(str(slp_path))
@@ -382,7 +422,7 @@ def make_overview_video(
         proc.wait()
 
 
-def run_slp2npz(
+def run_slp2h5(
     input_path: Path,
     output_path: Path,
     legacy_slp_format: bool,
@@ -392,7 +432,7 @@ def run_slp2npz(
     crf: int,
     height: int,
 ) -> None:
-    """Extract poses from a `.slp` file into a `.npz`, optionally rendering an
+    """Extract poses from a `.slp` file into an `.h5`, optionally rendering an
     annotated overview video."""
     if not input_path.is_file():
         raise SystemExit(f"Input file does not exist: {input_path}")
@@ -404,7 +444,7 @@ def run_slp2npz(
         if legacy_slp_format
         else extract_poses(input_path, include_acceptance)
     )
-    np.savez_compressed(output_path, **data)
+    save_poses_h5(data, output_path)
     if data["poses"].ndim == 3:
         logger.info(f"Saved poses for {data['poses'].shape[0]} frames to {output_path}")
     else:
@@ -438,13 +478,13 @@ def run_slp2npz(
         logger.info(f"Saved overview video to {overview_path}")
 
 
-def run_npz2slp(
+def run_h52slp(
     input_path: Path,
     output_path: Path,
     video_path: Path,
     reference_slp_path: Path,
 ) -> None:
-    """Build a new-format `.slp` file (predictions only) from a `.npz`."""
+    """Build a new-format `.slp` file (predictions only) from an `.h5`."""
     if not input_path.is_file():
         raise SystemExit(f"Input file does not exist: {input_path}")
     if not video_path.is_file():
@@ -452,10 +492,10 @@ def run_npz2slp(
     if not reference_slp_path.is_file():
         raise SystemExit(f"Reference .slp file does not exist: {reference_slp_path}")
 
-    with np.load(input_path) as data:
-        poses = data["poses"]
-        instance_scores = data["instance_scores"]
-        keypoint_scores = data["keypoint_scores"]
+    with h5py.File(input_path, "r") as f:
+        poses = f["poses"][:]
+        instance_scores = f["instance_scores"][:]
+        keypoint_scores = f["keypoint_scores"][:]
 
     skeleton = sio.load_file(str(reference_slp_path)).skeleton
     labels = build_predicted_labels(
@@ -470,8 +510,8 @@ def run_npz2slp(
 def main(
     input_path: Path,
     output_path: Path,
-    slp2npz: bool = False,
-    npz2slp: bool = False,
+    slp2h5: bool = False,
+    h52slp: bool = False,
     legacy_slp_format: bool = False,
     include_acceptance: bool = False,
     video_path: Path | None = None,
@@ -480,45 +520,45 @@ def main(
     crf: int = 23,
     height: int = 1024,
 ) -> None:
-    """Convert between SLEAP `.slp` prediction files and `.npz` pose arrays.
+    """Convert between SLEAP `.slp` prediction files and `.h5` pose arrays.
 
     Args:
-        input_path: Path to the input file (`.slp` for --slp2npz, `.npz` for
-            --npz2slp).
-        output_path: Path to write the output file (`.npz` for --slp2npz,
-            `.slp` for --npz2slp).
-        slp2npz: Extract poses from `input_path` (a `.slp` file) into
-            `output_path` (a `.npz` file). Exactly one of --slp2npz/--npz2slp
+        input_path: Path to the input file (`.slp` for --slp2h5, `.h5` for
+            --h52slp).
+        output_path: Path to write the output file (`.h5` for --slp2h5,
+            `.slp` for --h52slp).
+        slp2h5: Extract poses from `input_path` (a `.slp` file) into
+            `output_path` (an `.h5` file). Exactly one of --slp2h5/--h52slp
             must be set.
-        npz2slp: Build a predictions-only `.slp` file at `output_path` from
-            `input_path` (a `.npz` file). Requires --video-path and
-            --reference-slp-path. Exactly one of --slp2npz/--npz2slp must be set.
-        legacy_slp_format: --slp2npz only. Read `input_path` with the older
+        h52slp: Build a predictions-only `.slp` file at `output_path` from
+            `input_path` (an `.h5` file). Requires --video-path and
+            --reference-slp-path. Exactly one of --slp2h5/--h52slp must be set.
+        legacy_slp_format: --slp2h5 only. Read `input_path` with the older
             `sleap` package's loader instead of `sleap_io`. See module docstring.
-        include_acceptance: --slp2npz only (and incompatible with
-            legacy_slp_format). Also write an "accepted" array. See `extract_poses`.
-        video_path: --slp2npz: if given, also render an annotated overview
-            video from this source video. --npz2slp: the video to link the
+        include_acceptance: --slp2h5 only (and incompatible with
+            legacy_slp_format). Also write an "accepted" dataset. See `extract_poses`.
+        video_path: --slp2h5: if given, also render an annotated overview
+            video from this source video. --h52slp: the video to link the
             output predictions to (required).
-        reference_slp_path: --npz2slp only. `.slp` file to take the skeleton
+        reference_slp_path: --h52slp only. `.slp` file to take the skeleton
             from (required).
-        overview_video: --slp2npz only. Output path for the overview video.
+        overview_video: --slp2h5 only. Output path for the overview video.
             Defaults to '<output_path stem>_overview.mp4'.
-        crf: --slp2npz only. x264 CRF for the overview video.
-        height: --slp2npz only. Target height in pixels for the overview
+        crf: --slp2h5 only. x264 CRF for the overview video.
+        height: --slp2h5 only. Target height in pixels for the overview
             video; width is scaled to preserve aspect ratio and padded with
             black to the next multiple of 16.
     """
-    if slp2npz == npz2slp:
-        raise SystemExit("Specify exactly one of --slp2npz or --npz2slp.")
+    if slp2h5 == h52slp:
+        raise SystemExit("Specify exactly one of --slp2h5 or --h52slp.")
 
-    if slp2npz:
+    if slp2h5:
         if legacy_slp_format and include_acceptance:
             raise SystemExit(
                 "--include-acceptance requires reading via sleap_io; "
                 "it is not supported with --legacy-slp-format."
             )
-        run_slp2npz(
+        run_slp2h5(
             input_path,
             output_path,
             legacy_slp_format,
@@ -530,10 +570,8 @@ def main(
         )
     else:
         if video_path is None or reference_slp_path is None:
-            raise SystemExit(
-                "--npz2slp requires --video-path and --reference-slp-path."
-            )
-        run_npz2slp(input_path, output_path, video_path, reference_slp_path)
+            raise SystemExit("--h52slp requires --video-path and --reference-slp-path.")
+        run_h52slp(input_path, output_path, video_path, reference_slp_path)
 
 
 if __name__ == "__main__":

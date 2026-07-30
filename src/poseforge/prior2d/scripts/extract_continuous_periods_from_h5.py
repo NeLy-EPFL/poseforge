@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Extract continuous periods of accepted predictions from a filtered `.npz`.
+"""Extract continuous periods of accepted predictions from a filtered `.h5`.
 
-Takes a multi-video `.npz` produced by `convert_slp.py --slp2npz
+Takes a multi-video `.h5` produced by `convert_slp.py --slp2h5
 --include-acceptance` (e.g. the output of `filter_student_predictions.sh`)
 and, for each video, finds contiguous stretches of accepted frames:
 
@@ -38,8 +38,8 @@ is always saved alongside the periods `.h5`, at
 `<output_path.stem>_summary.png`.
 
 Usage:
-    python extract_continuous_periods_from_npz.py \
-        --input-path lm_ported_v000_trained000_filtered.npz \
+    python extract_continuous_periods_from_h5.py \
+        --input-path lm_ported_v000_trained000_filtered.h5 \
         --output-path lm_ported_v000_trained000_filtered_periods.h5
 """
 
@@ -81,9 +81,10 @@ def main(
     """Extract continuous periods of accepted predictions into an `.h5` file.
 
     Args:
-        input_path: Multi-video `.npz` with `poses`, `keypoint_scores`,
-            `accepted`, `genotypes`, `fly_trials`, `n_frames_per_video`, and
-            `node_names` arrays (see `convert_slp.py --include-acceptance`).
+        input_path: Multi-video `.h5` with `poses`, `keypoint_scores`,
+            `accepted` datasets and `genotypes`, `fly_trials`,
+            `n_frames_per_video`, `node_names` attrs (see `convert_slp.py
+            --include-acceptance`).
         output_path: Where to save the periods `.h5` file.
         data_root: Root directory containing each trial's calibration,
             transforms, and stage position files (read-only).
@@ -94,19 +95,19 @@ def main(
 
     if not input_path.is_file():
         raise SystemExit(f"Input file does not exist: {input_path}")
-    with np.load(input_path) as data:
-        if "accepted" not in data.files:
+    with h5py.File(input_path, "r") as f_in:
+        if "accepted" not in f_in:
             raise SystemExit(
-                f"{input_path} has no 'accepted' array; convert with "
-                "`convert_slp.py --slp2npz --include-acceptance` first."
+                f"{input_path} has no 'accepted' dataset; convert with "
+                "`convert_slp.py --slp2h5 --include-acceptance` first."
             )
-        poses = data["poses"]
-        keypoint_scores = data["keypoint_scores"]
-        accepted = data["accepted"]
-        genotypes = data["genotypes"]
-        fly_trials = data["fly_trials"]
-        n_frames_per_video = data["n_frames_per_video"]
-        node_names = [str(n) for n in data["node_names"]]
+        poses = f_in["poses"][:]
+        keypoint_scores = f_in["keypoint_scores"][:]
+        accepted = f_in["accepted"][:]
+        genotypes = list(f_in.attrs["genotypes"])
+        fly_trials = list(f_in.attrs["fly_trials"])
+        n_frames_per_video = list(f_in.attrs["n_frames_per_video"])
+        node_names = [str(n) for n in f_in.attrs["node_names"]]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     n_periods_total = 0
