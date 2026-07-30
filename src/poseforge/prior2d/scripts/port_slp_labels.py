@@ -33,6 +33,8 @@ import sleap_io as sio
 import tyro
 from loguru import logger
 
+from poseforge.prior2d.geometry import apply_affine
+
 NPZ_RELPATH = Path("sleap/prediction_lm_full_behavior_video.npz")
 REFERENCE_SLP_RELPATH = Path("sleap/prediction_lm_full_behavior_video.slp")
 TRANSFORMS_RELPATH = Path("processed/behavior_alignment_transforms.h5")
@@ -86,21 +88,6 @@ def find_trial_dirs(
                 f"{'transforms' if not has_transforms else ''}".strip()
             )
     return trial_dirs
-
-
-def apply_affine(points: np.ndarray, matrices: np.ndarray) -> np.ndarray:
-    """Apply per-frame 2x3 affine matrices to per-frame keypoints.
-
-    Args:
-        points: `(n_frames, n_nodes, 2)` keypoint coordinates, may contain NaN.
-        matrices: `(n_frames, 2, 3)` affine transformation matrices, one per frame.
-
-    Returns:
-        `(n_frames, n_nodes, 2)` transformed keypoint coordinates.
-    """
-    ones = np.ones((*points.shape[:2], 1), dtype=points.dtype)
-    points_h = np.concatenate([points, ones], axis=-1)  # (n_frames, n_nodes, 3)
-    return np.einsum("fij,fnj->fni", matrices, points_h)
 
 
 def build_predicted_frames(

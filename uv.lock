@@ -2276,6 +2276,7 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ed/e8/c2959c0f969ea4ae96b55ad10c108c0410de4e8b3550d9941a4cfdd52703/opencv_python-4.14.0.94.tar.gz", hash = "sha256:afadc76a38a07713a4c2b4702da917cf0ed489be57e2a40a34e670189731de7d", size = 96400225, upload-time = "2026-07-28T19:23:09.546Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/91/e4fd7c2b64fda9792bc1f5dcb5a6cbdb54d50c3a2fa9dccc3943fd47afcf/opencv_python-4.14.0.94-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:04456937c8f12ca64ff94df8bfd813ca98f5c9767da792948969a759c716ebe2", size = 46491087, upload-time = "2026-07-29T03:52:01.842Z" },
     { url = "https://files.pythonhosted.org/packages/f4/a7/8895ca8731f741925acf238f87ccb21fa8f47378d5291792e932b9a4ab71/opencv_python-4.14.0.94-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:6a49842cc0ba9f43e35a289e61c0e15a1f8be8df60145ee5c7d42593b0d4f4b8", size = 33084035, upload-time = "2026-07-28T20:05:52.633Z" },
     { url = "https://files.pythonhosted.org/packages/84/ec/5777752567986b99222d52e22306e9616829480cc2d48ab241daa9d7e9ef/opencv_python-4.14.0.94-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:3198fcbcb8f98fd68063bf2c75d129b0f50d46e555a4e47578a6eb086eb38e1f", size = 49513397, upload-time = "2026-07-28T19:17:28.309Z" },
     { url = "https://files.pythonhosted.org/packages/13/09/c05887c383caa9080ef612febffd08c5da1c283418687a3bea6ef7fb6faa/opencv_python-4.14.0.94-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4ae0b5a2acbcfb9813035f1644cfba751edd02797fac994e32180813eeef8420", size = 72049625, upload-time = "2026-07-28T19:18:11.767Z" },
@@ -2537,6 +2538,7 @@ dependencies = [
     { name = "psutil" },
     { name = "pyvista" },
     { name = "pyyaml" },
+    { name = "quickik" },
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "seaborn" },
@@ -2584,6 +2586,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=7.0.0,<8" },
     { name = "pyvista", specifier = "==0.46.3" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
+    { name = "quickik", editable = "../quickik/python" },
     { name = "scikit-learn", specifier = ">=1.7.2,<2" },
     { name = "scipy", specifier = ">=1.16.1,<2" },
     { name = "seaborn", specifier = "==0.13.2" },
@@ -3155,6 +3158,21 @@ sdist = { url = "https://files.pythonhosted.org/packages/70/01/392eba83c8e47b946
 wheels = [
     { url = "https://files.pythonhosted.org/packages/69/76/37c0ccd5ab968a6a438f9c623aeecc84c202ab2fabc6a8fd927580c15b5a/QtPy-2.4.3-py3-none-any.whl", hash = "sha256:72095afe13673e017946cc258b8d5da43314197b741ed2890e563cf384b51aa1", size = 95045, upload-time = "2025-02-11T15:09:24.162Z" },
 ]
+
+[[package]]
+name = "quickik"
+version = "0.1.0"
+source = { editable = "../quickik/python" }
+dependencies = [
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy" },
+    { name = "torch", marker = "extra == 'torch'" },
+]
+provides-extras = ["torch"]
 
 [[package]]
 name = "rapidyaml"

@@ -59,6 +59,7 @@ dependencies = [
     # Project-specific (see [tool.uv.sources])
     "contrastive-unpaired-translation",
     "spotlight-tools",
+    "quickik",
 ]
 
 [tool.uv.sources]
@@ -69,6 +70,8 @@ contrastive-unpaired-translation = {path = "../contrastive-unpaired-translation"
 # Local checkouts with unreleased API changes
 parallel-video-io = { path = "../parallel-video-io", editable = true }
 parallel-matplotlib-animation = { path = "../parallel-matplotlib-animation", editable = true }
+# Rust/PyO3 inverse kinematics solver
+quickik = { path = "../quickik/python", editable = true }
 
 [dependency-groups]
 dev = [
