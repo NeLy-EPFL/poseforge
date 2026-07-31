@@ -307,25 +307,30 @@ def select_longest_periods(
     return period_ids[:periods_per_trial]
 
 
-def render_one_video(item: dict, crf: int, video_height: int) -> None:
-    """Render one period's annotated video.
+def build_period_frames(
+    item: dict, video_height: int
+) -> tuple[list[np.ndarray], float]:
+    """Build one period's annotated 2D(+3D) frames, without writing them out.
 
     Args:
-        item: Dict with `video_path`, `start_idx`, `end_idx`, `output_path`,
-            `layers` (list of `(points, edges, point_colors, line_thickness,
-            point_radius)` drawn on the left panel, each as accepted by
-            `draw_pose`; `points` is `(period_length, n_nodes, 2)`), and
-            `panel_3d`: `None`, or `(fk_3d_mm, thc_idxs, edges, point_colors,
-            th_idx)` for a second panel showing a synthetic 3D view of the
-            IK reconstruction plus a ground-plane grid. `fk_3d_mm` is
+        item: Dict with `video_path`, `start_idx`, `end_idx`, `layers` (list
+            of `(points, edges, point_colors, line_thickness, point_radius)`
+            drawn on the left panel, each as accepted by `draw_pose`;
+            `points` is `(period_length, n_nodes, 2)`), and `panel_3d`:
+            `None`, or `(fk_3d_mm, thc_idxs, edges, point_colors, th_idx)`
+            for a second panel showing a synthetic 3D view of the IK
+            reconstruction plus a ground-plane grid. `fk_3d_mm` is
             `(period_length, n_nodes, 3)`; `thc_idxs` is passed to
             `compute_camera_orientation` each frame; `th_idx` is the
             thorax's index into `fk_3d_mm`'s node axis, recentered on every
             frame so the view follows the fly.
-        crf: x264/NVENC-scale quality passed to `pvio.write_frames_to_video`.
         video_height: Output height in pixels; the left panel is the source
             video resized to this height (aspect ratio preserved), and, if
             `panel_3d` is given, the right panel is a `video_height` square.
+
+    Returns:
+        out_frames: One combined (left, or left+right) frame per period frame.
+        fps: The source video's own frame rate (or 30.0 if unavailable).
     """
     frame_indices = list(range(item["start_idx"], item["end_idx"]))
     frames, fps = pvio.read_frames_from_video(item["video_path"], frame_indices)
@@ -378,6 +383,135 @@ def render_one_video(item: dict, crf: int, video_height: int) -> None:
 
         out_frames.append(out_frame)
 
+    return out_frames, fps
+
+
+def compute_style_context(node_names: list[str]) -> dict:
+    """Precompute the skeleton edge/color styles shared by every period.
+
+    Args:
+        node_names: SLEAP node names, matching `pred_2d_px`/`fk_2d_px`'s node
+            axis (a periods `.h5`'s root `node_names` attr).
+
+    Returns:
+        Dict with `th_idx`, `thc_idxs`, `kchain_edges`, `kchain_colors`,
+        `kchain_edges_3d`, `kchain_colors_3d`, `raw_edges`, `raw_colors` --
+        see `build_work_item`.
+    """
+    th_idx = node_names.index("Th")
+    thc_idxs = (
+        node_names.index("LF_ThC"),
+        node_names.index("RF_ThC"),
+        node_names.index("LH_ThC"),
+        node_names.index("RH_ThC"),
+    )
+    kchain_edges, kchain_colors = build_skeleton(node_names, leg_colors=KCHAIN_COLORS)
+    # 3D panel only: thorax drawn gray rather than the default white hub,
+    # matching the other non-leg keypoints (that panel has no separate raw
+    # layer to distinguish it from).
+    kchain_edges_3d, kchain_colors_3d = build_skeleton(
+        node_names, leg_colors=KCHAIN_COLORS, hub_color=OTHER_COLOR
+    )
+    raw_edges, raw_colors = build_monochrome_skeleton(node_names, WHITE)
+    return {
+        "th_idx": th_idx,
+        "thc_idxs": thc_idxs,
+        "kchain_edges": kchain_edges,
+        "kchain_colors": kchain_colors,
+        "kchain_edges_3d": kchain_edges_3d,
+        "kchain_colors_3d": kchain_colors_3d,
+        "raw_edges": raw_edges,
+        "raw_colors": raw_colors,
+    }
+
+
+def build_work_item(
+    group: h5py.Group,
+    video_path: Path,
+    style: dict,
+    with_ik: bool,
+) -> dict:
+    """Build one period's `layers`/`panel_3d` for `build_period_frames`.
+
+    Args:
+        group: One period's `<genotype>/<fly_trial>/<period_id>` group.
+        video_path: Trial's aligned video path.
+        style: See `compute_style_context`.
+        with_ik: See `main`.
+
+    Returns:
+        Dict with `video_path`, `start_idx`, `end_idx`, `layers`, `panel_3d`
+        (see `build_period_frames`).
+    """
+    start_idx = int(group.attrs["start_idx"])
+    end_idx = int(group.attrs["end_idx"])
+
+    panel_3d = None
+    if with_ik:
+        missing = [name for name in ("fk_2d_px", "fk_3d_mm") if name not in group]
+        if missing:
+            raise SystemExit(
+                f"Period group {group.name} is missing {missing}; run solve_ik.py "
+                "first, or drop --with-ik."
+            )
+        # Thorax omitted from the raw layer: the IK layer already draws it,
+        # and overlapping the two dots at (near-)identical positions read as
+        # one oversized dot.
+        raw_points = group["pred_2d_px"][:]
+        raw_points[:, style["th_idx"]] = np.nan
+        layers = [
+            (
+                raw_points,
+                style["raw_edges"],
+                style["raw_colors"],
+                RAW_LINE_THICKNESS,
+                RAW_POINT_RADIUS,
+            ),
+            (
+                group["fk_2d_px"][:],
+                style["kchain_edges"],
+                style["kchain_colors"],
+                LINE_THICKNESS,
+                POINT_RADIUS,
+            ),
+        ]
+        fk_3d_mm = group["fk_3d_mm"][:]
+        panel_3d = (
+            fk_3d_mm,
+            style["thc_idxs"],
+            style["kchain_edges_3d"],
+            style["kchain_colors_3d"],
+            style["th_idx"],
+        )
+    else:
+        layers = [
+            (
+                group["pred_2d_px"][:],
+                style["kchain_edges"],
+                style["kchain_colors"],
+                LINE_THICKNESS,
+                POINT_RADIUS,
+            )
+        ]
+
+    return {
+        "video_path": video_path,
+        "start_idx": start_idx,
+        "end_idx": end_idx,
+        "layers": layers,
+        "panel_3d": panel_3d,
+    }
+
+
+def render_one_video(item: dict, crf: int, video_height: int) -> None:
+    """Render one period's annotated video and write it to `item["output_path"]`.
+
+    Args:
+        item: See `build_period_frames`, plus `output_path`.
+        crf: x264/NVENC-scale quality passed to `pvio.write_frames_to_video`.
+        video_height: See `build_period_frames`.
+    """
+    out_frames, fps = build_period_frames(item, video_height)
     pvio.write_frames_to_video(
         item["output_path"], out_frames, fps, mode="gpu", quality=crf, quiet=True
     )
@@ -432,23 +566,7 @@ def main(
 
     with h5py.File(periods_path, "r") as f:
         node_names = list(f.attrs["node_names"])
-        th_idx = node_names.index("Th")
-        thc_idxs = (
-            node_names.index("LF_ThC"),
-            node_names.index("RF_ThC"),
-            node_names.index("LH_ThC"),
-            node_names.index("RH_ThC"),
-        )
-        kchain_edges, kchain_colors = build_skeleton(
-            node_names, leg_colors=KCHAIN_COLORS
-        )
-        # 3D panel only: thorax drawn gray rather than the default white hub,
-        # matching the other non-leg keypoints (that panel has no separate
-        # raw layer to distinguish it from).
-        kchain_edges_3d, kchain_colors_3d = build_skeleton(
-            node_names, leg_colors=KCHAIN_COLORS, hub_color=OTHER_COLOR
-        )
-        raw_edges, raw_colors = build_monochrome_skeleton(node_names, WHITE)
+        style = compute_style_context(node_names)
 
         work_items = []
         for genotype in f:
@@ -463,77 +581,14 @@ def main(
                 trial_group = f[genotype][fly_trial]
                 period_ids = select_longest_periods(trial_group, periods_per_trial)
                 for period_id in period_ids:
-                    group = trial_group[period_id]
-                    start_idx = int(group.attrs["start_idx"])
-                    end_idx = int(group.attrs["end_idx"])
-
-                    panel_3d = None
-                    if with_ik:
-                        missing = [
-                            name
-                            for name in ("fk_2d_px", "fk_3d_mm")
-                            if name not in group
-                        ]
-                        if missing:
-                            raise SystemExit(
-                                f"{periods_path} period {genotype}/{fly_trial}/"
-                                f"{period_id} is missing {missing}; run solve_ik.py "
-                                "first, or drop --with-ik."
-                            )
-                        # Thorax omitted from the raw layer: the IK layer
-                        # already draws it, and overlapping the two dots at
-                        # (near-)identical positions read as one oversized dot.
-                        raw_points = group["pred_2d_px"][:]
-                        raw_points[:, th_idx] = np.nan
-                        layers = [
-                            (
-                                raw_points,
-                                raw_edges,
-                                raw_colors,
-                                RAW_LINE_THICKNESS,
-                                RAW_POINT_RADIUS,
-                            ),
-                            (
-                                group["fk_2d_px"][:],
-                                kchain_edges,
-                                kchain_colors,
-                                LINE_THICKNESS,
-                                POINT_RADIUS,
-                            ),
-                        ]
-                        fk_3d_mm = group["fk_3d_mm"][:]
-                        panel_3d = (
-                            fk_3d_mm,
-                            thc_idxs,
-                            kchain_edges_3d,
-                            kchain_colors_3d,
-                            th_idx,
-                        )
-                    else:
-                        layers = [
-                            (
-                                group["pred_2d_px"][:],
-                                kchain_edges,
-                                kchain_colors,
-                                LINE_THICKNESS,
-                                POINT_RADIUS,
-                            )
-                        ]
-
-                    output_path = (
+                    item = build_work_item(
+                        trial_group[period_id], video_path, style, with_ik
+                    )
+                    item["output_path"] = (
                         output_dir / f"{genotype}__{fly_trial}__period{period_id}_"
-                        f"f{start_idx}-{end_idx}.mp4"
+                        f"f{item['start_idx']}-{item['end_idx']}.mp4"
                     )
-                    work_items.append(
-                        {
-                            "video_path": video_path,
-                            "start_idx": start_idx,
-                            "end_idx": end_idx,
-                            "output_path": output_path,
-                            "layers": layers,
-                            "panel_3d": panel_3d,
-                        }
-                    )
+                    work_items.append(item)
                 logger.info(
                     f"{genotype}/{fly_trial}: queued {len(period_ids)} period videos"
                 )

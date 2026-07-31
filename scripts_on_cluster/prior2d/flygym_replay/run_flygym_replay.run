@@ -1,0 +1,43 @@
+#!/bin/bash -l
+
+#SBATCH --job-name flygym_replay
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 128GB
+#SBATCH --time 4:00:00
+#SBATCH --partition standard
+#SBATCH --qos serial
+#SBATCH --output /home/sibwang/poseforge/bulk_data/prior-2dinvkin/sleap/lm_ported_v001/flygym_replay_logs/%A-%a.log
+
+echo "Starting job on $(hostname) at $(date)"
+
+# This cluster is CPU-only: MuJoCo's default EGL renderer needs a GPU, so
+# fall back to OSMesa (software rendering). Requires OSMesa to be installed
+# on the compute nodes (e.g. a `mesalib`/`libosmesa6` package) -- this could
+# only be checked against a GPU workstation, not verified on this cluster.
+export MUJOCO_GL=osmesa
+
+data_root="/home/sibwang/poseforge/bulk_data/prior-2dinvkin/sleap/lm_ported_v001"
+scripts_dir="/home/sibwang/poseforge/src/poseforge/prior2d/scripts"
+
+trial_name=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "manifest.txt")
+
+conda activate poseforge
+cd /home/sibwang/poseforge
+
+# One array task per trial, all of that trial's periods (--periods-per-trial
+# None), replayed --n-replay-workers-wide in parallel (18, half of the 36
+# requested cores -- each replay is itself internally single-threaded CPU
+# physics, so 18 concurrent replays is a reasonable match for 36 cores).
+# output_dir is shared across every array task; replay_in_flygym.py only
+# clears it for a full (no --trial-name) run, so concurrent per-trial tasks
+# don't race/clobber each other's output (see its own comment on this).
+python "$scripts_dir/replay_in_flygym.py" \
+    "$data_root/periods_ikfk.h5" \
+    "$data_root/flygym_replays" \
+    --trial-name "$trial_name" \
+    --periods-per-trial None \
+    --n-replay-workers 18
+
+echo "Finishing job on $(hostname) at $(date)"

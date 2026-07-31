@@ -1,0 +1,55 @@
+# Full copy of flygym's own default globals
+# (flygym/assets/model/neuromechfly/mujoco_globals.yaml), with only
+# `compiler.fusestatic` changed to `false`.
+#
+# `NeuroMechFly(mujoco_globals_path=...)` REPLACES which globals file gets
+# applied; it does not merge a custom file on top of the default one. A
+# minimal diff-only YAML (just `compiler: {fusestatic: false}`) therefore
+# silently drops every other default (gravity, integrator, statistic.extent,
+# visual/headlight, znear/zfar, ...), which broke both physics (gravity
+# reverting to an ungoverned scale for this mm-sized model) and rendering
+# (default lighting and camera clipping planes). This file must always be
+# kept in sync with flygym's own default if that file changes.
+#
+# Statically fused bodies (e.g. head, wings, unarticulated abdomen segments
+# under the legs-only joint preset) disappear as distinct MuJoCo bodies,
+# which breaks per-body-segment sensors (`objtype=xbody`) attached to them;
+# disabling fusion keeps every body segment addressable.
+compiler:
+  autolimits: true
+  angle: radian
+  eulerseq: XYZ
+  fusestatic: false
+  boundmass: 1e-6 # some tarsal segments have their masses increased to this
+  boundinertia: 1e-12
+
+option:
+  gravity: [0, 0, -9810] # in mm/s^2
+  timestep: 1e-4
+  integrator: Euler
+  solver: Newton
+  iterations: 100
+  noslip_iterations: 5
+
+  flag:
+    multiccd: enable
+    energy: enable
+
+statistic:
+  extent: 1 # mm; pins scale so znear/zfar below are directly in mm
+
+visual:
+  headlight:
+    ambient: [0.5, 0.5, 0.5]
+    diffuse: [0.6, 0.6, 0.6]
+    specular: [0.3, 0.3, 0.3]
+  map:
+    stiffness: 1e6
+    stiffnessrot: 5e6
+    force: 1e-5
+    torque: 2e-4
+    znear: 5e-4 # 5e-4 mm; allows close-up camera views near fly body
+    zfar: 250.0 # 250 mm
+  global:
+    offwidth: 2048
+    offheight: 2048

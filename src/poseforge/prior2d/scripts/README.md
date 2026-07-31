@@ -16,6 +16,10 @@ Pipeline, in order:
   datasets; small per-video metadata (`node_names`, `genotypes`,
   `fly_trials`, `n_frames_per_video`) are root `.attrs`.
 - (train a "student" SLEAP model on the promoted labels; not scripted here)
+- `run_trained_model_on_aligned_videos.sh <trial_path>`: runs the retrained
+  **single-instance** student model directly on one trial's aligned video (no
+  centroid stage needed). Meant to run locally against a workstation GPU, not
+  on the cluster like `run_lm_model_on_full_behavior_videos.sh` above.
 - `filter_student_predictions.sh`: runs the student model's predictions
   through the full labeled-data pipeline in one go:
   1. `filter_slp_labels.py` (promote high-confidence predictions, using
@@ -35,12 +39,29 @@ Pipeline, in order:
   it); frames whose worst leg keypoint mismatch exceeds `--max-mismatch`
   (mm) are dropped, splitting or shortening periods as needed, and the three
   new datasets are median-filtered over time (`--filtering-mask-frames`).
-  Always saves its own before/after summary figure. Run separately from
+  `--neutral-weight` (QuickIK's prior pulling toward the body plan's neutral
+  pose) defaults to 0.5; see "Round 4" below for how that was chosen. Always
+  saves its own before/after summary figure. Run separately from
   `filter_student_predictions.sh`, on its output.
 - `make_videos.py`: renders annotated videos overlaying raw predictions
   (blue) and, with `--with-ik`, the IK/FK result (green on the same panel,
   plus a second panel with a synthetic 3D view of the IK reconstruction).
   Run once, after `solve_ik.py`, not part of `filter_student_predictions.sh`.
+- `replay_in_flygym.py`: feeds each period's `ik_dofangles_rad` to a
+  leg-actuated `NeuroMechFly` model in FlyGym (CPU physics, not warp) as
+  position-actuator targets, one recorded frame per physics step at the
+  trial's own recording rate, and renders the resulting simulation from an
+  oblique tracking camera and a bottom-up (segmentation-only) camera
+  matching the real Spotlight rig. The fly's overall position/orientation is
+  not prescribed: it emerges from the physics as the leg actuators push
+  against the ground. Also saves an interoperable simulation-data `.h5` and,
+  by default, a 4-panel video combining its own renders with
+  `make_videos.py`'s 2D pose and synthetic 3D IK/FK panels for the same
+  period. See "Round 3" below for the parameters used and a caveat about
+  simulated heading drift. `--trial-name <genotype>/<fly_trial>` restricts
+  the replay to one trial, and `--n-replay-workers` parallelizes periods via
+  joblib (each worker builds its own model); see "Round 5" for the cluster
+  array-job setup these two options are for.
 
 Shared code lives in `src/poseforge/prior2d/` (`skeleton_viz.py`,
 `geometry.py`, `calibration.py`, `periods.py`), not under `scripts/`, so it
@@ -142,3 +163,155 @@ python "$scripts_dir/make_videos.py" \
     --with-ik \
     --periods-per-trial 1
 ```
+
+### Round 3: FlyGym replay (this session, 2026-07-31)
+
+```bash
+output_dir="bulk_data/prior-2dinvkin/sleap/lm_ported_score"
+scripts_dir="src/poseforge/prior2d/scripts"
+
+# Replays each period's ik_dofangles_rad in FlyGym (CPU) and renders the
+# result; also builds a 4-panel video combining its own tracking-cam/segid
+# renders with make_videos.py's 2D pose and synthetic 3D IK/FK panels for
+# the same period (--combine-panels, on by default). Position-actuator
+# gain (kp), leg-adhesion gain, and the segid crop/zoom fraction are
+# hardcoded constants in the script (ACTUATOR_GAIN=50, ADHESION_GAIN=0.3,
+# ZOOM_CROP_FRACTION=0.55), tuned this session against visible jerkiness on
+# noisy IK frames rather than exposed as CLI flags.
+#
+# Caveat found this session: since the IK never solves for the root's own
+# orientation (only relative leg joint angles), the simulated fly's heading
+# is entirely emergent from leg-actuator reaction forces, and can drift
+# noticeably from the real recorded fly's heading over a period (one period
+# checked: ~25 deg simulated drift vs. ~2 deg in the real recording) even
+# though every leg joint faithfully tracks its recorded target angle. Only
+# the combined video's bottom-left segid panel is rotated frame-by-frame
+# (using the sim's own recorded heading) to counteract this for viewing;
+# the standalone `_segid.mp4` stays a raw, unrotated render, and the
+# interoperable h5 data is left as simulated, unrotated, in all cases.
+python "$scripts_dir/replay_in_flygym.py" \
+    "$output_dir/periods_ikfk.h5" \
+    "$output_dir/flygym_replays" \
+    --periods-per-trial 1
+```
+
+### Round 4: genuine retrained-model predictions, neutral_weight=0.5 (this session, 2026-07-31)
+
+Round 1 found that `lm_ported_v000_trained000.slp` was actually the original LM
+model's predictions carried forward, not the retrained single-instance
+model's. This round ran genuine inference with that model and repeated
+Rounds 2-3 on the result, in a new `lm_ported_v001/` (no threshold suffix:
+only one `--min-keypoint-score` was tried this time).
+
+Separately, `solve_ik.py`'s `--neutral-weight` (QuickIK's prior pulling
+toward the body plan's neutral pose) was swept over 0.1 (the prior default)
+/0.5/1.0 by comparing rendered FlyGym replays; 0.5 was chosen (stronger than
+0.1, but 1.0 visibly over-smoothed genuine leg motion) and is now
+`solve_ik.py`'s own default, used below.
+
+```bash
+data_root="/mnt/upramdya_data/VAS/poseforge_paper_data"
+new_root="bulk_data/prior-2dinvkin/sleap/lm_ported_v001"
+scripts_dir="src/poseforge/prior2d/scripts"
+
+# Runs the retrained single-instance model directly on each trial's aligned
+# video (no centroid stage), one trial at a time, looping locally over every
+# trial in lm_ported_v000.slp (~2 min/trial on a local GPU, ~2h11m total for
+# 63 trials -- no cluster/manifest needed for this step).
+for trial_dir in $(python -c "
+import sleap_io as sio
+from pathlib import Path
+labels = sio.load_slp('bulk_data/prior-2dinvkin/sleap/lm_ported_score_0.5/lm_ported_v000.slp')
+for v in labels.videos:
+    print(Path(v.filename).parent.parent)
+"); do
+    bash "$scripts_dir/run_trained_model_on_aligned_videos.sh" "$trial_dir"
+done
+
+# Combines every trial's sleap/prediction_trained000_aligned.{slp,h5} into
+# one aligned-domain .slp (--aligned-input: no per-frame transform needed).
+python "$scripts_dir/port_slp_labels.py" \
+    --output-path "$new_root/lm_ported_v001.slp" \
+    --aligned-input \
+    --h5-relpath sleap/prediction_trained000_aligned.h5 \
+    --reference-slp-relpath sleap/prediction_trained000_aligned.slp
+
+# filter_slp_labels.py -> convert_slp.py -> extract_continuous_periods_from_h5.py,
+# by hand (not filter_student_predictions.sh, whose paths are hardcoded to
+# lm_ported_score_0.5/lm_ported_score), same criteria as Round 2.
+python "$scripts_dir/filter_slp_labels.py" \
+    --input-path "$new_root/lm_ported_v001.slp" \
+    --output-path "$new_root/filtered.slp" \
+    --aligned-input \
+    --min-keypoint-score 0.2 \
+    --max-leg-segment-length 200.0 \
+    --max-missing-keypoints 0 \
+    --min-pose-change 2.0
+python "$scripts_dir/convert_slp.py" \
+    --slp2h5 \
+    --input-path "$new_root/filtered.slp" \
+    --output-path "$new_root/filtered.h5" \
+    --include-acceptance
+python "$scripts_dir/extract_continuous_periods_from_h5.py" \
+    --input-path "$new_root/filtered.h5" \
+    --output-path "$new_root/periods.h5"
+
+# solve_ik.py (now defaulting to --neutral-weight 0.5) -> make_videos.py ->
+# replay_in_flygym.py, same as Rounds 2-3.
+python "$scripts_dir/solve_ik.py" \
+    --periods-path "$new_root/periods.h5" \
+    --output-path "$new_root/periods_ikfk.h5" \
+    --n-jobs -1
+python "$scripts_dir/make_videos.py" \
+    "$new_root/periods_ikfk.h5" \
+    "$new_root/period_videos" \
+    --with-ik \
+    --periods-per-trial 1
+python "$scripts_dir/replay_in_flygym.py" \
+    "$new_root/periods_ikfk.h5" \
+    "$new_root/flygym_replays" \
+    --periods-per-trial 1
+```
+
+### Round 5: cluster-parallel FlyGym replay, all periods (this session, 2026-07-31)
+
+`replay_in_flygym.py` gained two options for running the full (not just
+longest-per-trial) replay on a cluster, one SLURM array task per trial:
+
+- `--trial-name <genotype>/<fly_trial>` restricts the run to one trial. With
+  it, `output_dir` is no longer cleared at startup (only a full,
+  every-trial run clears it), since it's expected to be one of many
+  concurrent per-trial array tasks sharing one `output_dir`.
+- `--n-replay-workers` parallelizes periods within a trial via joblib. MuJoCo
+  objects aren't picklable across processes, so each worker builds its own
+  `NeuroMechFly` model once (cached for every period joblib routes to that
+  worker), rather than sharing the main process's.
+- `--periods-per-trial None` (the literal string `None` on the CLI) replays
+  every period in the trial instead of just the longest one.
+
+The manifest (one `<genotype>/<fly_trial>` per line, matching `--trial-name`)
+was generated from `periods.h5` (stable across `solve_ik.py` reruns, unlike
+`periods_ikfk.h5`):
+
+```bash
+python -c "
+import h5py
+with h5py.File('bulk_data/prior-2dinvkin/sleap/lm_ported_v001/periods.h5', 'r') as f:
+    for genotype in f:
+        for fly_trial in f[genotype]:
+            print(f'{genotype}/{fly_trial}')
+" > scripts_on_cluster/prior2d/flygym_replay/manifest.txt
+```
+
+`scripts_on_cluster/prior2d/flygym_replay/run_flygym_replay.run` (SLURM
+array job, 36 cpus/128GB/4h per task, 18 replay workers) and
+`submit_flygym_replay.sh` (`sbatch --array=1-N`) submit one task per
+manifest line. The cluster is CPU-only, so the job sets
+`MUJOCO_GL=osmesa` (MuJoCo's default EGL renderer needs a GPU; OSMesa is
+the software-rendering fallback) -- `replay_in_flygym.py` itself has no
+GPU dependency otherwise (`write_video` and FlyGym's own `Renderer.save_video`
+already use CPU libx264; `pvio.read_frames_from_video`, used by
+`--combine-panels` to read the source aligned video, is decode-only). Only
+tested locally (this workstation has a GPU, so `MUJOCO_GL=osmesa` itself
+could not be exercised here); confirm OSMesa is installed on the cluster's
+compute nodes before submitting.

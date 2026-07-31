@@ -53,7 +53,7 @@ dependencies = [
     "sleap-nn==0.2.0",
 
     # Mature NeLy software
-    "flygym[warp]==2.1.0",
+    "flygym[warp]",
     "seqikpy==1.1.0",
 
     # Project-specific (see [tool.uv.sources])
@@ -72,6 +72,8 @@ parallel-video-io = { path = "../parallel-video-io", editable = true }
 parallel-matplotlib-animation = { path = "../parallel-matplotlib-animation", editable = true }
 # Rust/PyO3 inverse kinematics solver
 quickik = { path = "../quickik/python", editable = true }
+# Dev checkout with the trochanter/femur geom split (post-v2.1.0, unreleased)
+flygym = { path = "../flygym", editable = true }
 
 [dependency-groups]
 dev = [

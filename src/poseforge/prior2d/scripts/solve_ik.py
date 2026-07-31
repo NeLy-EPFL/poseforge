@@ -81,9 +81,11 @@ BODY_PLAN_PATH = (
     Path(__file__).resolve().parent.parent / "assets" / "neuromechfly_ypr_legs.json"
 )
 # QuickIK's own NeuroMechFly example (benchmark/plot/render_video_2d.py) uses
-# 10x SolverConfig's own default (1e-3); this is a further 10x on top of
-# that.
-NEUTRAL_WEIGHT = 0.1
+# 10x SolverConfig's own default (1e-3), i.e. 0.01. This was raised to 0.1,
+# then, after comparing 0.1/0.5/1.0 on rendered FlyGym replays, settled at
+# 0.5 (this session, 2026-07-31): stronger than the QuickIK-derived starting
+# point, but 1.0 over-smoothed genuine leg motion.
+NEUTRAL_WEIGHT = 0.5
 
 # ThC (leg-base) position is barely observed independently of the root pose
 # it's rigidly close to (see `solve_period_ik`'s root-Missing note), so its
@@ -201,6 +203,7 @@ def solve_period_ik(
     node_names: list[str],
     tree: quickik.KinematicTree,
     joint_names: list[str],
+    neutral_weight: float = NEUTRAL_WEIGHT,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Fit IK to one period's 2D (mm) keypoint sequence.
 
@@ -210,6 +213,7 @@ def solve_period_ik(
         node_names: SLEAP node names, matching `pred_2d_mm`'s node axis.
         tree: Body-plan kinematic tree (see `load_body_plan`).
         joint_names: See `load_body_plan`.
+        neutral_weight: See `main`.
 
     Returns:
         dof_angles: `(period_length, n_dofs)` solved joint angles, radians.
@@ -234,7 +238,7 @@ def solve_period_ik(
     weights[:, thc_idxs] *= THC_WEIGHT_SCALER
     positions = np.nan_to_num(positions, nan=0.0).astype(np.float32)
 
-    config = quickik.SolverConfig(neutral_weight=NEUTRAL_WEIGHT)
+    config = quickik.SolverConfig(neutral_weight=neutral_weight)
     seq_solver = quickik.SequenceSolver(tree, config, mapper=quickik.XYView())
     states, fk_positions = seq_solver.solve_sequence_with_fk(positions, weights)
 
@@ -303,6 +307,7 @@ def process_trial(
     max_mismatch: float,
     filtering_mask_frames: int,
     min_period_length: int,
+    neutral_weight: float,
 ) -> tuple[str, str, list[dict]]:
     """Solve IK and re-segment every period of one trial. Runs in a joblib worker.
 
@@ -321,6 +326,7 @@ def process_trial(
         max_mismatch: See `main`.
         filtering_mask_frames: See `main`.
         min_period_length: See `main`.
+        neutral_weight: See `main`.
 
     Returns:
         genotype, fly_trial: Passed through, to route results back to the
@@ -342,7 +348,7 @@ def process_trial(
         node_names = period["node_names"]
 
         dof_angles, fk_3d_mm = solve_period_ik(
-            period["pred_2d_mm"], node_names, tree, joint_names
+            period["pred_2d_mm"], node_names, tree, joint_names, neutral_weight
         )
         fk_2d_px = convert_mm_to_px(
             fk_3d_mm[..., :2],
@@ -433,6 +439,7 @@ def main(
     filtering_mask_frames: int = 5,
     min_period_length: int = 30,
     n_jobs: int = -1,
+    neutral_weight: float = NEUTRAL_WEIGHT,
 ) -> None:
     """Fit IK to every period in a periods `.h5`, saving a re-segmented copy.
 
@@ -460,6 +467,9 @@ def main(
             period to be kept.
         n_jobs: Number of parallel joblib workers (one trial per job); `-1`
             uses all available cores.
+        neutral_weight: `quickik.SolverConfig`'s prior weight pulling the
+            solution toward the body plan's neutral pose (see
+            `NEUTRAL_WEIGHT`'s comment for how the default was chosen).
     """
     if not periods_path.is_file():
         raise SystemExit(f"Input file does not exist: {periods_path}")
@@ -518,6 +528,7 @@ def main(
             max_mismatch,
             filtering_mask_frames,
             min_period_length,
+            neutral_weight,
         )
         for genotype, fly_trial, periods_input in work_items
     )
@@ -531,6 +542,7 @@ def main(
         f_out.attrs["max_mismatch_mm"] = max_mismatch
         f_out.attrs["filtering_mask_frames"] = filtering_mask_frames
         f_out.attrs["min_period_length"] = min_period_length
+        f_out.attrs["neutral_weight"] = neutral_weight
 
         for genotype, fly_trial, new_periods in results:
             trial_key = f"{genotype}/{fly_trial}"

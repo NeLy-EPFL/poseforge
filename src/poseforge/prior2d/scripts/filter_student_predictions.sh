@@ -17,9 +17,11 @@ periods_h5="$output_dir/periods.h5"
 [ -f "$input_slp" ] || { echo "File $input_slp does not exist"; exit 1; }
 mkdir -p "$output_dir"
 
-# Same selection criteria as port_slp_labels.py + filter_slp_labels.py's
-# defaults, spelled out here so this run doesn't silently drift if those
-# defaults ever change.
+# Same selection criteria as port_slp_labels.py, except --min-keypoint-score
+# is relaxed from filter_slp_labels.py's own default (0.5) to 0.2, which
+# keeps ~30% more frames after IK filtering with no change in fit quality.
+# All values spelled out here so this run doesn't silently drift if
+# filter_slp_labels.py's defaults ever change.
 echo "Filtering student model predictions at $(date)"
 python "$scripts_dir/filter_slp_labels.py" \
     --input-path "$input_slp" \
