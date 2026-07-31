@@ -282,12 +282,20 @@ longest-per-trial) replay on a cluster, one SLURM array task per trial:
   it, `output_dir` is no longer cleared at startup (only a full,
   every-trial run clears it), since it's expected to be one of many
   concurrent per-trial array tasks sharing one `output_dir`.
-- `--n-replay-workers` parallelizes periods within a trial via joblib. MuJoCo
+- `--n-replay-workers` parallelizes periods within a trial via joblib (the
+  only parallelism in the script; each worker's own video/H5 writing runs
+  synchronously as part of its period, not further parallelized). MuJoCo
   objects aren't picklable across processes, so each worker builds its own
   `NeuroMechFly` model once (cached for every period joblib routes to that
   worker), rather than sharing the main process's.
-- `--periods-per-trial None` (the literal string `None` on the CLI) replays
-  every period in the trial instead of just the longest one.
+- `--periods-per-trial` now defaults to `-1`, replaying every period in the
+  trial (previously the default was `1`, the longest period only; pass `1`
+  explicitly for that).
+
+Progress logging for long (all-periods, many-trial) runs: a `"queued N
+period replays"` line per trial, a `"Progress: i/N periods done"` line per
+period with `--n-replay-workers 1`, and joblib's own `"Done i out of N |
+elapsed / remaining"` lines otherwise.
 
 The manifest (one `<genotype>/<fly_trial>` per line, matching `--trial-name`)
 was generated from `periods.h5` (stable across `solve_ik.py` reruns, unlike

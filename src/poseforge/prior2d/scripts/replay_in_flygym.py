@@ -60,7 +60,6 @@ import numpy as np
 import tyro
 import yaml
 from flygym import Renderer, Simulation
-from joblib import Parallel, delayed
 from flygym.anatomy import (
     ActuatedDOFPreset,
     AxisOrder,
@@ -76,6 +75,7 @@ from flygym.compose import (
     NeuroMechFly,
 )
 from flygym.utils.math import Rotation3D
+from joblib import Parallel, delayed
 from loguru import logger
 
 from poseforge.prior2d.scripts.make_videos import (
@@ -1027,7 +1027,7 @@ def main(
     periods_path: tyro.conf.Positional[Path],
     output_dir: tyro.conf.Positional[Path],
     data_root: Path = DATA_ROOT,
-    periods_per_trial: int | None = 1,
+    periods_per_trial: int = -1,
     max_trials: int | None = None,
     trial_name: str | None = None,
     n_replay_workers: int = 1,
@@ -1046,7 +1046,7 @@ def main(
         data_root: Root directory containing each trial's `metadata.zip`
             (read-only), used to look up the trial's recording frame rate.
         periods_per_trial: Number of (longest) periods to replay per trial.
-            `None` replays every period in the trial.
+            `-1` replays every period in the trial.
         max_trials: If given, only replay the first N trials with a
             `metadata.zip` (in the periods `.h5`'s own iteration order), for
             quick testing. Unused if `trial_name` is given.
@@ -1139,7 +1139,9 @@ def main(
                     )
 
                 trial_group = f[genotype][fly_trial]
-                period_ids = select_longest_periods(trial_group, periods_per_trial)
+                period_ids = select_longest_periods(
+                    trial_group, None if periods_per_trial == -1 else periods_per_trial
+                )
                 for period_id in period_ids:
                     group = trial_group[period_id]
                     if "ik_dofangles_rad" not in group:
@@ -1168,7 +1170,9 @@ def main(
 
     logger.info(f"Replaying {len(work_items)} periods ({n_replay_workers} worker(s))")
     if n_replay_workers <= 1:
-        for target_angles, control_freq_hz, output_stem, video_item in work_items:
+        for i, (target_angles, control_freq_hz, output_stem, video_item) in enumerate(
+            work_items, start=1
+        ):
             replay_period(
                 fly,
                 world,
@@ -1184,8 +1188,9 @@ def main(
                 playback_speed,
                 video_item,
             )
+            logger.info(f"Progress: {i}/{len(work_items)} periods done")
     else:
-        Parallel(n_jobs=n_replay_workers)(
+        Parallel(n_jobs=n_replay_workers, verbose=10)(
             delayed(_replay_one_period_in_worker)(
                 target_angles,
                 control_freq_hz,
