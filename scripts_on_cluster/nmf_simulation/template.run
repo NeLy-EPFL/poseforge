@@ -26,7 +26,7 @@ project_root="/home/$USER/poseforge"
 simulation_cli_path="src/poseforge/neuromechfly/scripts/run_simulation.py"
 
 # camera calibration path
-calibration_path="$project_root/src/poseforge/neuromechfly/visuals/spotlight_cam_mat.npz"
+calibration_path="$project_root/src/poseforge/neuromechfly/visuals/poseforge_camera_261117.npz"
 
 # Setup
 cd $project_root
@@ -41,6 +41,8 @@ python -u $simulation_cli_path \
     --input-timestep 0.01 \
     --sim-timestep 0.0001 \
     <<<USE_FLYBODY_FLAG>>> \
+    --source-format <<<SOURCE_FORMAT>>> \
+    --deeperfly-surface <<<DEEPERFLY_SURFACE>>> \
     --calibration_path "$calibration_path"
 
 echo "Simulation ends at $(date)"
