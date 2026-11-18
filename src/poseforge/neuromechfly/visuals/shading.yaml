@@ -1,0 +1,82 @@
+# Shading geometry prior.
+#
+# Every body part is given the SAME uniform matte albedo with no texture, so the
+# rendered RGB intensity reflects only the scene lighting and surface geometry
+# (a Lambertian shading pass), not per-part color or texture. This is rendered
+# through the ordinary color-coding renderer loop like any other visual set; it
+# is the "shading" geometry buffer. Specular and shininess are set to 0 to keep
+# the pass diffuse. Wings are kept opaque here (unlike the base/grayscale sets)
+# so the shading buffer carries their geometry too.
+
+shading_wing:
+  apply_to: '*_wing'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_eye:
+  apply_to: '*_eye'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_arista:
+  apply_to: '*_arista'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_haltere:
+  apply_to: '*_haltere'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_headthorax:
+  apply_to: [c_head, c_thorax]
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_antennaproboscis:
+  apply_to: ['*_pedicel', '*_funiculus', c_rostrum, c_haustellum]
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_abdomen12345:
+  apply_to: [c_abdomen12, c_abdomen3, c_abdomen4, c_abdomen5]
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_abdomen6:
+  apply_to: c_abdomen6
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_coxa:
+  apply_to: '*_coxa'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_trochanterfemur:
+  apply_to: '*_trochanterfemur'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_tibia:
+  apply_to: '*_tibia'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]
+shading_tarsus:
+  apply_to: '*_tarsus*'
+  material:
+    specular: 0.0
+    shininess: 0.0
+    rgba: [0.6, 0.6, 0.6, 1]

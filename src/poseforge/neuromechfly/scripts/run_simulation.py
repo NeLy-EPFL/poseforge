@@ -52,7 +52,13 @@ Pipeline:
 
 from pathlib import Path
 
-from poseforge.neuromechfly.data import load_kinematic_recording
+from poseforge.neuromechfly.data import (
+    load_kinematic_recording,
+    load_deeperfly_recording,
+    read_deeperfly_fps,
+    SOURCE_FORMAT_AYMANNS2022,
+    SOURCE_FORMAT_DEEPERFLY,
+)
 from poseforge.neuromechfly.simulate import simulate_one_segment  # TODO: revert
 from poseforge.neuromechfly.postprocessing import postprocess_segment
 from poseforge.util import get_hardware_availability
@@ -67,9 +73,10 @@ def get_default_visual_paths(use_flybody: bool) -> list[Path]:
                 # visuals/per_leg_color.yaml, etc
                 ]
     else:
-        return [visuals_dir / "base.yaml",
+        return [# visuals_dir / "base.yaml",
                 visuals_dir / "grayscale.yaml",
-                visuals_dir / "per_link_color.yaml",
+                # visuals_dir / "per_link_color.yaml",
+                visuals_dir / "shading.yaml",  # uniform-albedo shading geometry prior
                 # visuals/per_leg_color.yaml, etc
                 ]
 
@@ -87,13 +94,18 @@ def simulate_using_kinematic_prior(
     use_flybody: bool = False,
     visual_paths: list[Path] | None = None,
     calibration_path: str | None = None,
+    source_format: str = SOURCE_FORMAT_AYMANNS2022,
+    deeperfly_surface: str = "any",
 ) -> None:
-    """CLI to run replay kinematic motion priors from Aymanns et al. 2022
-    in NeuroMechFly.
+    """CLI to replay kinematic motion priors in NeuroMechFly, from either the
+    tethered-fly Aymanns et al. 2022 recordings or the freely-moving deeperfly
+    recordings.
 
     Args:
-        recorded_trial_path (str): Path to a single .pkl file from Aymanns
-            et al. 2022.
+        recorded_trial_path (str): Path to a single kinematic recording. For
+            ``source_format="aymanns2022"`` this is a .pkl file from Aymanns
+            et al. 2022; for ``source_format="deeperfly"`` this is a deeperfly
+            results .h5 file (e.g. ".../deeperfly/results/r13_dense.h5").
         trial_output_dir (str): Output base directory.
         segment_ids (list[int] | None): List of segment IDs to simulate. If
             None, simulate all segments in the trial.
@@ -123,6 +135,14 @@ def simulate_using_kinematic_prior(
             set, the tracking camera's fovy and z-offset are taken from the
             calibration so the rendered px/mm at the sample matches the
             experimental Spotlight setup.
+        source_format (str): Kinematic input format, "aymanns2022" (tethered,
+            pickled DataFrame) or "deeperfly" (freely-moving, HDF5). For
+            "deeperfly", `input_timestep` is overridden by the recording's own
+            frame rate.
+        deeperfly_surface (str): For "deeperfly" only, keep segments where the
+            fly is on this arena surface ("floor", "lid", "wall" or "any").
+            Freely-moving flies are often upside down on the lid; use "floor"
+            for floor-like walking kinematics.
     """
     recorded_trial_path = Path(recorded_trial_path)
     trial_output_dir = Path(trial_output_dir)
@@ -137,13 +157,26 @@ def simulate_using_kinematic_prior(
     )
 
     trial_name = recorded_trial_path.stem
-    kinematic_recording_segments = load_kinematic_recording(
-        recording_path=recorded_trial_path,
-        min_duration_sec=0.2,
-        input_timestep=input_timestep,
-        filter_size=5,
-        filtered_frac_threshold=0.5,
-    )
+    if source_format == SOURCE_FORMAT_DEEPERFLY:
+        # deeperfly recordings carry their own frame rate; derive the input
+        # timestep from it so the interpolation to the simulation timestep is
+        # correct regardless of the default passed in.
+        input_timestep = 1.0 / read_deeperfly_fps(recorded_trial_path)
+        kinematic_recording_segments = load_deeperfly_recording(
+            recording_path=recorded_trial_path,
+            min_duration_sec=0.2,
+            surface=deeperfly_surface,
+            filter_size=5,
+            filtered_frac_threshold=0.5,
+        )
+    else:
+        kinematic_recording_segments = load_kinematic_recording(
+            recording_path=recorded_trial_path,
+            min_duration_sec=0.2,
+            input_timestep=input_timestep,
+            filter_size=5,
+            filtered_frac_threshold=0.5,
+        )
     if max_segments_per_trial is not None:
         kinematic_recording_segments = kinematic_recording_segments[
             :max_segments_per_trial
@@ -176,6 +209,7 @@ def simulate_using_kinematic_prior(
             max_sim_steps=max_sim_steps_per_segment,
             use_flybody=use_flybody,
             calibration_path=calibration_path,
+            source_format=source_format,
         )
         is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
