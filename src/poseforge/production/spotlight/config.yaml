@@ -6,6 +6,22 @@ flip_detection:
     num_classes: 2
   output_labels: ["not_flipped", "flipped"]
 
+rearing_detection:
+  checkpoint: "~/projects/poseforge/production_models/rearing_detection/v1/production_checkpoint_v1.pth"
+  input_size: 160
+  crop_half: 130
+  crop_y_offset: -60
+  output_labels: ["not_rearing", "rearing"]
+
+edge_detection:
+  # Keypoint-independent corner method (poseforge.spotlight.valid_frame_filtering):
+  # flag a frame if any aligned-frame corner is within this many mm of a wall.
+  clearance_mm: 0.4
+
+temporal_flip_filter:
+  min_run: 3
+  pad_seconds: 0.3
+
 bodyseg:
   checkpoint: "~/projects/poseforge/production_models/bodyseg/v2/production_checkpoint.model.pth"
   architecture_config: "~/projects/poseforge/production_models/bodyseg/v2/configs/model_architecture_config.yaml"

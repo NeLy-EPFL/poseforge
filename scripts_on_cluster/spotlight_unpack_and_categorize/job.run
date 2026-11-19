@@ -1,0 +1,55 @@
+#!/bin/bash -l
+
+#SBATCH --job-name spotlight_unpack_categorize
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 36
+#SBATCH --mem 64GB
+#SBATCH --time 3:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/spotlight_unpack_and_categorize/output_%x_%j.log
+
+set -euo pipefail
+
+if [ "$#" -lt 1 ]; then
+    echo "Usage: sbatch job.run <genotype_prefix>   e.g. sbatch job.run G1xCI63"
+    exit 1
+fi
+GENOTYPE="$1"
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Paths (one genotype per job; fan its trials across the allocated CPUs)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+INPUT_DIR="$WORK/$USER/poseforge/data/spotlight_new_vid"
+ARENA_DIR="$INPUT_DIR/arena72x48"
+OUTPUT_DIR="$WORK/$USER/poseforge/data/spotlight_aligned_and_cropped"
+
+cd "$PROJECT_ROOT"
+
+echo "Genotype   : ${GENOTYPE}"
+echo "Input dir  : ${INPUT_DIR}"
+echo "Arena dir  : ${ARENA_DIR}"
+echo "Output dir : ${OUTPUT_DIR}"
+echo "Workers    : ${SLURM_CPUS_PER_TASK}"
+echo "Unpack + categorize starting at $(date)"
+
+python -u src/poseforge/spotlight/scripts/unpack_and_categorize_spotlight.py \
+    --input-dir "${INPUT_DIR}" \
+    --arena-dir "${ARENA_DIR}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --glob-pattern "${GENOTYPE}*fly*" \
+    --device cpu \
+    --n-workers "${SLURM_CPUS_PER_TASK}"
+
+echo "Unpack + categorize ends at $(date)"
