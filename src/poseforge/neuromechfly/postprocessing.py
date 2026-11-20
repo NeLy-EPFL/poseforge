@@ -123,6 +123,78 @@ def rotate_image(
         )
 
 
+def rotate_image_about(
+    image: np.ndarray,
+    rotation_angle,
+    pivot_row_col,
+    preserve=False,
+    cval: float = 0.0,
+) -> np.ndarray:
+    """Rotate ``image`` by ``rotation_angle`` (radians) about an arbitrary pivot.
+
+    Equivalent to :func:`rotate_image` (same angle convention, interpolation order
+    and background fill), except the rotation is centered on ``pivot_row_col``
+    (a ``(row, col)`` pixel) instead of the image center. This matters because the
+    tracking camera parks the fly's tracked body at a fixed pixel that is *not* the
+    image center; rotating about the image center would swing that off-center point
+    around a circle as the fly changes heading, so the processed fly would orbit the
+    frame. Rotating about the tracked pixel keeps the fly pinned for every heading.
+
+    The affine is built to match ``scipy.ndimage.rotate(..., reshape=False)``
+    exactly (which uses ``matrix=[[c, s], [-s, c]]`` and
+    ``offset = pivot - matrix @ pivot``), so orientation is identical to the old
+    center rotation -- only the pivot changes.
+    """
+    theta = np.deg2rad(np.rad2deg(rotation_angle))
+    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
+    rotation = np.array([[cos_theta, sin_theta], [-sin_theta, cos_theta]])
+    pivot = np.asarray(pivot_row_col, dtype=np.float64)
+    offset = pivot - rotation @ pivot
+    order = 0 if preserve else 1
+    mode = "nearest" if preserve else "constant"
+    if image.ndim == 3:
+        rotated = np.empty_like(image)
+        for channel in range(image.shape[2]):
+            rotated[..., channel] = ndimage.affine_transform(
+                image[..., channel], rotation, offset=offset, order=order,
+                mode=mode, cval=cval,
+            )
+        return rotated
+    return ndimage.affine_transform(
+        image, rotation, offset=offset, order=order, mode=mode, cval=cval
+    )
+
+
+def tracked_point_pixel_row_col(
+    h5_file: h5py.File,
+    frame_idx: int,
+    image_shape: tuple[int, int],
+    camera_image_shape: tuple[int, int],
+    tracked_body: str = "c_thorax",
+) -> np.ndarray:
+    """Pixel (row, col) that the tracking camera pins, i.e. the rotation pivot.
+
+    The tracking camera is centered on ``tracked_body`` (``c_thorax`` by default,
+    matching the camera setup in ``simulate.py``), so projecting that body's world
+    position with the per-frame camera matrix gives the point the camera holds fixed
+    in the raw render. We scale from the camera-projection pixel space
+    (``camera_image_shape``) into the rendered-frame pixel space (``image_shape``)
+    the same way :func:`rotate_keypoint_positions_camera` does.
+    """
+    body_keys = h5_file["body_segment_states"].attrs["keys"].tolist()
+    tracked_index = body_keys.index(tracked_body)
+    tracked_world = h5_file["body_segment_states/pos_global"][frame_idx, tracked_index, :]
+    camera_matrix = h5_file["camera_matrix"][frame_idx, :, :]
+    projected = camera_matrix @ np.append(tracked_world.astype(np.float64), 1.0)
+    col = projected[0] / projected[2]
+    row = projected[1] / projected[2]
+    camera_height, camera_width = camera_image_shape
+    height, width = image_shape
+    col *= width / camera_width
+    row *= height / camera_height
+    return np.array([row, col], dtype=np.float64)
+
+
 def center_square_crop_image(image: np.ndarray, side_length) -> np.ndarray:
     """Crop the image to a square of given side length, centered on the image."""
     height, width = image.shape[:2]
@@ -188,6 +260,7 @@ def rotate_keypoint_positions_camera(
     start_col: int,
     start_row: int,
     camera_image_shape: tuple[int, int] | None = None,
+    pivot_col_row: tuple[float, float] | None = None,
 ):
     """
     Apply rotation and cropping transformations to camera/image coordinates.
@@ -201,11 +274,18 @@ def rotate_keypoint_positions_camera(
         camera_image_shape: (height, width) in which projected camera coordinates
             are expressed. If different from `image_shape`, a scale correction is
             applied before rotation/cropping.
+        pivot_col_row: (col, row) pixel the image rotation is centered on (the
+            tracked-body projection). Must match the pivot passed to
+            :func:`rotate_image_about` so keypoints stay aligned with the pixels.
+            Defaults to the image center for backward compatibility.
     """
     keypoints_pos_lookup_rotated = {}
     height, width = image_shape
-    center_col = (width - 1) / 2.0
-    center_row = (height - 1) / 2.0
+    if pivot_col_row is None:
+        pivot_col = (width - 1) / 2.0
+        pivot_row = (height - 1) / 2.0
+    else:
+        pivot_col, pivot_row = pivot_col_row
 
     if camera_image_shape is None:
         camera_height, camera_width = height, width
@@ -223,10 +303,10 @@ def rotate_keypoint_positions_camera(
         depth = float(pos_before_rotation[2])
         col_row_vec /= depth  # Normalize by depth to get image coords
         col_row_vec *= np.array([scale_x, scale_y], dtype=np.float32)
-        col_row_vec -= np.array([center_col, center_row], dtype=np.float32)
+        col_row_vec -= np.array([pivot_col, pivot_row], dtype=np.float32)
         col_rot, row_rot = rotation_matrix[:2, :2] @ col_row_vec
-        col_rot = col_rot + center_col - start_col
-        row_rot = row_rot + center_row - start_row
+        col_rot = col_rot + pivot_col - start_col
+        row_rot = row_rot + pivot_row - start_row
 
         # Reconstruct position with original depth
         pos_after_rotation = np.array([col_rot, row_rot, depth], dtype=np.float32)
@@ -267,21 +347,34 @@ def process_single_frame(
         else:
             raise ValueError("No rendered images provided")
 
-        # Rotate and center-crop image
+        # Pixel the tracking camera pins (the tracked body's projection). The
+        # rotation is centered here, not on the image center: the camera parks the
+        # fly off-center (vertical framing offset), so rotating about the image
+        # center would swing the fly around a circle as its heading changes. The
+        # subsequent center-crop is unchanged, so the camera's intended framing is
+        # preserved -- only the per-heading orbit is removed.
+        pivot_row_col = tracked_point_pixel_row_col(
+            h5_file, frame_idx, image_shape, segmap.shape[:2]
+        )
+
+        # Rotate about the tracked pixel and center-crop image
         rendered_images_transformed = []
         for img, cval in zip(rendered_images, cvals):
-            # note: rotate_image calls scipy.ndimage.rotate which expects angle in
-            # degrees and rotates counter-clockwise, hence the negative sign.
-            # cval is the per-color-coding background fill so rotated-in corners
-            # match the rendered backdrop instead of mirroring the fly's body.
-            rotated_img = rotate_image(img, -rotation_angle, cval=cval)
+            # note: rotate_image_about calls scipy.ndimage.affine_transform with the
+            # same angle convention as scipy.ndimage.rotate (counter-clockwise),
+            # hence the negative sign. cval is the per-color-coding background fill
+            # so rotated-in corners match the rendered backdrop instead of mirroring
+            # the fly's body.
+            rotated_img = rotate_image_about(img, -rotation_angle, pivot_row_col, cval=cval)
             img_transformed, start_col, start_row = center_square_crop_image(
                 rotated_img, crop_size
             )
             rendered_images_transformed.append(img_transformed)
-        
-        # rotate and crop the segmentation map as well
-        rotated_segmap = rotate_image(segmap, -rotation_angle, preserve=True)
+
+        # rotate and crop the segmentation map as well (same pivot)
+        rotated_segmap = rotate_image_about(
+            segmap, -rotation_angle, pivot_row_col, preserve=True
+        )
         segmap_transformed, _, _ = center_square_crop_image(rotated_segmap, crop_size)
 
         # Add all derived variables to a single dict
@@ -303,6 +396,7 @@ def process_single_frame(
             start_col=start_col,
             start_row=start_row,
             camera_image_shape=segmap.shape[:2],
+            pivot_col_row=(pivot_row_col[1], pivot_row_col[0]),
         )
         for body_segment_name, rotated_pos in keypoints_pos_dict_world_rotated.items():
             derived_variables[f"keypoint_pos_world_{body_segment_name}"] = rotated_pos

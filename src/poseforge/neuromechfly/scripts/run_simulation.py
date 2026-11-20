@@ -96,6 +96,9 @@ def simulate_using_kinematic_prior(
     calibration_path: str | None = None,
     source_format: str = SOURCE_FORMAT_AYMANNS2022,
     deeperfly_surface: str = "any",
+    render_window_size: tuple[int, int] = (912, 912),
+    image_crop_size: int = 912,
+    render_depth: bool = True,
 ) -> None:
     """CLI to replay kinematic motion priors in NeuroMechFly, from either the
     tethered-fly Aymanns et al. 2022 recordings or the freely-moving deeperfly
@@ -203,9 +206,10 @@ def simulate_using_kinematic_prior(
             sim_timestep=sim_timestep,
             output_data_freq=output_data_freq,
             render_play_speed=render_play_speed,
+            render_window_size=render_window_size,
             visual_paths=visual_paths,
             min_sim_duration_sec=0.01,
-            render_depth=True,
+            render_depth=render_depth,
             max_sim_steps=max_sim_steps_per_segment,
             use_flybody=use_flybody,
             calibration_path=calibration_path,
@@ -214,7 +218,8 @@ def simulate_using_kinematic_prior(
         is_success = output_subdir.exists() and len(list(output_subdir.iterdir())) > 0
         if is_success:
             postprocess_segment(
-                output_subdir, render_filenames, visualize=True, min_subsegment_duration_sec=0.1, use_flybody=use_flybody
+                output_subdir, render_filenames, visualize=True, min_subsegment_duration_sec=0.1,
+                image_crop_size=image_crop_size, use_flybody=use_flybody
             )
     print(f"### Done processing trial: {trial_name} ###")
 
