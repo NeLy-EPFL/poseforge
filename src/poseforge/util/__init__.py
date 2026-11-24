@@ -6,7 +6,7 @@ from .sys import (
 )
 from .plot import configure_matplotlib_style
 from .data import SerializableDataClass, OutputBuffer
-from .ml import count_optimizer_parameters, count_module_parameters
+from .ml import count_optimizer_parameters, count_module_parameters, resolve_device
 
 
 __all__ = [
@@ -19,4 +19,5 @@ __all__ = [
     "OutputBuffer",
     "count_optimizer_parameters",
     "count_module_parameters",
+    "resolve_device",
 ]

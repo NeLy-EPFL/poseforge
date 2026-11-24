@@ -1,10 +1,14 @@
+# v2: 3-class flip/invalid detector. Class 0 = not_flipped (keep); classes 1
+# (flipped) and 2 (invalid: off-field / tracking failure) are both excluded.
+# A frame is kept iff P(not_flipped) >= keep_threshold. See flip_detector_v12/README.md.
 flip_detection:
-  checkpoint: "~/projects/poseforge/production_models/flip_detection/v1/production_checkpoint_v1.pth"
+  checkpoint: "~/projects/poseforge/production_models/flip_detection/v2/flip_detector_v12_3class.pth"
   working_size: 224
   init_params:
     input_channels: 1
-    num_classes: 2
-  output_labels: ["not_flipped", "flipped"]
+    num_classes: 3
+  output_labels: ["not_flipped", "flipped", "invalid"]
+  keep_threshold: 0.6
 
 rearing_detection:
   checkpoint: "~/projects/poseforge/production_models/rearing_detection/v1/production_checkpoint_v1.pth"
