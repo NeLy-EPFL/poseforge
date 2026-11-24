@@ -25,7 +25,7 @@ from poseforge.spotlight.flip_detection.dataset import (
     get_transforms,
 )
 from poseforge.spotlight.flip_detection.viz import evaluate_model, save_training_plot
-from poseforge.util import set_random_seed
+from poseforge.util import set_random_seed, resolve_device
 
 
 def train_one_epoch(
@@ -122,11 +122,8 @@ def train_model(
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Device setup
-    if device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(device)
+    # Device setup ("auto" -> CUDA, else Apple Silicon MPS, else CPU).
+    device = resolve_device(device)
     print(f"Using device: {device}")
 
     print(f"Using dataset with {len(dataframe)} samples")

@@ -1,6 +1,25 @@
 import torch
 
 
+def resolve_device(device: str | torch.device = "auto") -> torch.device:
+    """Resolve a device specifier to a concrete ``torch.device``.
+
+    ``"auto"`` prefers a discrete GPU (CUDA), then Apple Silicon (MPS), then
+    falls back to CPU, so the same training/inference code runs fast on a Linux
+    CUDA box and on a Mac without any change. Any explicit value (``"cpu"``,
+    ``"cuda"``, ``"mps"`` or a ``torch.device``) is passed through unchanged.
+    """
+    if isinstance(device, torch.device):
+        return device
+    if device == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    return torch.device(device)
+
+
 def count_optimizer_parameters(
     optimizer: torch.optim.Optimizer, trainable_only: bool = True
 ) -> int:

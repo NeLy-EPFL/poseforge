@@ -13,10 +13,14 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-    echo "Usage: sbatch job.run <genotype_prefix>   e.g. sbatch job.run G1xCI63"
+    echo "Usage: sbatch job.run <selector>"
+    echo "  <selector> matches experiment folders by prefix (a trailing * is added), so it can be:"
+    echo "    a genotype prefix      e.g.  G1xCI63            (all G1xCI63 experiments)"
+    echo "    a single fly           e.g.  G1xCI63_old_fly000 (all its trials)"
+    echo "    a full experiment name e.g.  G1xCI63_old_fly000_trial000 (just that one, to test the pipeline)"
     exit 1
 fi
-GENOTYPE="$1"
+SELECTOR="$1"
 
 echo "Hello from $(hostname)"
 
@@ -37,7 +41,7 @@ OUTPUT_DIR="$WORK/$USER/poseforge/data/spotlight_aligned_and_cropped_new"
 
 cd "$PROJECT_ROOT"
 
-echo "Genotype   : ${GENOTYPE}"
+echo "Selector   : ${SELECTOR}"
 echo "Input dir  : ${INPUT_DIR}"
 echo "Arena dir  : ${ARENA_DIR}"
 echo "Output dir : ${OUTPUT_DIR}"
@@ -48,7 +52,7 @@ python -u src/poseforge/spotlight/scripts/unpack_and_categorize_spotlight.py \
     --input-dir "${INPUT_DIR}" \
     --arena-dir "${ARENA_DIR}" \
     --output-dir "${OUTPUT_DIR}" \
-    --glob-pattern "${GENOTYPE}*fly*" \
+    --glob-pattern "${SELECTOR}*" \
     --device cpu \
     --n-workers "${SLURM_CPUS_PER_TASK}"
 

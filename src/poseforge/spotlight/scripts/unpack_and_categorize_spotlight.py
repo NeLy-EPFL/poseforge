@@ -14,12 +14,13 @@ training):
 
 Categories per frame:
   * edge      -- a wall is visible (keypoint-independent corner test),
-  * flipped   -- fly upside down (flip CNN + temporal filter),
-  * untracked -- pose keypoints missing (reported, NOT excluded),
+  * untracked -- pose keypoints missing (now excluded),
+  * flip/invalid -- the v12 3-class detector predicts flipped or invalid
+                    (off-field / tracking failure); kept iff P(not_flipped) >= keep_threshold,
   * rearing   -- head lifted / antennae hidden (rearing CNN on a fixed crop).
 
-A frame is ``usable`` iff it is not edge, not flipped, and not rearing (untracked is
-allowed). ``predicted_flip_labels.csv`` marks every usable frame as ``"not flipped"``
+A frame is ``usable`` iff it is not edge, not untracked, model-kept (upright), and not
+rearing. ``predicted_flip_labels.csv`` marks every usable frame as ``"not flipped"``
 and everything else as ``"flipped"``, so the CUT extractor -- which keeps only
 ``"not flipped"`` rows -- naturally takes only usable frames. The full per-category
 truth is in each frame's ``metadata.json``.
@@ -107,29 +108,37 @@ def process_trial(
     if max_frames > 0:
         n = min(n, max_frames)
 
-    # Flip model + transform params.
+    # Flip/invalid model (3-class v12) + canonical transform. Class 0 =
+    # not_flipped (keep); 1 = flipped, 2 = invalid (both excluded). A frame is
+    # kept iff P(not_flipped) >= keep_threshold.
+    from poseforge.spotlight.flip_detection.dataset import get_transforms
+    from PIL import Image as _PILImage
+
     flip_config = config["flip_detection"]
     flip_model = _load_flip_model(flip_config, flip_checkpoint, device)
     flip_working_size = flip_config["working_size"]
-    flip_labels = np.array(flip_config["output_labels"])  # index 1 == flipped
+    flip_labels = np.array(flip_config["output_labels"])  # [not_flipped, flipped, invalid]
+    flip_transform = get_transforms("test", flip_working_size)
+    keep_threshold = float(flip_config.get("keep_threshold", 0.5))
 
-    # --- Pass 1: decode, write every frame, run flip detection ---
+    # --- Pass 1: decode, write every frame, run flip/invalid detection ---
     jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality, cv2.IMWRITE_JPEG_OPTIMIZE, 1]
-    flip_raw = np.zeros(n, dtype=int)
-    flip_conf = np.zeros(n, dtype=np.float32)
-    batch_tensors: list[np.ndarray] = []
+    flip_pred = np.zeros(n, dtype=int)
+    p_not_flipped = np.zeros(n, dtype=np.float32)
+    batch_tensors: list = []
     batch_indices: list[int] = []
 
     def flush_flip():
         if not batch_tensors:
             return
-        stacked = torch.from_numpy(np.stack(batch_tensors))[:, None].to(device)
+        stacked = torch.stack(batch_tensors).to(device)
         with torch.no_grad():
             probs = torch.softmax(flip_model(stacked), dim=1)
-            conf, pred = torch.max(probs, dim=1)
+        pnf = probs[:, 0].cpu().numpy()
+        pred = probs.argmax(dim=1).cpu().numpy()
         for k, idx in enumerate(batch_indices):
-            flip_raw[idx] = int(pred[k].item())
-            flip_conf[idx] = float(conf[k].item())
+            flip_pred[idx] = int(pred[k])
+            p_not_flipped[idx] = float(pnf[k])
         batch_tensors.clear()
         batch_indices.clear()
 
@@ -140,7 +149,7 @@ def process_trial(
             break
         cv2.imwrite(str(all_dir / f"frame_{idx:09d}.jpg"), frame, jpeg_params)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        batch_tensors.append(_flip_working_tensor(gray, flip_working_size))
+        batch_tensors.append(flip_transform(_PILImage.fromarray(gray)))
         batch_indices.append(idx)
         if len(batch_tensors) >= 128:
             flush_flip()
@@ -150,19 +159,18 @@ def process_trial(
     # Trim all arrays to the number of frames actually decoded.
     too_close = too_close[:n]
     keypoints_missing = keypoints_missing[:n]
-    flip_raw = flip_raw[:n]
-    flip_conf = flip_conf[:n]
+    flip_pred = flip_pred[:n]
+    p_not_flipped = p_not_flipped[:n]
 
-    flipped = filtering.temporal_flip_filter(
-        flip_raw, behavior_fps, min_run=flip_min_run, pad_seconds=flip_pad_seconds
-    ).astype(bool)
+    # The model decides flipped-or-invalid directly (no temporal dilation).
+    model_keep = p_not_flipped >= keep_threshold
 
-    # --- Pass 2: rearing on candidate frames (not edge, not flipped) ---
+    # --- Pass 2: rearing on candidate frames (not edge, model-kept) ---
     model, snapshots, crop = rearing.load_checkpoint(rearing_checkpoint, device)
     neck = rearing.median_neck(trial_dir / "processed" / "behavior_alignment_transforms.h5")
     rearing_prob = np.full(n, np.nan, dtype=np.float32)
     candidate_idx = [
-        i for i in range(n) if (not too_close[i]) and (not flipped[i])
+        i for i in range(n) if (not too_close[i]) and model_keep[i]
     ]
     crops, cropped_idx = [], []
     for i in candidate_idx:
@@ -178,7 +186,7 @@ def process_trial(
         rearing_prob[i] = p
     is_rearing = np.nan_to_num(rearing_prob, nan=0.0) >= 0.5
 
-    usable = (~too_close) & (~flipped) & (~is_rearing)
+    usable = (~too_close) & (~keypoints_missing) & model_keep & (~is_rearing)
 
     # --- Write per-frame metadata.json ---
     for i in range(n):
@@ -190,9 +198,9 @@ def process_trial(
         meta = {
             "behavior_frame_id": int(i),
             **{k: (None if pd.isna(v) else v) for k, v in row.items()},
-            "flip_detection": str(flip_labels[flip_raw[i]]),
-            "flip_conf": float(flip_conf[i]),
-            "flipped": bool(flipped[i]),
+            "flip_detection": str(flip_labels[flip_pred[i]]),
+            "p_not_flipped": float(p_not_flipped[i]),
+            "excluded_by_flip_model": bool(not model_keep[i]),
             "too_close_to_edge": bool(too_close[i]),
             "keypoints_missing": bool(keypoints_missing[i]),
             "rearing_prob": (None if np.isnan(rearing_prob[i]) else float(rearing_prob[i])),
@@ -225,7 +233,9 @@ def process_trial(
         "trial": trial,
         "n_frames": int(n),
         "edge": int(too_close.sum()),
-        "flipped": int(flipped.sum()),
+        "flipped": int((flip_pred == 1).sum()),
+        "invalid_model": int((flip_pred == 2).sum()),
+        "excluded_by_flip_model": int((~model_keep).sum()),
         "untracked": int(keypoints_missing.sum()),
         "rearing": int(is_rearing.sum()),
         "usable": int(usable.sum()),
