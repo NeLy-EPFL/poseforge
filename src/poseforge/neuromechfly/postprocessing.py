@@ -105,47 +105,70 @@ def estimate_background_cval(
     return float(np.median(corner_pixels))
 
 
-def rotate_image_about(
+def rotate_and_crop_about(
     image: np.ndarray,
     rotation_angle,
     pivot_row_col,
-    preserve=False,
+    side_length: int,
+    preserve: bool = False,
     cval: float = 0.0,
-) -> np.ndarray:
-    """Rotate ``image`` by ``rotation_angle`` (radians) about an arbitrary pivot pixel.
+):
+    """Rotate ``image`` about ``pivot_row_col`` and crop a ``side_length`` square
+    centered on that same pivot, as a single resampling of the source image.
 
-    Rotation is centered on ``pivot_row_col`` (a ``(row, col)`` pixel) rather than the
-    image center. This is essential for the processed frames: the fly's reference point
-    (its thorax-COM projection, see :func:`tracked_point_pixel_row_col`) sits at a fixed
-    but off-center pixel, and rotating about the image center would swing that point
-    around a circle as the fly changes heading, making the processed fly orbit the
-    frame. Rotating about the reference pixel keeps the fly pinned for every heading.
+    The processed fly must be uprighted and centered on its reference pixel -- the
+    thorax-COM projection (see :func:`tracked_point_pixel_row_col`), a fixed but
+    off-center point. Rotating about that pixel (not the image center) keeps the fly
+    from orbiting the frame as its heading changes; cropping about it centers the fly.
 
-    ``preserve=True`` uses nearest-neighbour interpolation with edge replication (for
-    label maps such as the segmentation); otherwise bilinear with a constant ``cval``
-    fill for the rotated-in corners. The affine matches
-    ``scipy.ndimage.rotate(..., reshape=False)`` exactly -- it uses
-    ``matrix=[[c, s], [-s, c]]`` with ``offset = pivot - matrix @ pivot`` -- so the
-    angle/orientation convention is unchanged; only the pivot moves off the center.
+    Both are done in ONE affine transform that, for every output pixel of the
+    ``side_length`` crop, samples the original ``image`` directly. This single step is
+    the whole point: doing it as a rotate into a same-size array *followed by* a crop
+    would discard anything that rotates outside the source bounds before the crop can
+    keep it -- a straight-line cut with empty space beyond. That happens whenever the
+    uprighting angle is large and the pivot is off-center (e.g. a fly heading backward,
+    needing a ~180 deg rotation), clipping the abdomen and wing tips even though the
+    render captured them. Sampling the source once also avoids a second interpolation,
+    so it is sharper and faster.
+
+    Output pixel ``d = (row, col)`` maps to source pixel ``R @ d + offset`` with
+    ``R = [[c, s], [-s, c]]`` (the ``scipy.ndimage.rotate(..., reshape=False)``
+    convention) and ``offset = R @ (start - pivot) + pivot``, where ``start`` is the
+    crop's top-left corner ``round(pivot - side_length / 2)``. This is algebraically
+    the old rotate-about-pivot then crop-square-around-pivot, minus the intermediate
+    clipping. Source samples outside the image are filled with ``cval``; ``preserve``
+    selects nearest-neighbour interpolation (for label maps such as the segmentation)
+    instead of bilinear.
+
+    Returns ``(cropped, start_col, start_row)`` -- the window's top-left corner in
+    source coordinates (which may be negative), matching
+    :func:`rotate_keypoint_positions_camera`'s cropping offsets.
     """
-    theta = np.deg2rad(np.rad2deg(rotation_angle))
+    theta = float(rotation_angle)
     cos_theta, sin_theta = np.cos(theta), np.sin(theta)
     rotation = np.array([[cos_theta, sin_theta], [-sin_theta, cos_theta]])
     pivot = np.asarray(pivot_row_col, dtype=np.float64)
-    offset = pivot - rotation @ pivot
+    start_row = int(round(pivot[0] - side_length / 2.0))
+    start_col = int(round(pivot[1] - side_length / 2.0))
+    start = np.array([start_row, start_col], dtype=np.float64)
+    offset = rotation @ (start - pivot) + pivot
     order = 0 if preserve else 1
-    mode = "nearest" if preserve else "constant"
+    output_shape = (side_length, side_length)
     if image.ndim == 3:
-        rotated = np.empty_like(image)
+        cropped = np.empty(
+            (side_length, side_length, image.shape[2]), dtype=image.dtype
+        )
         for channel in range(image.shape[2]):
-            rotated[..., channel] = ndimage.affine_transform(
-                image[..., channel], rotation, offset=offset, order=order,
-                mode=mode, cval=cval,
+            cropped[..., channel] = ndimage.affine_transform(
+                image[..., channel], rotation, offset=offset,
+                output_shape=output_shape, order=order, mode="constant", cval=cval,
             )
-        return rotated
-    return ndimage.affine_transform(
-        image, rotation, offset=offset, order=order, mode=mode, cval=cval
-    )
+    else:
+        cropped = ndimage.affine_transform(
+            image, rotation, offset=offset, output_shape=output_shape,
+            order=order, mode="constant", cval=cval,
+        )
+    return cropped, start_col, start_row
 
 
 def tracked_point_pixel_row_col(
@@ -182,39 +205,6 @@ def tracked_point_pixel_row_col(
     col *= width / camera_width
     row *= height / camera_height
     return np.array([row, col], dtype=np.float64)
-
-
-def crop_square_around(
-    image: np.ndarray, center_row_col, side_length: int, cval: float = 0.0
-):
-    """Crop a ``side_length`` square centered on ``center_row_col`` (a ``(row, col)``
-    pixel), padding anything outside the image with ``cval``.
-
-    The crop is centered on an arbitrary point -- the fly's thorax-COM projection -- so
-    the fly ends up centered on it rather than on the image center. When that reference
-    point is near an edge the window can extend past the image border; the out-of-bounds
-    region is filled with ``cval`` (the background) instead of being clamped, so the
-    output is always exactly ``side_length`` and the fly stays centered. Returns
-    ``(cropped, start_col, start_row)``, the window's top-left corner in source
-    coordinates (which may be negative).
-    """
-    row_center, col_center = float(center_row_col[0]), float(center_row_col[1])
-    start_row = int(round(row_center - side_length / 2.0))
-    start_col = int(round(col_center - side_length / 2.0))
-    if image.ndim == 3:
-        cropped = np.full((side_length, side_length, image.shape[2]), cval, dtype=image.dtype)
-    else:
-        cropped = np.full((side_length, side_length), cval, dtype=image.dtype)
-    src_row0 = max(start_row, 0)
-    src_col0 = max(start_col, 0)
-    src_row1 = min(start_row + side_length, image.shape[0])
-    src_col1 = min(start_col + side_length, image.shape[1])
-    if src_row1 > src_row0 and src_col1 > src_col0:
-        dst_row0 = src_row0 - start_row
-        dst_col0 = src_col0 - start_col
-        cropped[dst_row0 : dst_row0 + (src_row1 - src_row0),
-                dst_col0 : dst_col0 + (src_col1 - src_col0)] = image[src_row0:src_row1, src_col0:src_col1]
-    return cropped, start_col, start_row
 
 
 def extract_body_segment_positions(
@@ -287,7 +277,7 @@ def rotate_keypoint_positions_camera(
             applied before rotation/cropping.
         pivot_col_row: (col, row) pixel the image rotation is centered on (the
             thorax-COM projection). Required, and must match the pivot passed to
-            :func:`rotate_image_about` so the keypoints stay aligned with the pixels.
+            :func:`rotate_and_crop_about` so the keypoints stay aligned with the pixels.
     """
     keypoints_pos_lookup_rotated = {}
     height, width = image_shape
@@ -348,13 +338,13 @@ def process_single_frame(
     three steps, all centered on the fly's reference point -- its thorax center of mass,
     projected to a pixel by :func:`tracked_point_pixel_row_col`:
 
-    1. Rotate the frame about that pixel (:func:`rotate_image_about`) so the fly's
-       anterior-posterior axis points up. Rotating about the reference point -- not the
-       image center -- keeps the fly from orbiting the frame as its heading changes.
-    2. Crop a ``crop_size`` square centered on the same pixel
-       (:func:`crop_square_around`, padding out-of-bounds with the background) so the
-       output is centered on the thorax for every heading.
-    3. Transform the body keypoints with the same rotation/crop
+    1. Rotate about that pixel so the fly's anterior-posterior axis points up and crop
+       a ``crop_size`` square centered on it, in a single resampling of the source
+       (:func:`rotate_and_crop_about`). Rotating about the reference point -- not the
+       image center -- keeps the fly from orbiting the frame as its heading changes, and
+       doing the rotate+crop in one step avoids clipping content that would otherwise
+       rotate out of an intermediate same-size array before the crop could keep it.
+    2. Transform the body keypoints with the same rotation/crop
        (:func:`rotate_keypoint_positions_camera`) so they stay aligned with the pixels.
 
     Returns ``(transformed_images, derived_variables, segmentation_labels)``.
@@ -379,27 +369,22 @@ def process_single_frame(
             h5_file, frame_idx, image_shape, segmap.shape[:2]
         )
 
-        # Rotate about the pivot, then crop a square centered on that same pivot, so the
-        # fly is uprighted and centered on the thorax for every heading.
+        # Rotate about the pivot and crop a square centered on that same pivot in one
+        # resampling, so the fly is uprighted and centered on the thorax for every
+        # heading. The negative sign matches the scipy.ndimage.rotate (counter-clockwise)
+        # angle convention. cval is the per-color-coding background fill so out-of-source
+        # samples match the rendered backdrop instead of mirroring the fly's body.
         rendered_images_transformed = []
         for img, cval in zip(rendered_images, cvals):
-            # note: rotate_image_about calls scipy.ndimage.affine_transform with the
-            # same angle convention as scipy.ndimage.rotate (counter-clockwise),
-            # hence the negative sign. cval is the per-color-coding background fill
-            # so rotated-in corners match the rendered backdrop instead of mirroring
-            # the fly's body.
-            rotated_img = rotate_image_about(img, -rotation_angle, pivot_row_col, cval=cval)
-            img_transformed, start_col, start_row = crop_square_around(
-                rotated_img, pivot_row_col, crop_size, cval=cval
+            img_transformed, start_col, start_row = rotate_and_crop_about(
+                img, -rotation_angle, pivot_row_col, crop_size, cval=cval
             )
             rendered_images_transformed.append(img_transformed)
 
-        # rotate and crop the segmentation map as well (same pivot)
-        rotated_segmap = rotate_image_about(
-            segmap, -rotation_angle, pivot_row_col, preserve=True
-        )
-        segmap_transformed, _, _ = crop_square_around(
-            rotated_segmap, pivot_row_col, crop_size, cval=0.0
+        # rotate and crop the segmentation map as well (same pivot), nearest-neighbour so
+        # labels are not blended; out-of-source fills with the background label 0.
+        segmap_transformed, _, _ = rotate_and_crop_about(
+            segmap, -rotation_angle, pivot_row_col, crop_size, preserve=True, cval=0.0
         )
 
         # Add all derived variables to a single dict
