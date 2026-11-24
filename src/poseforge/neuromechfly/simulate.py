@@ -160,8 +160,14 @@ class FlyForRendering(Fly):
                 objname="c_thorax",
             )
         
-    def add_tracking_camera(self, **kwargs): 
+    def add_tracking_camera(self, **kwargs):
+        # The camera is attached directly to the thorax (the fly root) by flygym; no
+        # extra body is added, so the fly's dynamics are unchanged. (A separate mount
+        # body cannot be made massless -- the model's compiler boundmass=1e-6 floor
+        # gives any body at least 1e-6 kg, which perturbs the replay and flips the fly
+        # -- so camera framing must not rely on an added body.)
         cam = super().add_tracking_camera(**kwargs)
+
         # add a light to the thorax
         # Point the spotlight the same way as the tracking camera. MjSpec
         # cameras expose `pos` but not `euler`, so take the orientation from the
@@ -388,56 +394,39 @@ def set_up_simulation(render_window_size, render_play_speed, render_fps, sim_tim
         materials_lookups.append(lookup)
         fly.colorize(visual_path)
 
-    # Center the tracking camera on the thorax center of mass rather than on the
-    # c_thorax body-frame origin. The "track" camera stays world-aligned (it
-    # follows the fly's position but does not rotate with it) and its pos_offset
-    # is expressed in the thorax body frame. With a zero in-plane offset the
-    # camera centers the c_thorax body-frame origin, which sits at the neck joint
-    # -- about 0.47 mm anterior to the thorax center of mass. At the Spotlight
-    # calibration scale (~204 px/mm) that rendered the fly ~97 px low in the
-    # frame. Offsetting the camera within the thorax plane by the thorax inertial
-    # position centers the center of mass instead.
+    # Track the whole-fly center of mass with mode="trackcom". This is a built-in
+    # camera mode that adds no body to the model, so the fly's dynamics are identical
+    # to the untracked baseline (a separate mount body cannot be made massless under
+    # the compiler's boundmass floor, so it would perturb the replay).
     #
-    # We keep "track" (world-aligned) rather than "fixed" (rotates with the
-    # thorax) on purpose: at this telephoto focal length the ~2 deg field of view
-    # makes the projection extremely sensitive to camera orientation, so a camera
-    # that rotated with the thorax would swing the framing by hundreds of pixels
-    # for even a degree of body pitch during the replay.
-    #
-    # The thorax COM offset is read from a standalone compile of the fly so it is
-    # correct for both the NMF and flybody models (it comes from the mesh
-    # inertia, which is intrinsic to the body and independent of attachment).
+    # To center the field of view on that COM, the camera is given an in-plane offset
+    # equal to the COM's position relative to the thorax origin (the body the camera is
+    # attached to). That puts the camera directly over the COM, so the COM projects to
+    # the image center instead of sitting off-center (the thorax origin and the COM
+    # differ, which is what pushed the COM low before). Only the calibrated distance (z)
+    # and fovy set the scale. Postprocessing then rotates and crops about the thorax
+    # center of mass (thorax_com, saved per frame) to produce the thorax-centered framing;
+    # the telephoto FOV makes a rotate-with-body ("fixed") camera too pitch-sensitive, so
+    # uprighting is done in postprocessing.
     fly_only_model = fly.mjcf_root.compile()
+    fly_only_data = mj.MjData(fly_only_model)
+    mj.mj_forward(fly_only_model, fly_only_data)
     thorax_body_id = mj.mj_name2id(fly_only_model, mj.mjtObj.mjOBJ_BODY, "c_thorax")
-    assert thorax_body_id != -1, "c_thorax body not found when computing the camera centering offset"
-    thorax_com_offset = fly_only_model.body_ipos[thorax_body_id]
-
-    # Vertical framing nudge: raise the fly in the frame by a fixed fraction of
-    # the image height so it is not centered slightly low. The vertical image
-    # axis maps to the thorax body x-axis, and shifting the camera along it by
-    # `2 * fraction * physical_distance * tan(fovy / 2)` mm moves the content by
-    # `fraction * image_height` pixels; the image height cancels, so this is
-    # independent of the render resolution. Subtracting raises the fly (moves it
-    # up in the frame).
-    vertical_framing_fraction = 1.0 / 30.0  # raise the fly by 1/30 of the image height
-    vertical_framing_shift_mm = (
-        2.0
-        * vertical_framing_fraction
-        * abs(float(cam_pos_offset_z_mm))
-        * np.tan(np.deg2rad(float(cam_fovy_deg)) / 2.0)
+    assert thorax_body_id != -1, "c_thorax body not found when centering the camera."
+    thorax_xmat = fly_only_data.xmat[thorax_body_id].reshape(3, 3)
+    com_offset_in_thorax = thorax_xmat.T @ (
+        fly_only_data.subtree_com[thorax_body_id] - fly_only_data.xpos[thorax_body_id]
     )
 
-    # Defaults (-67 mm, 5 deg) are the hand-picked legacy values; when a
-    # spotlight calibration artifact is supplied, the caller threads its
-    # derived pos_offset_z_mm and fovy_deg in here so the rendered px/mm at
-    # the sample plane matches the experimental camera.
     cam_offset = (
-        float(thorax_com_offset[0]) - vertical_framing_shift_mm,
-        float(thorax_com_offset[1]),
+        float(com_offset_in_thorax[0]),
+        float(com_offset_in_thorax[1]),
         float(cam_pos_offset_z_mm),
     )
     cam_rot = Rotation3D(format="euler", values=(0, np.pi, -np.pi / 2))
-    tracking_cam = fly.add_tracking_camera(pos_offset=cam_offset, rotation=cam_rot, fovy=float(cam_fovy_deg))
+    tracking_cam = fly.add_tracking_camera(
+        pos_offset=cam_offset, rotation=cam_rot, fovy=float(cam_fovy_deg), mode="trackcom",
+    )
     fly.add_leg_adhesion()
 
     spawn_rot = Rotation3D(format="quat", values=[1, 0, 0, 0])  # no rotation
@@ -566,10 +555,25 @@ def run_neuromechfly_simulation(
     camera_matrix_hist = []
     # list[ndarray of shape (3,)], fly base position in world coordinates
     fly_base_pos_hist = []
+    # list[ndarray of shape (3,)], thorax center of mass in world coordinates (the
+    # thorax body's own inertial position). Postprocessing rotates and crops about its
+    # projection so the processed fly is centered on the thorax, matching the real
+    # Spotlight images' thorax-centered framing.
+    thorax_com_hist = []
 
     fly_name = sim._fly_name
     sensorized_body_segments = sim.world.fly_lookup[fly_name].sensorized_body_segments
     base_pose_idx = sensorized_body_segments.index("c_thorax")  # used to track fly base position and flipping
+
+    # Body the tracking camera follows (the thorax). Found by camera mode -- track(1)
+    # or trackcom(2) -- so this does not depend on the camera's (possibly prefixed)
+    # name. We save this body's center of mass (xipos, its inertial position) as the
+    # point postprocessing centers on.
+    _tracking_cam_ids = [
+        c for c in range(sim.mj_model.ncam) if int(sim.mj_model.cam_mode[c]) in (1, 2)
+    ]
+    assert _tracking_cam_ids, "No tracking camera found; cannot record the tracked body COM."
+    com_tracked_body_id = int(sim.mj_model.cam_bodyid[_tracking_cam_ids[0]])
 
     sim.warmup()
     # Simulation loop
@@ -635,6 +639,10 @@ def run_neuromechfly_simulation(
         # Store fly base position
         fly_base_pos_hist.append(pos_global[base_pose_idx])
 
+        # Store the thorax's own center of mass (the postprocessing pivot) in world
+        # coordinates. xipos is updated by sim.step().
+        thorax_com_hist.append(np.array(sim.mj_data.xipos[com_tracked_body_id], dtype=np.float32))
+
         # Check if the fly has flipped over
         up_vector_z_component = cardinal_vectors[2, 2]
         if up_vector_z_component < 0:
@@ -689,6 +697,7 @@ def run_neuromechfly_simulation(
             "cardinal_vectors": cardinal_vectors_hist,
             "camera_matrix": camera_matrix_hist,
             "fly_base_pos": fly_base_pos_hist,
+            "thorax_com": thorax_com_hist,
             "segmentation_maps": seg_maps, # store the segmentation maps as an array of shape (n_frames, height, width) with integer values corresponding to body ids in the simulation
         },
         "keys": {
@@ -868,6 +877,17 @@ def make_simulation_data_h5(hist_dict, h5_path: Path):
         fly_base_pos_ds.attrs["description"] = (
             "Position of the fly's center of mass in global coordinates. This dataset "
             "has shape (n_timesteps, 3) where the 3 values are the x/y/z components."
+        )
+
+        # Thorax center of mass (the postprocessing pivot, for thorax-centered framing).
+        thorax_com_arr = np.array(hist_dict["values"]["thorax_com"], dtype="float32")
+        thorax_com_ds = h5_file.create_dataset("thorax_com", data=thorax_com_arr, dtype="float32")
+        thorax_com_ds.attrs["keys"] = ["x", "y", "z"]
+        thorax_com_ds.attrs["units"] = "mm"
+        thorax_com_ds.attrs["description"] = (
+            "Thorax center of mass (the thorax body's inertial position) in global "
+            "coordinates, per frame, shape (n_timesteps, 3). Postprocessing rotates and "
+            "crops about its projection so the processed fly is centered on the thorax."
         )
 
 
