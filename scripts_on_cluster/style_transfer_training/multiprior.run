@@ -1,0 +1,122 @@
+#!/bin/bash -l
+
+#SBATCH --job-name cut_multiprior
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --output /scratch/%u/style_transfer/multiprior/outputs/%x_%j.out
+
+set -euo pipefail
+
+# Usage:
+#   sbatch multiprior.run <domainA_buffers> <tag>
+# e.g.
+#   sbatch multiprior.run image gray
+#   sbatch multiprior.run image,shading,depth,normals,segmentation allpriors
+BUFFERS="${1:?usage: sbatch multiprior.run <domainA_buffers> <tag>}"
+TAG="${2:?usage: sbatch multiprior.run <domainA_buffers> <tag>}"
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment setup
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Project / data paths (edit as needed)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
+# The multiprior dataset (output of the multiprior extraction job): must contain
+# trainA + trainA_shading/_depth/_normals/_segmentation (+ trainA_mask) + trainB.
+DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_multiprior_spotlight_dataset"
+
+# Base output directories (one campaign, runs separated by tag below)
+CAMPAIGN_TAG="multiprior"
+OUTPUT_BASE="/$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
+CHECKPOINT_BASEDIR="${OUTPUT_BASE}/checkpoints"
+LOG_BASEDIR="${OUTPUT_BASE}/logs"
+WANDB_BASEDIR="${OUTPUT_BASE}/wandb"
+OUT_BASEDIR="${OUTPUT_BASE}/outputs"
+
+# -----------------------------------------------------------------------------
+# Model / training hyperparameters
+#   NOTE: load_size/crop_size/preprocess must match this dataset's frame size.
+#   Values below mirror single.run -- adjust if your multiprior frames differ.
+# -----------------------------------------------------------------------------
+NGF=48
+NETG="stylegan2"
+LAMBDA_GAN=0.1
+PREPROCESS="resize_and_crop"
+LOAD_SIZE=286
+CROP_SIZE=256
+LR_POLICY="linear"
+
+BATCH_SIZE=4
+LR=0.001
+START_EPOCH="latest"
+N_EPOCHS=500
+N_EPOCHS_DECAY=500
+
+CUT_MODE="CUT"
+SAVE_EPOCH_FREQ=1
+NUM_THREADS=16
+WANDB_PROJECT="poseforge-image-style-transfer"
+
+# -----------------------------------------------------------------------------
+# Run name: timestamp + tag, so gray vs allpriors land in separate dirs
+# -----------------------------------------------------------------------------
+RUN_ID=$(date +"%Y%m%d_%H%M%S")
+BASE_RUN_NAME="${RUN_ID}_multiprior_${TAG}"
+
+CHECKPOINT_DIR="${CHECKPOINT_BASEDIR}/${BASE_RUN_NAME}"
+LOG_DIR="${LOG_BASEDIR}/${BASE_RUN_NAME}"
+WANDB_DIR="${WANDB_BASEDIR}/${BASE_RUN_NAME}"
+
+mkdir -p "$CHECKPOINT_DIR" "$LOG_DIR" "$WANDB_DIR" "$OUT_BASEDIR"
+export WANDB_DIR
+
+# -----------------------------------------------------------------------------
+# Train
+# -----------------------------------------------------------------------------
+cd "$PROJECT_ROOT"
+
+echo "Training starting at $(date)"
+echo "Run name     : $BASE_RUN_NAME"
+echo "Buffers      : $BUFFERS"
+echo "Dataset      : $DATASET_PATH"
+echo "Checkpoints  : $CHECKPOINT_DIR"
+
+python -u "$TRAINING_SCRIPT_PATH" \
+    --dataroot "$DATASET_PATH" \
+    --name "$BASE_RUN_NAME" \
+    --dataset_mode multiprior_unaligned \
+    --domainA_buffers "$BUFFERS" \
+    --CUT_mode "$CUT_MODE" \
+    --checkpoints_dir "$CHECKPOINT_DIR" \
+    --tensorboard_log_dir "$LOG_DIR" \
+    --epoch "$START_EPOCH" \
+    --n_epochs "$N_EPOCHS" \
+    --n_epochs_decay "$N_EPOCHS_DECAY" \
+    --lr "$LR" \
+    --ngf "$NGF" \
+    --netG "$NETG" \
+    --batch_size "$BATCH_SIZE" \
+    --lambda_GAN "$LAMBDA_GAN" \
+    --save_epoch_freq "$SAVE_EPOCH_FREQ" \
+    --num_threads "$NUM_THREADS" \
+    --preprocess "$PREPROCESS" \
+    --crop_size "$CROP_SIZE" \
+    --load_size "$LOAD_SIZE" \
+    --lr_policy "$LR_POLICY" \
+    #--wandb_project "$WANDB_PROJECT" \
+
+echo "Training ends at $(date)"

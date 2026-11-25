@@ -178,7 +178,10 @@ if __name__ == "__main__":
                 visuals = model.get_current_visuals()
                 visualizer.display_current_results(visuals, epoch, save_result)
                 # Log images to wandb (concatenated if possible)
-                concat_keys = ["real_A", "fake_B", "real_B", "idt_B"]
+                # "real_A_vis" is the image-slot view emitted when domain A
+                # carries extra geometric-prior channels (multiprior_unaligned);
+                # plain "real_A" is used otherwise. Only one is ever present.
+                concat_keys = ["real_A", "real_A_vis", "fake_B", "real_B", "idt_B"]
                 images_to_concat = []
                 for k in concat_keys:
                     if k in visuals:
@@ -257,7 +260,10 @@ if __name__ == "__main__":
                 model.netG.train()
                 pairs = []
                 for source, fake in zip(real_A.cpu(), fake_B):
-                    pairs.append(source)
+                    # real_A may carry geometric-prior channels beyond the image
+                    # slot (multiprior_unaligned); show only the first output_nc
+                    # channels so make_grid gets matching 3-channel tensors.
+                    pairs.append(source[: fake.size(0)])
                     pairs.append(fake)
                 val_grid = make_grid(
                     pairs, nrow=2, padding=4,
