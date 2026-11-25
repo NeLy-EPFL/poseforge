@@ -21,6 +21,16 @@ echo "Hello from $(hostname)"
 spack load ffmpeg
 conda activate poseforge
 
+# One subsegment per pool worker already provides the parallelism, and the pool
+# forks one worker per allocated CPU. Keep every math library single-threaded so
+# N workers do not each spawn OpenBLAS's default ~64 threads -- on a large node
+# that is thousands of threads at once, which overruns RLIMIT_NPROC and kills
+# workers with "pthread_create failed" / BrokenProcessPool.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # -----------------------------------------------------------------------------
 # Project / data paths  --  EDIT THESE
 # -----------------------------------------------------------------------------
