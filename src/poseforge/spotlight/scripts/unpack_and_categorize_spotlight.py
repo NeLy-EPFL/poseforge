@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -41,6 +42,11 @@ import torch
 import yaml
 
 cv2.setNumThreads(1)  # one process per trial already; keep each decoder single-threaded
+# Each trial runs in its own pool process, so parallelism comes from the pool,
+# not from torch's intra-op threads. Left at the default, every worker grabs all
+# cores (N workers x N threads), which oversubscribes the node and makes many
+# simultaneous trials crawl -- pin torch to a single thread per worker instead.
+torch.set_num_threads(1)
 
 
 def _resolve_device(device: str) -> torch.device:
@@ -84,6 +90,12 @@ def process_trial(
     device = _resolve_device(device_str)
     trial = trial_dir.name
     out_trial = output_dir / trial
+    # A finished trial is skipped before it ever reaches here (see main), so any
+    # existing output_dir/<trial> is a half-finished leftover from a cancelled
+    # run: wipe it so this trial is rebuilt from scratch (no stale frames or
+    # model_prediction/ symlinks pointing at the wrong category).
+    if out_trial.exists():
+        shutil.rmtree(out_trial)
     all_dir = out_trial / "all"
     all_dir.mkdir(parents=True, exist_ok=True)
 
@@ -269,6 +281,13 @@ def main():
     parser.add_argument("--behavior-fps", type=float, default=396.0)
     parser.add_argument("--jpeg-quality", type=int, default=95)
     parser.add_argument("--max-frames-per-trial", type=int, default=0, dest="max_frames")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess every matching trial, even ones already finished. "
+        "By default a trial whose output has a categorization_summary.json is "
+        "skipped, so a cancelled job can be resumed by resubmitting it unchanged.",
+    )
     args = parser.parse_args()
 
     config = yaml.safe_load(Path(args.config_path).read_text())
@@ -281,6 +300,28 @@ def main():
         d for d in args.input_dir.glob(args.glob_pattern) if (d / "processed").is_dir()
     )
     print(f"Found {len(trials)} trial(s) matching '{args.glob_pattern}' in {args.input_dir}")
+
+    # Resume support: a trial is "finished" once its categorization_summary.json
+    # exists. Skip those unless --force, so a job cancelled at the time limit can
+    # be resumed simply by resubmitting it with the same selector.
+    if not args.force:
+        done = [
+            t
+            for t in trials
+            if (args.output_dir / t.name / "categorization_summary.json").is_file()
+        ]
+        trials = [
+            t
+            for t in trials
+            if not (args.output_dir / t.name / "categorization_summary.json").is_file()
+        ]
+        print(
+            f"Skipping {len(done)} already-finished trial(s); "
+            f"{len(trials)} left to process (use --force to redo all)."
+        )
+    if not trials:
+        print("Nothing to do.")
+        return
 
     common = dict(
         arena_dir=args.arena_dir,

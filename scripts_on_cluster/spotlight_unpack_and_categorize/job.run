@@ -31,6 +31,14 @@ echo "Hello from $(hostname)"
 spack load ffmpeg
 conda activate poseforge
 
+# One trial per pool worker already provides the parallelism; keep every math
+# library single-threaded so N workers do not each spawn N threads and thrash
+# the node (this is what made large jobs crawl to a near-stop).
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # -----------------------------------------------------------------------------
 # Paths (one genotype per job; fan its trials across the allocated CPUs)
 # -----------------------------------------------------------------------------
