@@ -1,0 +1,127 @@
+#!/bin/bash -l
+
+#SBATCH --job-name mp_cond
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
+#SBATCH --time 48:00:00
+#SBATCH --partition=h100
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+# The real log is written below into the submit (current) folder, named
+# <job name>_<current time>.out. SBATCH can't build that name (no time code,
+# no shell variables), so its own stream goes to /dev/null.
+#SBATCH --output=/dev/null
+
+set -euo pipefail
+
+# Conditions:  sbatch job.run <randomcrop|curriculum> <imageonly|allpriors>
+REGIME="$1"
+BUFFERS_TAG="$2"
+
+# Log into the current (submit) folder, named by SLURM job name + current time.
+exec > "${SLURM_SUBMIT_DIR:-.}/${SLURM_JOB_NAME:-job}_$(date +%Y%m%d_%H%M%S).out" 2>&1
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Paths (edit as needed)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+TRAINING_SCRIPT_PATH="src/poseforge/style_transfer/scripts/train_cut_model.py"
+DATASET_PATH="$WORK/$USER/poseforge/style_transfer_datasets/nmf/aymanns2022_multiprior_spotlight_dataset"
+
+CAMPAIGN_TAG="20261125_multiprior_conditions"
+OUTPUT_BASE="$WORK/$USER/poseforge/style_transfer/${CAMPAIGN_TAG}"
+
+# -----------------------------------------------------------------------------
+# Condition -> settings
+# -----------------------------------------------------------------------------
+# buffers: image only vs image + all geometric priors
+if [ "$BUFFERS_TAG" = "allpriors" ]; then
+    DOMAINA_BUFFERS="image,shading,depth,normals,segmentation"
+else
+    DOMAINA_BUFFERS="image"
+fi
+
+# regime: fixed random crops vs full-frame->zoom curriculum
+#   randomcrop : random_center_patch (256 patches from the native frame)
+#   curriculum : resize_and_crop -- full frame for N_EPOCHS, then zoomed-in
+#                during the decay tail (finetune_load_size > crop_size)
+if [ "$REGIME" = "curriculum" ]; then
+    PREPROCESS="resize_and_crop"
+else
+    PREPROCESS="random_center_patch"
+fi
+
+# -----------------------------------------------------------------------------
+# Shared hyperparameters
+# -----------------------------------------------------------------------------
+NGF=48
+NETG="stylegan2"
+LAMBDA_GAN=0.1
+LR=0.001
+CROP_SIZE=256
+LOAD_SIZE=256            # curriculum phase 1 (== crop_size) -> full frame
+FINETUNE_LOAD_SIZE=912   # curriculum phase 2 (> crop_size) -> zoomed-in
+CENTER_OFFSET=300        # random_center_patch jitter (ignored by resize_and_crop)
+LR_POLICY="linear"
+BATCH_SIZE=4
+START_EPOCH="latest"
+N_EPOCHS=100
+N_EPOCHS_DECAY=500
+CUT_MODE="CUT"
+SAVE_EPOCH_FREQ=1
+NUM_THREADS=16
+
+# -----------------------------------------------------------------------------
+# Per-run dirs
+# -----------------------------------------------------------------------------
+RUN_ID=$(date +"%Y%m%d_%H%M%S")
+BASE_RUN_NAME="${RUN_ID}_${REGIME}_${BUFFERS_TAG}"
+CHECKPOINT_DIR="${OUTPUT_BASE}/checkpoints/${BASE_RUN_NAME}"
+LOG_DIR="${OUTPUT_BASE}/logs/${BASE_RUN_NAME}"
+WANDB_DIR="${OUTPUT_BASE}/wandb/${BASE_RUN_NAME}"
+mkdir -p "$CHECKPOINT_DIR" "$LOG_DIR" "$WANDB_DIR"
+export WANDB_DIR
+
+cd "$PROJECT_ROOT"
+
+echo "Condition : ${REGIME} / ${BUFFERS_TAG}  (preprocess=${PREPROCESS}, buffers=${DOMAINA_BUFFERS})"
+echo "Run name  : ${BASE_RUN_NAME}"
+echo "Training starting at $(date)"
+
+python -u "$TRAINING_SCRIPT_PATH" \
+    --dataroot "$DATASET_PATH" \
+    --name "$BASE_RUN_NAME" \
+    --CUT_mode "$CUT_MODE" \
+    --checkpoints_dir "$CHECKPOINT_DIR" \
+    --tensorboard_log_dir "$LOG_DIR" \
+    --epoch "$START_EPOCH" \
+    --n_epochs "$N_EPOCHS" \
+    --n_epochs_decay "$N_EPOCHS_DECAY" \
+    --lr "$LR" \
+    --ngf "$NGF" \
+    --netG "$NETG" \
+    --batch_size "$BATCH_SIZE" \
+    --lambda_GAN "$LAMBDA_GAN" \
+    --save_epoch_freq "$SAVE_EPOCH_FREQ" \
+    --num_threads "$NUM_THREADS" \
+    --preprocess "$PREPROCESS" \
+    --crop_size "$CROP_SIZE" \
+    --load_size "$LOAD_SIZE" \
+    --finetune_load_size "$FINETUNE_LOAD_SIZE" \
+    --center_patch_offset "$CENTER_OFFSET" \
+    --lr_policy "$LR_POLICY" \
+    --dataset_mode multiprior_unaligned \
+    --domainA_buffers "$DOMAINA_BUFFERS"
+
+echo "Training ends at $(date)"
