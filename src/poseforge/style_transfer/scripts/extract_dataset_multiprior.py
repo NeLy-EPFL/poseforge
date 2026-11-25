@@ -42,7 +42,6 @@ CUT side, not here.
 
 import logging
 import os
-import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -170,21 +169,21 @@ def list_nmf_simulations_and_num_frames(
 
     num_frames_by_subsegment: dict[Path, int] = {}
     skipped: list[tuple[Path, str]] = []
-    # Counting frames fully decodes each buffer video (~2.4 s each), and the
-    # underlying ffmpeg/libav backend is not thread-safe: running many decodes in
-    # threads intermittently wedges libav's shared state for the rest of the
-    # process, after which every subsequent open fails and the subsegment is
+    # Counting frames fully decodes each buffer video (~2.4 s each) through
+    # pvio's ffmpeg/libav backend, which is not thread-safe: running many decodes
+    # in threads intermittently wedged libav's shared state for the rest of the
+    # process, after which every subsequent open failed and the subsegment was
     # silently dropped -- this is what excluded ~683 otherwise-valid subsegments.
-    # Processes each get their own libav state, so concurrent decodes can no
-    # longer corrupt a shared global, and max_tasks_per_child recycles workers so
-    # nothing can creep across the whole run. Serializing instead is not an
-    # option: at ~2.4 s per buffer it would take hours just to index.
-    pool_kwargs = {"max_workers": num_workers}
-    if sys.version_info >= (3, 11):
-        # max_tasks_per_child was added in Python 3.11; on older interpreters the
-        # per-process isolation above already removes the thread-safety cascade.
-        pool_kwargs["max_tasks_per_child"] = 200
-    with ProcessPoolExecutor(**pool_kwargs) as executor:
+    # A process pool fixes it structurally: each worker is a separate process
+    # that runs one task at a time, so libav is never touched concurrently and
+    # there is no shared global to corrupt. We keep the default "fork" context
+    # (a single import in the parent) rather than passing max_tasks_per_child,
+    # which would force "spawn" and make all N workers re-import numpy at once --
+    # on a large node that is N x OpenBLAS's default thread pool, which overruns
+    # RLIMIT_NPROC and crashes the workers. job.run pins the BLAS thread counts
+    # to 1 so even forked workers stay far under that limit. Serializing is not
+    # an option: at ~2.4 s per buffer it would take hours just to index.
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
         future_to_subsegment = {
             executor.submit(_count_usable_nmf_frames, subsegment_dir, buffer_filenames): subsegment_dir
             for subsegment_dir in subsegment_dirs
