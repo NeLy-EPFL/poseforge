@@ -42,8 +42,9 @@ CUT side, not here.
 
 import logging
 import os
+import sys
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -169,7 +170,21 @@ def list_nmf_simulations_and_num_frames(
 
     num_frames_by_subsegment: dict[Path, int] = {}
     skipped: list[tuple[Path, str]] = []
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    # Counting frames fully decodes each buffer video (~2.4 s each), and the
+    # underlying ffmpeg/libav backend is not thread-safe: running many decodes in
+    # threads intermittently wedges libav's shared state for the rest of the
+    # process, after which every subsequent open fails and the subsegment is
+    # silently dropped -- this is what excluded ~683 otherwise-valid subsegments.
+    # Processes each get their own libav state, so concurrent decodes can no
+    # longer corrupt a shared global, and max_tasks_per_child recycles workers so
+    # nothing can creep across the whole run. Serializing instead is not an
+    # option: at ~2.4 s per buffer it would take hours just to index.
+    pool_kwargs = {"max_workers": num_workers}
+    if sys.version_info >= (3, 11):
+        # max_tasks_per_child was added in Python 3.11; on older interpreters the
+        # per-process isolation above already removes the thread-safety cascade.
+        pool_kwargs["max_tasks_per_child"] = 200
+    with ProcessPoolExecutor(**pool_kwargs) as executor:
         future_to_subsegment = {
             executor.submit(_count_usable_nmf_frames, subsegment_dir, buffer_filenames): subsegment_dir
             for subsegment_dir in subsegment_dirs
