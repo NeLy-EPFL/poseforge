@@ -1,0 +1,54 @@
+#!/bin/bash -l
+
+#SBATCH --job-name dust_<<<NAME>>>
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
+#SBATCH --time 12:00:00
+#SBATCH --partition=cpu
+#SBATCH --qos=normal
+#SBATCH --output <<<STDOUT_STDERR_FILE>>>
+
+# Dust compositing is pure CPU (numpy / OpenCV image ops); no GPU is requested.
+# Adjust --partition to your cluster's CPU partition if "cpu" is not valid.
+
+echo "Hello from $(hostname)"
+
+# Set up environment and package
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# Define paths
+project_root="/home/$USER/poseforge"
+add_dust_script_path="scripts_on_cluster/add_dust/add_dust_all_simulations.py"
+input_basedir="<<<INPUT_BASEDIR>>>"
+output_basedir="<<<OUTPUT_BASEDIR>>>"
+dust_library_path="<<<DUST_LIBRARY_PATH>>>"
+dust_statistics_path="<<<DUST_STATISTICS_PATH>>>"
+wall_library_path="<<<WALL_LIBRARY_PATH>>>"
+wall_statistics_path="<<<WALL_STATISTICS_PATH>>>"
+
+# Setup
+cd $project_root
+
+echo "Start adding dust and walls at $(date)"
+
+# Dust and walls are applied independently, each at its own measured presence
+# probability (from its statistics file); dust amount/sizes from the measured
+# distribution. These are the defaults.
+python -u $add_dust_script_path \
+    --input-basedir $input_basedir \
+    --output-basedir $output_basedir \
+    --dust-library-path $dust_library_path \
+    --dust-statistics-path $dust_statistics_path \
+    --wall-library-path $wall_library_path \
+    --wall-statistics-path $wall_statistics_path \
+    --video-glob "<<<VIDEO_GLOB>>>" \
+    --simulation-name-glob "<<<SIMULATION_NAME_GLOB>>>" \
+    --seed <<<SEED>>> \
+    --no-override \
+    --verbose
+
+echo "Adding dust ends at $(date)"
