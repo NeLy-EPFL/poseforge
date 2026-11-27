@@ -17,6 +17,8 @@ PARAM_PATTERNS = {
     "TRIAL_OUTPUT_DIR":   re.compile(r"--trial-output-dir (.+)"),
     "SEGMENT_IDS":        re.compile(r"--segment-ids (.+)"),
     "USE_FLYBODY_FLAG":   re.compile(r"(--(?:use|no-use)-flybody)"),
+    "SOURCE_FORMAT":      re.compile(r"--source-format (.+)"),
+    "DEEPERFLY_SURFACE":  re.compile(r"--deeperfly-surface (.+)"),
 }
 
 
@@ -57,6 +59,8 @@ def make_run_script(job_name: str, params: dict, template_str: str, output_dir: 
         .replace("<<<TRIAL_OUTPUT_DIR>>>", params["TRIAL_OUTPUT_DIR"])
         .replace("<<<SEGMENT_IDS>>>", params["SEGMENT_IDS"])
         .replace("<<<USE_FLYBODY_FLAG>>>", params["USE_FLYBODY_FLAG"])
+        .replace("<<<SOURCE_FORMAT>>>", params["SOURCE_FORMAT"])
+        .replace("<<<DEEPERFLY_SURFACE>>>", params["DEEPERFLY_SURFACE"])
     )
     dest = output_dir / f"{job_name}.run"
     dest.write_text(script_str)
