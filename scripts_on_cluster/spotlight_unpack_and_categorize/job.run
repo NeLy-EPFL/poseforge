@@ -4,7 +4,7 @@
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 36
-#SBATCH --mem 64GB
+#SBATCH --mem 200GB
 #SBATCH --time 3:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
@@ -45,7 +45,7 @@ export NUMEXPR_NUM_THREADS=1
 PROJECT_ROOT="/home/$USER/poseforge"
 INPUT_DIR="$WORK/$USER/poseforge/data/spotlight_new_vid"
 ARENA_DIR="$INPUT_DIR/arena72x48"
-OUTPUT_DIR="$WORK/$USER/poseforge/data/spotlight_aligned_and_cropped"
+OUTPUT_DIR="$WORK/$USER/poseforge/data/spotlight_aligned_and_cropped_new"
 
 cd "$PROJECT_ROOT"
 

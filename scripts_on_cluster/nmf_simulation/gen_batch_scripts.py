@@ -19,7 +19,7 @@ source_format = SOURCE_FORMAT_AYMANNS2022
 deeperfly_surface = "floor"
 
 # Job execution parameters
-max_segs_per_run = 20
+max_segs_per_run = 1
 
 # Data filtering parameters
 min_duration_sec = 0.2

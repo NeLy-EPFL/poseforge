@@ -4,7 +4,7 @@
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 18
-#SBATCH --mem 90GB
+#SBATCH --mem 120GB
 #SBATCH --time 10:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
