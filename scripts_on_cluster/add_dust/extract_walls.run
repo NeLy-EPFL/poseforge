@@ -1,0 +1,50 @@
+#!/bin/bash -l
+
+#SBATCH --job-name dust_extract_walls
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 8
+#SBATCH --mem 32GB
+#SBATCH --time 10:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/add_dust/output_%x_%j.log
+
+set -euo pipefail
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment setup
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Paths (edit these)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+# Dataset of aligned trials (same as for dust extraction).
+DATASET_ROOT="$WORK/$USER/poseforge/data/spotlight/261117_poseforgetraining"
+# Arena folder with metadata.yaml and model/calibration_result.yaml, used to turn
+# stage positions into fly-to-wall distances.
+ARENA_DIR="$DATASET_ROOT/arena72x48"
+# Where to write wall_library.npz, wall_statistics.json and the preview sheet.
+OUTPUT_DIR="$WORK/$USER/poseforge/dust"
+
+# -----------------------------------------------------------------------------
+# Extract the wall library + statistics (stage-distance band + presence check).
+# Tune the band by adding, e.g.:
+#   --distance-config.min-distance-mm 1.9 --distance-config.max-distance-mm 2.5
+# -----------------------------------------------------------------------------
+cd "$PROJECT_ROOT"
+
+echo "Wall extraction starting at $(date)"
+
+python -u -m poseforge.dust.scripts.extract_walls \
+    --dataset-root "$DATASET_ROOT" \
+    --arena-dir "$ARENA_DIR" \
+    --output-dir "$OUTPUT_DIR"
+
+echo "Wall extraction ends at $(date)"

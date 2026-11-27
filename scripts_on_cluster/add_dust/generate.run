@@ -1,0 +1,56 @@
+#!/bin/bash -l
+
+#SBATCH --job-name dust_generate
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 16
+#SBATCH --mem 92GB
+#SBATCH --time 24:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/add_dust/output_%x_%j.log
+
+set -euo pipefail
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment setup
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Paths (edit these)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+GENERATE_SCRIPT="scripts_on_cluster/add_dust/add_dust_all_simulations.py"
+# Clean, style-transferred videos from the tiled inference step.
+INPUT_BASEDIR="$WORK/$USER/poseforge/style_transfer/production/tiled_translated_videos"
+# Where the augmented (dusty + walled) mirror tree is written.
+OUTPUT_BASEDIR="$WORK/$USER/poseforge/style_transfer/production/tiled_translated_videos_dusty"
+# Libraries + statistics from extract_dust.run and extract_walls.run.
+DUST_DIR="$WORK/$USER/poseforge/dust"
+
+# -----------------------------------------------------------------------------
+# Add dust + walls to every translated video, mirroring the input tree. Dust and
+# walls are applied independently at their own measured presence probabilities.
+# -----------------------------------------------------------------------------
+cd "$PROJECT_ROOT"
+
+echo "Generation starting at $(date)"
+
+python -u "$GENERATE_SCRIPT" \
+    --input-basedir "$INPUT_BASEDIR" \
+    --output-basedir "$OUTPUT_BASEDIR" \
+    --dust-library-path "$DUST_DIR/dust_library.npz" \
+    --dust-statistics-path "$DUST_DIR/dust_statistics.json" \
+    --wall-library-path "$DUST_DIR/wall_library.npz" \
+    --wall-statistics-path "$DUST_DIR/wall_statistics.json" \
+    --video-glob "translated_*.mp4" \
+    --seed 0 \
+    --no-override \
+    --verbose
+
+echo "Generation ends at $(date)"

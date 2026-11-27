@@ -20,64 +20,54 @@ probability**: the fraction of real frames with dust (`dust_statistics.json`) an
 the fraction whose stage distance puts a wall in view (`wall_statistics.json`).
 Dust amount and sizes also follow the measured distribution.
 
-## 1. Build the libraries + statistics (one-time)
+Three SLURM scripts: **two extractions** (run once to build the libraries) and
+**one generation** (modifies the tiled-inference videos). Edit the paths block at
+the top of each, then `sbatch` it.
 
-Dust and walls are extracted **separately**. Dust is sampled from strided aligned
-frames; walls come from the stage-distance band (needs the arena folder):
+## 1. Extract the dust library  — `extract_dust.run`
 
-```bash
-python -m poseforge.dust.scripts.extract_dust \
-    --dataset-root /path/to/261117_poseforgetraining \
-    --output-dir   /work/upramdya/stimpfli/poseforge/dust
-```
+Samples strided aligned frames from every trial into a size-balanced dust library.
 
 ```bash
-python -m poseforge.dust.scripts.extract_walls \
-    --dataset-root /path/to/261117_poseforgetraining \
-    --arena-dir    /path/to/261117_poseforgetraining/arena72x48 \
-    --output-dir   /work/upramdya/stimpfli/poseforge/dust
+sbatch scripts_on_cluster/add_dust/extract_dust.run
 ```
 
-`extract_dust` writes `dust_library.npz` + `dust_statistics.json`; `extract_walls`
-writes `wall_library.npz` + `wall_statistics.json` (both with preview sheets).
+Writes `dust_library.npz` + `dust_statistics.json` (+ preview) to `OUTPUT_DIR`.
+
+## 2. Extract the wall library  — `extract_walls.run`
+
+Takes the arena edge from frames whose stage-derived fly-to-wall distance is in
+the band (default 1.9–2.5 mm). Needs the arena folder.
+
+```bash
+sbatch scripts_on_cluster/add_dust/extract_walls.run
+```
+
+Writes `wall_library.npz` + `wall_statistics.json` (+ preview) to `OUTPUT_DIR`.
+Tune the band inside the script with
+`--distance-config.min-distance-mm` / `--distance-config.max-distance-mm`.
+
 Each trial needs `processed/aligned_behavior_video.mkv`,
 `processed/behavior_frames_metadata.csv` and
-`processed/behavior_alignment_transforms.h5`. Tune the wall band with
-`--distance-config.min-distance-mm` / `--distance-config.max-distance-mm`.
-Inspect the previews before running.
+`processed/behavior_alignment_transforms.h5`. Inspect the previews before
+generating.
 
-## 2. Add artifacts to all simulations
+## 3. Generate the augmented videos  — `generate.run`
 
-Single run:
+Adds dust + walls to every translated video, mirroring the input tree. Runs
+`add_dust_all_simulations.py`.
 
 ```bash
-python scripts_on_cluster/add_dust/add_dust_all_simulations.py \
-    --input-basedir  /work/.../tiled_translated_videos \
-    --output-basedir /work/.../tiled_translated_videos_dusty \
-    --dust-library-path    /work/.../dust/dust_library.npz \
-    --dust-statistics-path /work/.../dust/dust_statistics.json \
-    --wall-library-path    /work/.../dust/wall_library.npz \
-    --wall-statistics-path /work/.../dust/wall_statistics.json \
-    --no-override
+sbatch scripts_on_cluster/add_dust/generate.run
 ```
 
-The output tree mirrors the input tree. Amounts follow the measured distributions
-by default. Manual overrides: `--config.dust-probability <p>` and
-`--wall-config.wall-probability <p>` for the presence rates;
-`--config.use-measured-distribution False` with
-`--config.min-layers/--config.max-layers` for a fixed dust level. Omit the wall
+Dust and walls are applied independently at their own measured presence
+probabilities. Manual overrides (add to the `python` call in `generate.run`):
+`--config.dust-probability <p>` and `--wall-config.wall-probability <p>` for the
+rates; `--config.use-measured-distribution False` with
+`--config.min-layers`/`--config.max-layers` for a fixed dust level. Omit the wall
 library/statistics to add dust only. `--seed` makes the result reproducible;
 artifacts are independent per video and per frame.
 
-## 3. As a batch job
-
-Edit the paths at the top of `gen_batch_scripts.py`, then:
-
-```bash
-cd scripts_on_cluster/add_dust
-python gen_batch_scripts.py   # writes batch_scripts/*.run
-bash submit_all.sh            # submits them
-```
-
-Dust compositing is CPU-only, so `template.run` requests no GPU. Adjust
-`--partition` if your cluster's CPU partition is not named `cpu`.
+Compositing is CPU-only. Adjust `--partition` / `--qos` to your cluster if the
+defaults here are not valid.

@@ -1,0 +1,46 @@
+#!/bin/bash -l
+
+#SBATCH --job-name dust_extract_dust
+#SBATCH --nodes 1
+#SBATCH --ntasks 1
+#SBATCH --cpus-per-task 8
+#SBATCH --mem 32GB
+#SBATCH --time 10:00:00
+#SBATCH --partition=standard
+#SBATCH --qos=serial
+#SBATCH --output /home/%u/poseforge/scripts_on_cluster/add_dust/output_%x_%j.log
+
+set -euo pipefail
+
+echo "Hello from $(hostname)"
+
+# -----------------------------------------------------------------------------
+# Environment setup
+# -----------------------------------------------------------------------------
+. ~/spack/share/spack/setup-env.sh
+spack load ffmpeg
+conda activate poseforge
+
+# -----------------------------------------------------------------------------
+# Paths (edit these)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT="/home/$USER/poseforge"
+# Dataset of aligned trials. Each trial needs, under processed/:
+#   aligned_behavior_video.mkv, behavior_frames_metadata.csv,
+#   behavior_alignment_transforms.h5
+DATASET_ROOT="$WORK/$USER/poseforge/data/spotlight/261117_poseforgetraining"
+# Where to write dust_library.npz, dust_statistics.json and the preview sheet.
+OUTPUT_DIR="$WORK/$USER/poseforge/dust"
+
+# -----------------------------------------------------------------------------
+# Extract the dust library + statistics (strided aligned frames, size-balanced).
+# -----------------------------------------------------------------------------
+cd "$PROJECT_ROOT"
+
+echo "Dust extraction starting at $(date)"
+
+python -u -m poseforge.dust.scripts.extract_dust \
+    --dataset-root "$DATASET_ROOT" \
+    --output-dir "$OUTPUT_DIR"
+
+echo "Dust extraction ends at $(date)"
