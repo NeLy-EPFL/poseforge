@@ -3,9 +3,9 @@
 #SBATCH --job-name <<<JOB_NAME>>>
 #SBATCH --nodes 1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 70
+#SBATCH --cpus-per-task 70 
 #SBATCH --mem 450GB
-#SBATCH --time 10:00:00
+#SBATCH --time 2:00:00
 #SBATCH --partition=standard
 #SBATCH --qos=serial
 #SBATCH --output <<<LOG_OUTPUT_FILE>>>

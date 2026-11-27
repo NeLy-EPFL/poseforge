@@ -4,12 +4,7 @@
 # <folder> can be a model name (expands to ./batch_scripts_<name>)
 #          or a direct folder path (used as-is when it starts with . or /)
 folder=${1:?Usage: submit_all.sh <folder_or_model_name>}
-
-if [[ "$folder" == /* || "$folder" == ./* || "$folder" == ../* ]]; then
-    scripts_dir="$folder"
-else
-    scripts_dir="./batch_scripts_$folder"
-fi
+scripts_dir="$folder"
 
 files=($(ls $scripts_dir/*.run | sort))
 file_count=${#files[@]}
