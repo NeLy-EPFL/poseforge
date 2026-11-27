@@ -523,6 +523,10 @@ def visualize_inverse_kinematics_comparison(
         keypoints_order=keypoints_order,
         legs=legs_ik,
         leg_keypoints_canonical=leg_keypoints_canonical_ik,
+        # The constrained array is built by fwdkin_world_xyz_append_antennae and
+        # has its own keypoint ordering; pass it explicitly so each array is
+        # indexed by its own order rather than assuming they match (I3-E, #48).
+        keypoints_order_constrained=keypoints_order_constrained,
     )
 
     # For now, we don't have 2D projections of the constrained poses, so set to None
@@ -594,7 +598,37 @@ def process_all(
     n_workers_per_dataset: int = 6,
     create_visualization: bool = False,
     input_images_basedir: str | None = None,
+    correctness_critical: bool = False,
+    jump_warning_threshold_deg: float = 45.0,
+    seqikpy_kwargs: dict | None = None,
 ) -> None:
+    """Run inverse kinematics on all keypoints3d outputs under ``input_dirs``.
+
+    Args:
+        correctness_critical: If True, run seqikpy without time-chunk
+            parallelization/blending (``parallel_over_time=False``). seqikpy seeds
+            frame ``t`` from frame ``t-1``; with ``parallel_over_time=True`` time
+            chunks are re-seeded from static initial angles and linearly blended,
+            which can produce wrong transients at chunk boundaries (issue #48,
+            finding I3-C). Leg-level parallelism (``n_workers_per_dataset``) is
+            still used, so this only forgoes time-axis chunking. Ignored for keys
+            already present in ``seqikpy_kwargs``.
+        jump_warning_threshold_deg: Frames whose joint angle changes by more than
+            this (degrees) from the previous frame are flagged and logged after
+            each IK solve (post-hoc I3-C detection; does not modify the angles).
+        seqikpy_kwargs: Extra keyword arguments forwarded to
+            ``LegInvKinSeq.run_ik_and_fk`` (e.g. ``parallel_over_time``,
+            ``chunk_overlap``, ``min_chunk_size``). Takes precedence over the
+            flags above.
+    """
+    # Assemble the kwargs forwarded to seqikpy's run_ik_and_fk.
+    run_ik_and_fk_kwargs: dict = {}
+    if correctness_critical:
+        # Disable time-chunk parallelization + blending (still parallel over legs).
+        run_ik_and_fk_kwargs["parallel_over_time"] = False
+    if seqikpy_kwargs:
+        run_ik_and_fk_kwargs.update(seqikpy_kwargs)
+
     # Index all keypoints3d output files to process
     all_keypoints3d_output_files = []
     for input_dir in input_dirs:
@@ -615,6 +649,14 @@ def process_all(
             max_n_frames=max_n_frames,
             n_workers=n_workers_per_dataset,
             debug_plots_dir=keypoints3d_output_file.parent / "ik_debug_plots/",
+            **run_ik_and_fk_kwargs,
+        )
+        # Post-hoc detection + logging of large frame-to-frame joint-angle jumps
+        # (I3-C). This flags likely bad-solve propagation / chunk-boundary
+        # transients; it does not alter the saved angles.
+        invkin.log_large_joint_angle_jumps(
+            joint_angles,
+            threshold_rad=np.deg2rad(jump_warning_threshold_deg),
         )
         _save_seqikpy_output(
             output_path, joint_angles, forward_kinematics, frame_ids=frame_ids

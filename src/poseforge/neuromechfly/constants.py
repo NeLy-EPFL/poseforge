@@ -18,6 +18,47 @@ keypoint_name_lookup_nmf_to_canonical = {
 keypoint_name_lookup_canonical_to_nmf = {
     v: k for k, v in keypoint_name_lookup_nmf_to_canonical.items()
     }
+
+# Mapping from the canonical (Aymanns et al. 2022) leg DOF names to the
+# NeuroMechFly DOF (joint) names.
+#
+# This constant was originally introduced in commit 5f8b6ee and accidentally
+# removed in 3c9449a ("compatibility with flygym v2") while its call sites in
+# `run_inverse_kinematics.py` and `production/spotlight/keypoints3d.py` were
+# never updated -> they raised AttributeError when saving IK output. Restored
+# here (see issue #48, finding I3-A).
+#
+# IMPORTANT - ordering and key names:
+#   * The KEYS are the 7 canonical leg DOF names. They are kept in the order
+#       ThC_yaw, ThC_pitch, ThC_roll, CTr_pitch, CTr_roll, FTi_pitch, TiTa_pitch
+#     because the call sites do
+#       `dof_names_per_leg = list(dof_name_lookup_canonical_to_nmf.keys())`
+#     and use that order as the DOF axis of the saved `joint_angles` array
+#     (and as its `dof_names_per_leg` attribute). This is the same DOF ordering
+#     used by `nmf_initial_angles` / seqikpy's kinematic chain (yaw, pitch,
+#     roll, ...).
+#   * seqikpy emits joint-angle dict keys of the form
+#       `Angle_{leg}_{canonical_dof}` (e.g. "Angle_LF_ThC_yaw"); see
+#       seqikpy.leg_inverse_kinematics.LegInvKinSeq. The call sites build the
+#       lookup key as `f"Angle_{leg}_{dof_name}"` where `dof_name` is a KEY of
+#       this dict, so the keys must be exactly these canonical DOF names for the
+#       lookups (and hence the DOF packing order) to be correct.
+#   * The VALUES are the corresponding NeuroMechFly DOF names. They are not used
+#     by the IK save path today but document the canonical<->NMF correspondence
+#     and keep this dict useful for downstream NMF actuation code.
+dof_name_lookup_canonical_to_nmf = {
+    "ThC_yaw": "Coxa_yaw",
+    "ThC_pitch": "Coxa",
+    "ThC_roll": "Coxa_roll",
+    "CTr_pitch": "Femur",
+    "CTr_roll": "Femur_roll",
+    "FTi_pitch": "Tibia",
+    "TiTa_pitch": "Tarsus1",
+}
+dof_name_lookup_nmf_to_canonical = {
+    v: k for k, v in dof_name_lookup_canonical_to_nmf.items()
+}
+
 legs = [f"{side}{pos}" for side in "LR" for pos in "FMH"]
 leg_keypoints_canonical = ["ThC", "CTr", "FTi", "TiTa", "Claw"]
 leg_keypoints_nmf = [keypoint_name_lookup_canonical_to_nmf[kp] for kp in leg_keypoints_canonical]
@@ -284,55 +325,79 @@ nmf_template = {
     "LH_Claw": np.array([-0.215, 0.087, -2.588]),
 }
 
-# Determine the bounds for each joint DOF
+# Joint DOF bounds for seqikpy IK. DATA-DERIVED (issue #48 I3-B).
+#
+# Method (values are whole degrees wrapped in np.deg2rad):
+#   1. Source: the ground-truth simulated `dof_angles` stored in every atomic-batch
+#      `_labels.h5` (named via the dataset's `keys` attr; 6 legs x 7 DOFs = 42).
+#   2. Sample: 500 `_labels.h5` files (numpy default_rng(0), no replacement) from the
+#      sorted recursive glob of bulk_data/.../atomic_batches/4variants/**/*_labels.h5,
+#      all 32 frames each -> n = 16000 frames.
+#   3. Per DOF: bound = (floor(min_deg - margin), ceil(max_deg + margin)) with
+#      margin = 10 deg -- the observed range padded outward. The margin gives the
+#      least-squares solver headroom so the optimum does not sit exactly on a boundary
+#      (an IK fragility noted in the audit); min/max (not percentiles) guarantee no
+#      observed pose is clipped.
+#   4. Map ground-truth key `{leg}{dof}` (e.g. RFThC_yaw) -> bounds key `{leg}_{dof}`.
+#   Reproduce EXACTLY with:
+#     python scripts/verify_ik_selfconsistency.py --emit-bounds --n-batches 500 --seed 0 --margin-deg 10
+#
+# Why: supersedes the earlier hand-set / L-R-mirrored bounds, 10/42 of which were tighter
+# than the actual range of motion and would clip valid poses (a bound tighter than the data
+# is unreachable by IK -> forces a wrong solution). The simulated dof_angles are exactly the
+# RoM the IK must reproduce, so they are the correct floor for these bounds.
+# CAVEATS: (1) this is the *training* RoM, not the anatomical RoM; production may see novel
+#   poses, so widen toward NeuroMechFly's anatomical limits if IK saturates a bound.
+#   (2) DOFs flagged WRAPPING below have source angles beyond +/-180 deg, indicating the
+#   upstream kinematics need unwrapping; bounds contain them only so IK can reproduce them.
+#   Wrapping DOFs: RH_ThC_roll. (3) Bounds come out near-mirror L/R where the data is, but
+#   are NOT forced symmetric (data-honest).
 nmf_bounds = {
     # Front legs
-    "RF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
-    "RF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RF_ThC_roll": (np.deg2rad(-135), np.deg2rad(10)),  # ? 1
-    "RF_CTr_pitch": (np.deg2rad(-270), np.deg2rad(10)),  # ? 2
-    "RF_CTr_roll": (np.deg2rad(-180), np.deg2rad(90)),  # ? 3
-    "RF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LF_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),
-    "LF_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LF_ThC_roll": (np.deg2rad(-10), np.deg2rad(90)),  # ? 1
-    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # ? 2
-    "LF_CTr_roll": (np.deg2rad(-90), np.deg2rad(180)),  # ? 3
-    "LF_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LF_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    
+    "RF_ThC_yaw": (np.deg2rad(-36), np.deg2rad(57)),
+    "RF_ThC_pitch": (np.deg2rad(-17), np.deg2rad(79)),
+    "RF_ThC_roll": (np.deg2rad(-185), np.deg2rad(105)),
+    "RF_CTr_pitch": (np.deg2rad(-187), np.deg2rad(-41)),
+    "RF_CTr_roll": (np.deg2rad(-187), np.deg2rad(13)),
+    "RF_FTi_pitch": (np.deg2rad(5), np.deg2rad(178)),
+    "RF_TiTa_pitch": (np.deg2rad(-147), np.deg2rad(9)),
+    "LF_ThC_yaw": (np.deg2rad(-63), np.deg2rad(37)),
+    "LF_ThC_pitch": (np.deg2rad(-21), np.deg2rad(65)),
+    "LF_ThC_roll": (np.deg2rad(-18), np.deg2rad(172)),
+    "LF_CTr_pitch": (np.deg2rad(-180), np.deg2rad(-51)),
+    "LF_CTr_roll": (np.deg2rad(-21), np.deg2rad(186)),
+    "LF_FTi_pitch": (np.deg2rad(-6), np.deg2rad(182)),
+    "LF_TiTa_pitch": (np.deg2rad(-150), np.deg2rad(10)),
     # Mid legs
-    "RM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),  # ? 4
-    "RM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RM_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # ? 5
-    "RM_CTr_pitch": (np.deg2rad(-270), np.deg2rad(10)),  # ? 6
-    "RM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "RM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),  # ? 4
-    "LM_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LM_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),  # ? 5
-    "LM_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),  # ? 6
-    "LM_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "LM_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LM_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    
+    "RM_ThC_yaw": (np.deg2rad(-45), np.deg2rad(28)),
+    "RM_ThC_pitch": (np.deg2rad(-31), np.deg2rad(27)),
+    "RM_ThC_roll": (np.deg2rad(-171), np.deg2rad(-29)),
+    "RM_CTr_pitch": (np.deg2rad(-155), np.deg2rad(-50)),
+    "RM_CTr_roll": (np.deg2rad(-78), np.deg2rad(12)),
+    "RM_FTi_pitch": (np.deg2rad(0), np.deg2rad(166)),
+    "RM_TiTa_pitch": (np.deg2rad(-81), np.deg2rad(9)),
+    "LM_ThC_yaw": (np.deg2rad(-26), np.deg2rad(38)),
+    "LM_ThC_pitch": (np.deg2rad(-32), np.deg2rad(26)),
+    "LM_ThC_roll": (np.deg2rad(35), np.deg2rad(167)),
+    "LM_CTr_pitch": (np.deg2rad(-157), np.deg2rad(-38)),
+    "LM_CTr_roll": (np.deg2rad(-13), np.deg2rad(83)),
+    "LM_FTi_pitch": (np.deg2rad(4), np.deg2rad(163)),
+    "LM_TiTa_pitch": (np.deg2rad(-132), np.deg2rad(10)),
     # Hind legs
-    "RH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(45)),  # ? 7
-    "RH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "RH_ThC_roll": (np.deg2rad(-180), np.deg2rad(10)),  # ? 8
-    "RH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "RH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "RH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "RH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_ThC_yaw": (np.deg2rad(-45), np.deg2rad(90)),  # ? 7
-    "LH_ThC_pitch": (np.deg2rad(-10), np.deg2rad(90)),
-    "LH_ThC_roll": (np.deg2rad(-10), np.deg2rad(180)),  # ? 8
-    "LH_CTr_pitch": (np.deg2rad(-180), np.deg2rad(10)),
-    "LH_CTr_roll": (np.deg2rad(-90), np.deg2rad(90)),
-    "LH_FTi_pitch": (np.deg2rad(-10), np.deg2rad(180)),
-    "LH_TiTa_pitch": (np.deg2rad(-180), np.deg2rad(10)),
+    "RH_ThC_yaw": (np.deg2rad(-65), np.deg2rad(39)),
+    "RH_ThC_pitch": (np.deg2rad(-33), np.deg2rad(50)),
+    "RH_ThC_roll": (np.deg2rad(-216), np.deg2rad(-62)),  # WRAPPING: source RoM exceeds +/-180 deg
+    "RH_CTr_pitch": (np.deg2rad(-158), np.deg2rad(-27)),
+    "RH_CTr_roll": (np.deg2rad(-16), np.deg2rad(167)),
+    "RH_FTi_pitch": (np.deg2rad(-3), np.deg2rad(168)),
+    "RH_TiTa_pitch": (np.deg2rad(-156), np.deg2rad(10)),
+    "LH_ThC_yaw": (np.deg2rad(-28), np.deg2rad(66)),
+    "LH_ThC_pitch": (np.deg2rad(-33), np.deg2rad(53)),
+    "LH_ThC_roll": (np.deg2rad(63), np.deg2rad(187)),
+    "LH_CTr_pitch": (np.deg2rad(-169), np.deg2rad(-10)),
+    "LH_CTr_roll": (np.deg2rad(-115), np.deg2rad(85)),
+    "LH_FTi_pitch": (np.deg2rad(2), np.deg2rad(168)),
+    "LH_TiTa_pitch": (np.deg2rad(-123), np.deg2rad(9)),
 }
 
 nmf_size = {
